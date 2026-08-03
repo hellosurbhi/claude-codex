@@ -48,6 +48,7 @@ Read `~/.claude/skills/plan-codex/codex-analyzer-role.md` and inject as `develop
 Save the returned `threadId`.
 
 **Parse the exact `VERDICT:` line** (line-anchored; exactly one must be present). The word APPROVED appearing inside prose or a finding is NOT approval. A response with no verdict line, multiple verdict lines, or a value other than APPROVED, WARNING or BLOCKED is malformed: retry the call once, and if the retry is also malformed, stop and tell the user the plan is UNREVIEWED.
+**Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual codebase, whether the reviewer had full context for intentional decisions, and whether it improves the plan or is a preference/false positive. Contest doubtful findings via `codex-reply` with specific reasoning; discussion replies do not count as audit iterations. Only findings that survive this gate are "accepted" below.
 - `VERDICT: APPROVED` → fold any accompanying MEDIUM/LOW findings into the plan's notes (the analyzer role explicitly permits them), update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
 - `VERDICT: WARNING` (no CRITICAL) → fold the accepted findings into the plan, update `.claude/plan/<feature-name>.md`, go to Phase 3 with no further Codex call
 - `VERDICT: BLOCKED` (CRITICAL findings) → address every CRITICAL and any accompanying HIGH findings, revise plan, update `.claude/plan/<feature-name>.md`, re-audit

@@ -69,7 +69,7 @@ After all tasks complete (either path):
 2. Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
    - `git diff HEAD`
    - Original task requirements
-3. CRITICAL issues → fix directly with Edit/Write and re-review (max 2 rounds). HIGH-only issues → fix with Edit/Write, re-run self-verification, proceed with no re-review call.
+3. CRITICAL issues → fix directly with Edit/Write and re-review (max 2 rounds). HIGH-only issues → fix with Edit/Write, re-run self-verification, proceed with no re-review call. If CRITICAL issues remain after the final round, STOP and report them; do not deliver.
 4. Go to Phase 3
 
 ---

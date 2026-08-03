@@ -144,7 +144,7 @@ After all tasks complete (either path):
 7. Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
    - `git diff $START_SHA` output
    - Original task requirements
-8. CRITICAL issues → fix with Edit/Write, re-review (max 2 rounds). HIGH-only issues → fix with Edit/Write, re-run the test suite (must stay GREEN), proceed with no re-review call.
+8. CRITICAL issues → fix with Edit/Write, re-review (max 2 rounds). HIGH-only issues → fix with Edit/Write, re-run the test suite (must stay GREEN), proceed with no re-review call. If CRITICAL issues remain after the final round, STOP and report them; do not deliver.
 9. After CRITICAL/HIGH resolved, collect MEDIUM/LOW issues and ask user:
    > "Reviewer flagged N MEDIUM/LOW issue(s) that were not fixed:
    > - [list issues]

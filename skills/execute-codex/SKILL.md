@@ -85,7 +85,8 @@ After all tasks complete (either path):
    - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
    - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
 4. After evaluation: CRITICAL findings → fix directly with Edit/Write and re-review (max 2 rounds). HIGH-only findings → fix them in one batch with Edit/Write, re-run the self-verification from step 1 (lint / typecheck / tests), then proceed with **no re-review call**. The HIGHs are fixed and verified; only the paid re-verification round is skipped.
-5. Go to Phase 3
+5. **Fail closed at the cap**: if accepted CRITICAL findings remain after the final round, STOP. Report the unresolved CRITICALs to the user and do not deliver; a capped-out review is not an approval.
+6. Go to Phase 3
 
 ---
 

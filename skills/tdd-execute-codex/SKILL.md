@@ -176,7 +176,7 @@ After all tasks complete (either path):
    - **Check context**: Does the reviewer have full context, or is it flagging intentional design?
    - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
    - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
-9. Accepted CRITICAL issues → fix with Edit/Write and re-review (max 2 rounds). Accepted HIGH-only issues → fix with Edit/Write, re-run the full test suite (must stay GREEN), then proceed with no re-review call. The HIGHs are fixed and verified; only the paid re-verification round is skipped.
+9. Accepted CRITICAL issues → fix with Edit/Write and re-review (max 2 rounds). Accepted HIGH-only issues → fix with Edit/Write, re-run the full test suite (must stay GREEN), then proceed with no re-review call. The HIGHs are fixed and verified; only the paid re-verification round is skipped. If accepted CRITICALs remain after the final round, STOP and report them; do not deliver.
 10. After CRITICAL/HIGH resolved, collect MEDIUM/LOW issues and ask user:
    > "Reviewer flagged N MEDIUM/LOW issue(s) that were not fixed:
    > - [list issues]
