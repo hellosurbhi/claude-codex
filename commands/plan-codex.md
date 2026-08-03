@@ -1,5 +1,5 @@
 ---
-description: "Claude plans with Opus, Codex audits, loop until approved"
+description: "Claude plans with Opus, Codex audits once, re-audit only on BLOCKED"
 argument-hint: "<task description>"
 model: claude-opus-4-6
 allowed-tools: ["AskUserQuestion", "mcp__codex__codex", "mcp__codex__codex-reply", "Task", "Read", "Glob", "Grep", "Write", "Bash"]

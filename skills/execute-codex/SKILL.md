@@ -167,7 +167,7 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 - Original task requirements
 
 Parse reviewer response:
-- No CRITICAL/HIGH issues → approved, go to Phase 3
+- No CRITICAL/HIGH issues → approved, go to Phase 3, carrying any MEDIUM/LOW findings into the delivery report (user decides whether to fix)
 
 **Critical Evaluation** (before fixing): Critically evaluate each CRITICAL/HIGH finding:
 - **Assess correctness**: Is it technically accurate? Check actual code and project conventions.
@@ -178,7 +178,7 @@ Parse reviewer response:
 After evaluation (re-review rounds trigger on CRITICAL findings only; HIGH-only rounds apply fixes through the same path-specific mechanisms below and skip only the re-review verdict):
 - Has CRITICAL (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
 - Has CRITICAL (single Codex session path) → call `mcp__codex__codex-reply` with accepted reviewer feedback verbatim, increment iteration count (max 3 total iterations).
-- HIGH only (3+ task path) → dispatch a Claude subagent per affected task with the accepted feedback verbatim; (single Codex session path) → call `mcp__codex__codex-reply` with the accepted feedback, instructing it to apply the fixes and reply with a change summary, no re-review verdict. Route B's no-Edit/Write rule holds either way. Verify with scoped lint/tests, then go to Phase 3.
+- HIGH only (3+ task path) → dispatch a Claude subagent per affected task with the accepted feedback verbatim; (single Codex session path) → call `mcp__codex__codex-reply` with the accepted feedback, instructing it to apply the fixes and reply with a change summary, no re-review verdict. Route B's no-Edit/Write rule holds either way. Verify with scoped lint/tests, then go to Phase 3, carrying any MEDIUM/LOW findings into the delivery report exactly as the approved branch does.
 
 After 3 iterations still finding CRITICALs, stop and report status to user.
 

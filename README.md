@@ -8,7 +8,7 @@ Skills are the primary interface. They support eval-based testing via skill-crea
 
 | Skill | Trigger | Description |
 |-------|---------|-------------|
-| `plan-codex` | `/plan-codex <task>` | Claude plans with Opus, Codex audits for correctness/completeness/security until approved |
+| `plan-codex` | `/plan-codex <task>` | Claude plans with Opus, Codex audits once for correctness/completeness/security; re-audit only on BLOCKED |
 | `claude-codex` | `/claude-codex <task or plan>` | Claude implements, Codex reviews with APPROVED/WARNING/BLOCKED verdicts |
 | `execute-codex` | `/execute-codex <task or plan>` | Smart size-based routing: Claude (small) or Codex (large) implements, code-reviewer reviews |
 | `tdd-claude-codex` | `/tdd-claude-codex <task or plan>` | TDD: Claude writes tests, Codex audits tests, Claude implements, Codex reviews implementation |
@@ -32,7 +32,7 @@ Commands (`commands/`) are retained for backward compatibility — they support 
 /claude-codex <task or plan file>
   Claude implements (any model)       → Edit/Write + self-verify
   Codex reviews uncommitted changes   → returns structured verdict (APPROVED/WARNING/BLOCKED)
-  Claude fixes CRITICAL/HIGH issues   → re-reviews (max 3 rounds)
+  Claude fixes findings               → re-review only on BLOCKED (max 3 rounds)
   MEDIUM/LOW issues                   → user decides before delivery
 ```
 
@@ -146,7 +146,7 @@ Or for a direct task:
 
 Claude implements using the active model (default: Sonnet; override with `/model opus` for heavier tasks). Codex reviews the uncommitted diff via MCP, returning a structured verdict (APPROVED / WARNING / BLOCKED):
 - **BLOCKED** (CRITICAL issues) — Claude fixes, Codex re-reviews (max 3 rounds)
-- **WARNING** (HIGH issues) — Claude fixes, Codex re-reviews (max 3 rounds)
+- **WARNING** (HIGH issues) — Claude fixes them, verifies with tests/lint, and proceeds; no re-review call
 - **MEDIUM/LOW issues** — surfaced to user; user decides whether to fix before delivery
 
 ### Model Override
