@@ -93,7 +93,7 @@ Save the returned `threadId` for follow-up replies.
 
 Classify the verdict:
 - **APPROVED** — no CRITICAL or HIGH → go to Phase 4
-- **WARNING** — HIGH issues only → critically evaluate (R1.5), fix all accepted HIGHs in one batch, then go to Phase 4 with **no re-review call**. A WARNING diff is a reviewed diff; the pre-push gate and CodeRabbit still see the final code. (Re-reviewing WARNINGs is what turned 1 review into 3+ xhigh calls per task.)
+- **WARNING** — HIGH issues only → critically evaluate (R1.5), fix all accepted HIGHs in one batch, run available tests/lint on the fixes, handle MEDIUM/LOW per Step R3, then go to Phase 4 with **no re-review call**. The HIGHs are fixed and verified; only the paid re-verification round is skipped. (Re-reviewing WARNINGs is what turned 1 review into 3+ xhigh calls per task.)
 - **BLOCKED** — CRITICAL issues → fix all, increment iteration, re-review
 
 **Step R1.5 — Critical Evaluation of Review Findings**
