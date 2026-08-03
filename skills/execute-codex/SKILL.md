@@ -84,7 +84,7 @@ After all tasks complete (either path):
    - **Check context**: Does the reviewer have full context, or is it flagging intentional design?
    - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
    - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
-4. If reviewer finds CRITICAL/HIGH issues (after evaluation): fix directly with Edit/Write and re-review (max 2 rounds)
+4. After evaluation: CRITICAL findings → fix directly with Edit/Write and re-review (max 2 rounds). HIGH-only findings → fix them in one batch and proceed with **no re-review call**; the pre-push gate and CodeRabbit still see the final code.
 5. Go to Phase 3
 
 ---
@@ -175,11 +175,12 @@ Parse reviewer response:
 - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
 - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
 
-After evaluation:
-- Has CRITICAL/HIGH (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
-- Has CRITICAL/HIGH (single Codex session path) → call `mcp__codex__codex-reply` with accepted reviewer feedback verbatim, increment iteration count (max 3 total iterations).
+After evaluation (re-review rounds trigger on CRITICAL findings only; HIGH-only rounds fix and proceed without another call, since the pre-push gate and CodeRabbit still see the final code):
+- Has CRITICAL (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
+- Has CRITICAL (single Codex session path) → call `mcp__codex__codex-reply` with accepted reviewer feedback verbatim, increment iteration count (max 3 total iterations).
+- HIGH only → fix all accepted HIGHs in one batch, then go to Phase 3.
 
-After 3 iterations without approval, stop and report status to user.
+After 3 iterations still finding CRITICALs, stop and report status to user.
 
 ---
 
