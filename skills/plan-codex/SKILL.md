@@ -1,6 +1,6 @@
 ---
 name: plan-codex
-description: "Create a detailed implementation plan with Opus-level reasoning, then Codex audits it for correctness, completeness, and security in a loop until approved. Best for: planning before coding — never modifies production code. Triggers on: /plan-codex, plan a feature, create implementation plan, design a system, architect this."
+description: "Create a detailed implementation plan with Opus-level reasoning, then Codex audits it once for correctness, completeness, and security; only a BLOCKED verdict triggers re-audit. Best for: planning before coding — never modifies production code. Triggers on: /plan-codex, plan a feature, create implementation plan, design a system, architect this."
 ---
 
 # Plan-Codex — Claude Plans, Codex Audits
@@ -44,9 +44,11 @@ If requirements are ambiguous before launching the planner, ask clarifying quest
 
 Save the returned plan to `.claude/plan/<feature-name>.md`.
 
-### Phase 2: Codex Audit Loop (max 3 iterations)
+### Phase 2: Codex Audit (single pass; re-audit only on BLOCKED, max 3 iterations)
 
 **MANDATORY Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). Do NOT skip or bypass this phase. If the tool is genuinely absent from both locations, **stop and tell the user**: "Codex MCP is not available. This skill requires Codex for plan audit. Please add the Codex MCP server." Do not proceed without Codex — the audit loop is this skill's core value.
+
+**MANDATORY mid-call failure handling**: a Codex call that errors, times out, or is aborted mid-audit (e.g. "sent no response or progress", MCP idle timeout, task failed) is NOT an approval and NOT a skippable step. Retry the call exactly once — via `codex exec --sandbox read-only` in Bash if the MCP transport is the thing failing (the per-session MCP connection does not pick up config changes until restart). If the retry also dies, **stop and tell the user**: "Codex audit incomplete — the review did not run. The plan is UNREVIEWED." Never proceed to Phase 3 or to implementation on a dead audit; an unreviewed plan must be labeled as such, out loud, every time. (Added 2026-07-28 after an xhigh audit was silently killed by a 1800s MCP idle timeout and work continued without it.)
 
 Read `codex-analyzer-role.md` from this skill directory and inject as `developer-instructions`.
 
@@ -58,9 +60,10 @@ Read `codex-analyzer-role.md` from this skill directory and inject as `developer
 
 Save the returned `threadId`.
 
-**Parse response**:
-- Contains "APPROVED" → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
-- Contains issues → critically evaluate before addressing (see below)
+**Parse the VERDICT line** (the analyzer role emits `VERDICT: APPROVED | WARNING | BLOCKED`):
+- **APPROVED** → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3.
+- **WARNING** (at least one HIGH finding, nothing CRITICAL) → critically evaluate the findings (see below), fold the accepted ones into the plan, note them in the Phase 3 delivery, and go to Phase 3 with **no further Codex call**. Log: "First-pass WARNING, findings incorporated, skipping re-audit." A WARNING plan is a reviewed plan; re-auditing it buys a second 10-15 minute xhigh call to confirm formatting changes. (Measured 2026-08-02: three audit rounds, zero BLOCKED findings, ~45 minutes before any code.)
+- **BLOCKED** (CRITICAL findings) → critically evaluate before addressing (see below), then revise and re-audit.
 
 **Critical Evaluation of Audit Findings**
 
@@ -79,11 +82,12 @@ Before addressing any issues, critically evaluate each finding:
 
 **If findings are accepted:** address every accepted issue, revise plan, update `.claude/plan/<feature-name>.md`.
 
-**Call `mcp__codex__codex-reply`** (iterations 2-3):
+**Call `mcp__codex__codex-reply`** (iterations 2-3, **BLOCKED verdicts only**):
 - threadId: {saved threadId}
 - prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
+- A re-audit that comes back WARNING follows the WARNING rule above: incorporate and proceed, no further call.
 
-After 3 iterations without APPROVED, stop and ask user for direction.
+After 3 iterations still BLOCKED, stop and ask user for direction.
 
 ### Phase 3: Deliver
 

@@ -69,7 +69,7 @@ After all tasks complete (either path):
 2. Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
    - `git diff HEAD`
    - Original task requirements
-3. If reviewer finds CRITICAL/HIGH issues: fix directly with Edit/Write and re-review (max 2 rounds)
+3. CRITICAL issues → fix directly with Edit/Write and re-review (max 2 rounds). HIGH-only issues → fix with Edit/Write, re-run self-verification, proceed with no re-review call.
 4. Go to Phase 3
 
 ---
@@ -131,10 +131,11 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 
 Parse reviewer response:
 - No CRITICAL/HIGH issues → approved, go to Phase 3
-- Has CRITICAL/HIGH (3+ task path) → dispatch a Claude subagent per affected task with the reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
-- Has CRITICAL/HIGH (single Codex session path) → call `mcp__codex__codex-reply` with reviewer feedback verbatim, increment iteration count (max 3 total iterations).
+- Has CRITICAL (3+ task path) → dispatch a Claude subagent per affected task with the reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
+- Has CRITICAL (single Codex session path) → call `mcp__codex__codex-reply` with reviewer feedback verbatim, increment iteration count (max 3 total iterations).
+- HIGH only → apply fixes via the same path-specific mechanism (subagents for the 3+ task path, `mcp__codex__codex-reply` asking for fixes with no re-review verdict for the single-session path), verify with scoped lint/tests, proceed, carrying any MEDIUM/LOW findings into the delivery report.
 
-After 3 iterations without approval, stop and report status to user.
+After 3 iterations still finding CRITICALs, stop and report status to user.
 
 ---
 

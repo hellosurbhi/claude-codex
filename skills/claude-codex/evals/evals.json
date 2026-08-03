@@ -25,7 +25,7 @@
         "Claude does NOT attempt to read a plan file (uses task description directly)",
         "Claude calls mcp__codex__codex for review after implementation",
         "The Codex prompt includes 'git diff HEAD' instruction",
-        "If Codex returns WARNING or BLOCKED, Claude fixes CRITICAL/HIGH issues before re-reviewing",
+        "If Codex returns BLOCKED, Claude fixes the CRITICAL issues and re-reviews; if Codex returns WARNING, Claude fixes accepted HIGHs, runs tests/lint, and proceeds with no re-review call",
         "If MEDIUM/LOW issues remain after APPROVED, Claude asks user whether to fix them",
         "Delivery includes a changes table and review result"
       ]

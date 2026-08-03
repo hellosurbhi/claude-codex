@@ -111,7 +111,8 @@ Save the returned `threadId` (separate from the implementation review threadId).
 
 **Parse response**:
 - **APPROVED** → proceed to Phase 4
-- **WARNING/BLOCKED** → critically evaluate findings before fixing (see below)
+- **WARNING** (no CRITICAL) → critically evaluate findings (see below), fix the accepted ones in the test files, re-verify RED, then proceed with **no further Codex call**
+- **BLOCKED** → critically evaluate findings before fixing (see below), then fix and re-audit
 
 **Critical Evaluation of Test Audit Findings**
 
@@ -128,9 +129,9 @@ Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
 - If the reviewer concedes or cannot justify further, drop the finding.
 - Discussion replies do NOT increment the iteration counter — only fix-and-re-review cycles count.
 
-**If findings are accepted:** Claude fixes all accepted CRITICAL/HIGH issues in the test files, re-verifies RED, then re-calls via `mcp__codex__codex-reply` (max 2 iterations).
+**If findings are accepted:** Claude fixes all accepted CRITICAL/HIGH issues in the test files and re-verifies RED. Only a BLOCKED verdict re-calls via `mcp__codex__codex-reply` (max 2 iterations); a WARNING proceeds after the fixes with no further call.
 
-After 2 iterations without APPROVED, stop and ask user for direction.
+After 2 iterations still BLOCKED, stop and ask user for direction.
 
 ### Phase 4: Route by Change Size
 
@@ -175,7 +176,7 @@ After all tasks complete (either path):
    - **Check context**: Does the reviewer have full context, or is it flagging intentional design?
    - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
    - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
-9. If accepted CRITICAL/HIGH issues remain: fix with Edit/Write, re-review (max 2 rounds)
+9. Accepted CRITICAL issues → fix with Edit/Write and re-review (max 2 rounds). Accepted HIGH-only issues → fix with Edit/Write, re-run the full test suite (must stay GREEN), then proceed with no re-review call. The HIGHs are fixed and verified; only the paid re-verification round is skipped.
 10. After CRITICAL/HIGH resolved, collect MEDIUM/LOW issues and ask user:
    > "Reviewer flagged N MEDIUM/LOW issue(s) that were not fixed:
    > - [list issues]
@@ -294,11 +295,12 @@ Parse reviewer response:
 - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
 - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
 
-After evaluation:
-- Has CRITICAL/HIGH (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
-- Has CRITICAL/HIGH (single Codex session path) → call `mcp__codex__codex-reply` with accepted reviewer feedback verbatim, increment iteration (max 3 total iterations).
+After evaluation (re-review rounds trigger on CRITICAL findings only; HIGH-only rounds apply fixes through the same path-specific mechanisms below and skip only the re-review verdict):
+- Has CRITICAL (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
+- Has CRITICAL (single Codex session path) → call `mcp__codex__codex-reply` with accepted reviewer feedback verbatim, increment iteration (max 3 total iterations).
+- HIGH only (3+ task path) → dispatch a Claude subagent per affected task with the accepted feedback verbatim; (single Codex session path) → call `mcp__codex__codex-reply` with the accepted feedback, instructing it to apply the fixes and reply with a change summary, no re-review verdict. Route B's no-Edit/Write rule holds either way. Verify with the test suite (must stay GREEN), then collect remaining MEDIUM/LOW findings and ask the user, exactly as the no-CRITICAL/HIGH branch does, before proceeding.
 
-After 3 iterations without approval, stop and report remaining issues to user.
+After 3 iterations still finding CRITICALs, stop and report remaining issues to user.
 
 ---
 

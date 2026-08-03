@@ -99,9 +99,10 @@ Save the returned `threadId` (separate from the implementation review threadId).
 
 **Parse response**:
 - **APPROVED** → proceed to Phase 4
-- **WARNING/BLOCKED** → Claude fixes all CRITICAL/HIGH issues in the test files, re-verifies RED, then re-calls via `mcp__codex__codex-reply` (max 2 iterations)
+- **WARNING** (no CRITICAL) → Claude fixes the accepted issues in the test files, re-verifies RED, proceeds with no further Codex call
+- **BLOCKED** → Claude fixes all CRITICAL/HIGH issues in the test files, re-verifies RED, then re-calls via `mcp__codex__codex-reply` (max 2 iterations)
 
-After 2 iterations without APPROVED, stop and ask user for direction.
+After 2 iterations still BLOCKED, stop and ask user for direction.
 
 ### Phase 4: Claude Implements (GREEN)
 
@@ -159,10 +160,10 @@ Save the returned `threadId` for follow-up replies.
 
 Classify the verdict:
 - **APPROVED** — no CRITICAL or HIGH → go to Phase 7
-- **WARNING** — HIGH issues only → fix all, increment iteration, re-review
+- **WARNING** — HIGH issues only → fix all accepted HIGHs in one batch, re-run the test suite (must stay GREEN), handle MEDIUM/LOW per Step R3, then go to Phase 7 with no re-review call
 - **BLOCKED** — CRITICAL issues → fix all, increment iteration, re-review
 
-**Step R2 — Fix and Re-review**
+**Step R2 — Fix and Re-review (BLOCKED verdicts only)**
 
 Address ALL CRITICAL and HIGH issues before re-reviewing:
 - Collect every CRITICAL/HIGH finding from the last review
@@ -176,8 +177,8 @@ Run `git diff $START_SHA` again to see the updated changes, then re-review.
 Return ONLY the structured verdict in the same format.
 ```
 
-One review per iteration, not one review per fix. Stop after 3 iterations without APPROVED.
-After 3 iterations without APPROVED, stop and report remaining issues to user.
+One review per iteration, not one review per fix. Only BLOCKED verdicts trigger a re-review.
+After 3 iterations still BLOCKED, stop and report remaining issues to user.
 
 **Step R3 — MEDIUM / LOW Issues**
 

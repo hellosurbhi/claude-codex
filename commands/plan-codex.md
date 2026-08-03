@@ -1,5 +1,5 @@
 ---
-description: "Claude plans with Opus, Codex audits, loop until approved"
+description: "Claude plans with Opus, Codex audits once, re-audit only on BLOCKED"
 argument-hint: "<task description>"
 model: claude-opus-4-6
 allowed-tools: ["AskUserQuestion", "mcp__codex__codex", "mcp__codex__codex-reply", "Task", "Read", "Glob", "Grep", "Write", "Bash"]
@@ -49,13 +49,14 @@ Save the returned `threadId`.
 
 **Parse response**:
 - Contains "APPROVED" → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
-- Contains issues → address every issue, revise plan, update `.claude/plan/<feature-name>.md`
+- WARNING (no CRITICAL) → fold the accepted findings into the plan, update `.claude/plan/<feature-name>.md`, go to Phase 3 with no further Codex call
+- BLOCKED (CRITICAL findings) → address every CRITICAL, revise plan, update `.claude/plan/<feature-name>.md`, re-audit
 
 **Call `mcp__codex__codex-reply`** (iterations 2-3):
 - threadId: {saved threadId}
 - prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
 
-After 3 iterations without APPROVED, stop and ask user for direction.
+After 3 iterations still BLOCKED, stop and ask user for direction.
 
 ### Phase 3: Deliver
 
