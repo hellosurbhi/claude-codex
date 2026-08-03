@@ -1,5 +1,5 @@
 
-## Low priority enhancements
+## Low-priority enhancements
 
 ### Codex (2026-08-03T04:15Z)
 - LOW: `BUGS.md:12` adds a trailing blank line flagged by `git diff --check`.

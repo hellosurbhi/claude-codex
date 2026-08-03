@@ -159,7 +159,7 @@ LOW: <list or 'none'>
 Save the returned `threadId` for follow-up replies.
 
 Classify the verdict:
-- **APPROVED** — no CRITICAL or HIGH → go to Phase 7
+- **APPROVED** — no CRITICAL or HIGH → handle any MEDIUM/LOW findings per Step R3, then go to Phase 7
 - **WARNING** — HIGH issues only → fix all accepted HIGHs in one batch, re-run the test suite (must stay GREEN), handle MEDIUM/LOW per Step R3, then go to Phase 7 with no re-review call
 - **BLOCKED** — CRITICAL issues → fix all, increment iteration, re-review
 

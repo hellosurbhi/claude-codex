@@ -39,6 +39,10 @@ Save the returned plan to `.claude/plan/<feature-name>.md`.
 
 Read `~/.claude/skills/plan-codex/codex-analyzer-role.md` and inject as `developer-instructions`. (That file defines the `VERDICT: APPROVED | WARNING | BLOCKED` grammar the parse step below branches on; `prompts/codex/analyzer.md` also exists but predates the verdict contract and defines no grammar, so it must not be used here.)
 
+**MANDATORY Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). Do NOT skip or bypass this phase. If the tool is genuinely absent from both locations, **stop and tell the user**: "Codex MCP is not available. This command requires Codex for plan audit. Please add the Codex MCP server." Do not proceed without Codex.
+
+**MANDATORY mid-call failure handling**: a Codex call that errors, times out or is aborted mid-audit is NOT an approval and NOT a skippable step. Retry the call exactly once. If the MCP transport itself is failing, retry via the CLI with the full audit context supplied explicitly (a bare `codex exec` with no prompt hangs reading stdin): `codex exec --sandbox read-only "$(cat ~/.claude/skills/plan-codex/codex-analyzer-role.md)"$'\n\n'"Read the plan file at .claude/plan/<feature-name>.md and audit it for correctness, completeness, security, and edge cases. Return the structured verdict."` and validate the output against the same `VERDICT:` grammar below. If the retry also dies, **stop and tell the user**: "Codex audit incomplete. The review did not run. The plan is UNREVIEWED." Never proceed to Phase 3 on a dead audit.
+
 **Call `mcp__codex__codex`** (iteration 1):
 - prompt: "Read the plan file at `.claude/plan/<feature-name>.md` and audit it for correctness, completeness, security, and edge cases. Return the structured verdict (VERDICT: APPROVED | WARNING | BLOCKED) with severity-prefixed findings per your instructions."
 - sandbox: "read-only"

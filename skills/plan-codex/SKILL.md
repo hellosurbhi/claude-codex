@@ -61,7 +61,7 @@ Read `codex-analyzer-role.md` from this skill directory and inject as `developer
 Save the returned `threadId`.
 
 **Parse the VERDICT line** (the analyzer role emits `VERDICT: APPROVED | WARNING | BLOCKED`):
-- **APPROVED** → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3.
+- **APPROVED** → fold any accompanying MEDIUM/LOW findings into the plan's notes, update `.claude/plan/<feature-name>.md` with final version, go to Phase 3.
 - **WARNING** (at least one HIGH finding, nothing CRITICAL) → critically evaluate the findings (see below), fold the accepted ones into the plan, note them in the Phase 3 delivery, and go to Phase 3 with **no further Codex call**. Log: "First-pass WARNING, findings incorporated, skipping re-audit." A WARNING plan is a reviewed plan; re-auditing it buys a second 10-15 minute xhigh call to confirm formatting changes. (Measured 2026-08-02: three audit rounds, zero BLOCKED findings, ~45 minutes before any code.)
 - **BLOCKED** (CRITICAL findings) → critically evaluate before addressing (see below), then revise and re-audit.
 

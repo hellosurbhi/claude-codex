@@ -82,7 +82,7 @@ Save the returned `threadId` for follow-up replies.
 **Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual code, whether the reviewer had full context for intentional decisions, and whether it improves correctness/security or is a preference/false positive. Contest doubtful findings via `codex-reply` with specific reasoning; discussion replies do not count as iterations. Only findings that survive this gate are "accepted" below.
 
 Classify the verdict:
-- **APPROVED** — no CRITICAL or HIGH → go to Phase 4
+- **APPROVED** — no CRITICAL or HIGH → handle any MEDIUM/LOW findings per Step R3, then go to Phase 4
 - **WARNING** — HIGH issues only → fix all accepted HIGHs in one batch, run available tests/lint, handle MEDIUM/LOW per Step R3, then go to Phase 4 with no re-review call
 - **BLOCKED** — CRITICAL issues → fix all accepted ones, increment iteration, re-review
 
