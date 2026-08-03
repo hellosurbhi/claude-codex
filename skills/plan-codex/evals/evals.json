@@ -20,15 +20,15 @@
     {
       "id": 2,
       "prompt": "Plan migrating our environment variable configuration from process.env usage scattered across files to a typed config module with validation.",
-      "expected_output": "Claude creates plan, Codex audits with issues, Claude revises and re-submits via codex-reply, eventually APPROVED.",
+      "expected_output": "Claude creates plan; a BLOCKED audit is revised and re-submitted via codex-reply until no CRITICALs remain; a WARNING audit is folded into the plan with no further call.",
       "files": [],
       "expectations": [
         "Claude saves the plan to .claude/plan/ before calling Codex",
         "Claude calls mcp__codex__codex with approval-policy 'never' (read-only audit)",
-        "If Codex returns issues, Claude revises the plan file before re-auditing",
+        "If Codex returns BLOCKED, Claude revises the plan file before re-auditing; if Codex returns WARNING, Claude folds the findings into the plan and does not re-audit",
         "Claude uses mcp__codex__codex-reply (not a new mcp__codex__codex call) for iterations 2-3",
         "Claude reuses the saved threadId for follow-up audit calls",
-        "After 3 iterations without APPROVED, Claude stops and asks user for direction"
+        "After 3 iterations still BLOCKED, Claude stops and asks user for direction"
       ]
     },
     {
