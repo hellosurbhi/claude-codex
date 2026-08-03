@@ -37,24 +37,24 @@ Save the returned plan to `.claude/plan/<feature-name>.md`.
 
 ### Phase 2: Codex Audit Loop (max 3 iterations)
 
-Read `~/.claude/prompts/codex/analyzer.md` and inject as `developer-instructions`.
+Read `~/.claude/skills/plan-codex/codex-analyzer-role.md` and inject as `developer-instructions`. (That file defines the `VERDICT: APPROVED | WARNING | BLOCKED` grammar the parse step below branches on; the old `~/.claude/prompts/codex/analyzer.md` path does not exist in this install.)
 
 **Call `mcp__codex__codex`** (iteration 1):
-- prompt: "Read the plan file at `.claude/plan/<feature-name>.md` and audit it for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
+- prompt: "Read the plan file at `.claude/plan/<feature-name>.md` and audit it for correctness, completeness, security, and edge cases. Return the structured verdict (VERDICT: APPROVED | WARNING | BLOCKED) with severity-prefixed findings per your instructions."
 - sandbox: "read-only"
 - approval-policy: "never"
-- developer-instructions: {content of ~/.claude/prompts/codex/analyzer.md} + "\nBe concise. Output result only, no reasoning process."
+- developer-instructions: {content of ~/.claude/skills/plan-codex/codex-analyzer-role.md} + "\nBe concise. Output result only, no reasoning process."
 
 Save the returned `threadId`.
 
 **Parse response**:
 - Contains "APPROVED" → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
 - WARNING (no CRITICAL) → fold the accepted findings into the plan, update `.claude/plan/<feature-name>.md`, go to Phase 3 with no further Codex call
-- BLOCKED (CRITICAL findings) → address every CRITICAL, revise plan, update `.claude/plan/<feature-name>.md`, re-audit
+- BLOCKED (CRITICAL findings) → address every CRITICAL and any accompanying HIGH findings, revise plan, update `.claude/plan/<feature-name>.md`, re-audit
 
 **Call `mcp__codex__codex-reply`** (iterations 2-3):
 - threadId: {saved threadId}
-- prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
+- prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Return the structured verdict (VERDICT: APPROVED | WARNING | BLOCKED) with severity-prefixed findings per your instructions."
 
 After 3 iterations still BLOCKED, stop and ask user for direction.
 
