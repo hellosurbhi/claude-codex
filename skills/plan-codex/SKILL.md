@@ -44,7 +44,7 @@ If requirements are ambiguous before launching the planner, ask clarifying quest
 
 Save the returned plan to `.claude/plan/<feature-name>.md`.
 
-### Phase 2: Codex Audit Loop (max 3 iterations)
+### Phase 2: Codex Audit (single pass; re-audit only on BLOCKED, max 3 iterations)
 
 **MANDATORY Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). Do NOT skip or bypass this phase. If the tool is genuinely absent from both locations, **stop and tell the user**: "Codex MCP is not available. This skill requires Codex for plan audit. Please add the Codex MCP server." Do not proceed without Codex — the audit loop is this skill's core value.
 
@@ -60,9 +60,10 @@ Read `codex-analyzer-role.md` from this skill directory and inject as `developer
 
 Save the returned `threadId`.
 
-**Parse response**:
-- Contains "APPROVED" → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
-- Contains issues → critically evaluate before addressing (see below)
+**Parse the VERDICT line** (the analyzer role emits `VERDICT: APPROVED | WARNING | BLOCKED`):
+- **APPROVED** → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3.
+- **WARNING** (HIGH/MEDIUM findings, nothing CRITICAL) → critically evaluate the findings (see below), fold the accepted ones into the plan, note them in the Phase 3 delivery, and go to Phase 3 with **no further Codex call**. Log: "First-pass WARNING, findings incorporated, skipping re-audit." A WARNING plan is a reviewed plan; re-auditing it buys a second 10-15 minute xhigh call to confirm formatting changes. (Measured 2026-08-02: three audit rounds, zero BLOCKED findings, ~45 minutes before any code.)
+- **BLOCKED** (CRITICAL findings) → critically evaluate before addressing (see below), then revise and re-audit.
 
 **Critical Evaluation of Audit Findings**
 
@@ -81,11 +82,12 @@ Before addressing any issues, critically evaluate each finding:
 
 **If findings are accepted:** address every accepted issue, revise plan, update `.claude/plan/<feature-name>.md`.
 
-**Call `mcp__codex__codex-reply`** (iterations 2-3):
+**Call `mcp__codex__codex-reply`** (iterations 2-3, **BLOCKED verdicts only**):
 - threadId: {saved threadId}
 - prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
+- A re-audit that comes back WARNING follows the WARNING rule above: incorporate and proceed, no further call.
 
-After 3 iterations without APPROVED, stop and ask user for direction.
+After 3 iterations still BLOCKED, stop and ask user for direction.
 
 ### Phase 3: Deliver
 
