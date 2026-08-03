@@ -48,6 +48,8 @@ Save the returned plan to `.claude/plan/<feature-name>.md`.
 
 **MANDATORY Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). Do NOT skip or bypass this phase. If the tool is genuinely absent from both locations, **stop and tell the user**: "Codex MCP is not available. This skill requires Codex for plan audit. Please add the Codex MCP server." Do not proceed without Codex — the audit loop is this skill's core value.
 
+**MANDATORY mid-call failure handling**: a Codex call that errors, times out, or is aborted mid-audit (e.g. "sent no response or progress", MCP idle timeout, task failed) is NOT an approval and NOT a skippable step. Retry the call exactly once — via `codex exec --sandbox read-only` in Bash if the MCP transport is the thing failing (the per-session MCP connection does not pick up config changes until restart). If the retry also dies, **stop and tell the user**: "Codex audit incomplete — the review did not run. The plan is UNREVIEWED." Never proceed to Phase 3 or to implementation on a dead audit; an unreviewed plan must be labeled as such, out loud, every time. (Added 2026-07-28 after an xhigh audit was silently killed by a 1800s MCP idle timeout and work continued without it.)
+
 Read `codex-analyzer-role.md` from this skill directory and inject as `developer-instructions`.
 
 **Call `mcp__codex__codex`** (iteration 1):
