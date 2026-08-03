@@ -1,6 +1,7 @@
-
 ## Medium priority (auto-fix pending)
 
-### Codex (2026-08-03T02:06Z)
-- [ ] MEDIUM: `skills/plan-codex/SKILL.md:51` gives `codex exec --sandbox read-only` as the mandatory fallback without supplying a prompt or analyzer instructions. The CLI reads stdin when no prompt is supplied, so this retry can hang or return output that does not follow the required verdict grammar.
-  - New copy throughout the diff uses em dashes despite the repository copy-voice mandate prohibiting them.
+### Codex (2026-08-03T02:38Z)
+- [ ] MEDIUM: `skills/plan-codex/SKILL.md:51` invokes `codex exec --sandbox read-only` without a prompt or analyzer instructions. The CLI reads stdin when the prompt is omitted, so the mandatory fallback can wait, fail or produce an invalid audit.
+  - `commands/claude-codex.md:84`, `commands/plan-codex.md:52` and both TDD command audit paths refer to accepted findings without defining the critical-evaluation process present in their skill counterparts.
+  - The execute and TDD eval suites add no WARNING-path cases, leaving the changed no-re-review behavior unenforced.
+  - Added copy uses prohibited em dashes and Oxford commas throughout the changed Markdown.

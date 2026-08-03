@@ -1,6 +1,6 @@
 ---
 name: plan-codex
-description: "Create a detailed implementation plan with Opus-level reasoning, then Codex audits it for correctness, completeness, and security in a loop until approved. Best for: planning before coding — never modifies production code. Triggers on: /plan-codex, plan a feature, create implementation plan, design a system, architect this."
+description: "Create a detailed implementation plan with Opus-level reasoning, then Codex audits it once for correctness, completeness, and security; only a BLOCKED verdict triggers re-audit. Best for: planning before coding — never modifies production code. Triggers on: /plan-codex, plan a feature, create implementation plan, design a system, architect this."
 ---
 
 # Plan-Codex — Claude Plans, Codex Audits

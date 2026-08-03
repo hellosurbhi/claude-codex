@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Plan adding JWT authentication to the API with refresh tokens, token rotation, and logout support.",
-      "expected_output": "Claude launches a Plan agent, saves plan to .claude/plan/, calls Codex with read-only sandbox for audit, iterates until APPROVED, presents plan and stops.",
+      "expected_output": "Claude launches a Plan agent, saves plan to .claude/plan/, calls Codex with read-only sandbox for a single audit (re-auditing only on BLOCKED), presents plan and stops.",
       "files": [],
       "expectations": [
         "Claude launches a Task agent with subagent_type 'Plan' for plan creation",

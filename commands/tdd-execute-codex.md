@@ -230,11 +230,11 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 
 Parse reviewer response:
 - No CRITICAL/HIGH → collect MEDIUM/LOW, ask user (same prompt as Route A step 9), then Phase 5
-- Has CRITICAL/HIGH (3+ task path) → dispatch a Claude subagent per affected task with the reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
+- Has CRITICAL (3+ task path) → dispatch a Claude subagent per affected task with the reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
 - Has CRITICAL (single Codex session path) → call `mcp__codex__codex-reply` with reviewer feedback verbatim, increment iteration (max 3 total iterations).
-- HIGH only → apply fixes via the same path-specific mechanism (subagents for the 3+ task path, `mcp__codex__codex-reply` asking for fixes with no re-review verdict for the single-session path), verify with the test suite, proceed.
+- HIGH only → apply fixes via the same path-specific mechanism (subagents for the 3+ task path, `mcp__codex__codex-reply` asking for fixes with no re-review verdict for the single-session path), verify with the test suite, then collect MEDIUM/LOW and ask the user (same prompt as the no-CRITICAL/HIGH branch) before Phase 5.
 
-After 3 iterations without approval, stop and report remaining issues to user.
+After 3 iterations still finding CRITICALs, stop and report remaining issues to user.
 
 ---
 
