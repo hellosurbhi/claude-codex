@@ -79,12 +79,14 @@ LOW: <list or 'none'>
 
 Save the returned `threadId` for follow-up replies.
 
-Classify the verdict:
-- **APPROVED** — no CRITICAL or HIGH → go to Phase 4
-- **WARNING** — HIGH issues only → fix all, increment iteration, re-review
-- **BLOCKED** — CRITICAL issues → fix all, increment iteration, re-review
+**Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual code, whether the reviewer had full context for intentional decisions, and whether it improves correctness/security or is a preference/false positive. Contest doubtful findings via `codex-reply` with specific reasoning; discussion replies do not count as iterations. Only findings that survive this gate are "accepted" below.
 
-**Step R2 — Fix and Re-review**
+Classify the verdict:
+- **APPROVED** — no CRITICAL or HIGH → handle any MEDIUM/LOW findings per Step R3, then go to Phase 4
+- **WARNING** — HIGH issues only → fix all accepted HIGHs in one batch, run available tests/lint, handle MEDIUM/LOW per Step R3, then go to Phase 4 with no re-review call
+- **BLOCKED** — CRITICAL issues → fix all accepted ones, increment iteration, re-review
+
+**Step R2 — Fix and Re-review (BLOCKED verdicts only)**
 
 Address ALL CRITICAL and HIGH issues before re-reviewing:
 - Collect every CRITICAL/HIGH finding from the last review
@@ -98,9 +100,9 @@ Run `git diff HEAD` again to see the updated changes after fixes, then re-review
 Return ONLY the structured verdict in the same format.
 ```
 
-One review per iteration, not one review per fix. Stop after 3 iterations without APPROVED.
+One review per iteration, not one review per fix. Only BLOCKED verdicts trigger a re-review.
 
-After 3 iterations without APPROVED, stop and report remaining issues to user.
+After 3 iterations still BLOCKED, stop and report remaining issues to user.
 
 **Step R3 — MEDIUM / LOW Issues**
 

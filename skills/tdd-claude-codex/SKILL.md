@@ -113,7 +113,8 @@ Save the returned `threadId` (separate from the implementation review threadId).
 
 **Parse response**:
 - **APPROVED** → proceed to Phase 4
-- **WARNING/BLOCKED** → critically evaluate findings before fixing (see below)
+- **WARNING** (no CRITICAL) → critically evaluate findings (see below), fix the accepted ones in the test files, re-verify RED, then proceed with **no further Codex call**
+- **BLOCKED** → critically evaluate findings before fixing (see below), then fix and re-audit
 
 **Critical Evaluation of Test Audit Findings**
 
@@ -130,9 +131,9 @@ Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
 - If the reviewer concedes or cannot justify further, drop the finding.
 - Discussion replies do NOT increment the iteration counter — only fix-and-re-review cycles count.
 
-**If findings are accepted:** Claude fixes all accepted CRITICAL/HIGH issues in the test files, re-verifies RED, then re-calls via `mcp__codex__codex-reply` (max 2 iterations).
+**If findings are accepted:** Claude fixes all accepted CRITICAL/HIGH issues in the test files and re-verifies RED. Only a BLOCKED verdict re-calls via `mcp__codex__codex-reply` (max 2 iterations); a WARNING proceeds after the fixes with no further call.
 
-After 2 iterations without APPROVED, stop and ask user for direction.
+After 2 iterations still BLOCKED, stop and ask user for direction.
 
 ### Phase 4: Claude Implements (GREEN)
 
@@ -191,8 +192,8 @@ LOW: <list or 'none'>
 Save the returned `threadId` for follow-up replies.
 
 Classify the verdict:
-- **APPROVED** — no CRITICAL or HIGH → go to Phase 7
-- **WARNING** — HIGH issues only → fix all, increment iteration, re-review
+- **APPROVED** — no CRITICAL or HIGH → handle any MEDIUM/LOW findings per Step R3, then go to Phase 7
+- **WARNING** — HIGH issues only → critically evaluate (R1.5), fix all accepted HIGHs in one batch, re-run the test suite (all tests must stay GREEN), handle MEDIUM/LOW per Step R3, then go to Phase 7 with **no re-review call**. The HIGHs are fixed and verified; only the paid re-verification round is skipped
 - **BLOCKED** — CRITICAL issues → fix all, increment iteration, re-review
 
 **Step R1.5 — Critical Evaluation of Review Findings**
@@ -212,7 +213,7 @@ Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
 
 **If all findings appear correct:** proceed directly to Step R2.
 
-**Step R2 — Fix and Re-review**
+**Step R2 — Fix and Re-review (BLOCKED verdicts only)**
 
 Address ALL accepted CRITICAL and HIGH issues before re-reviewing:
 - Collect every CRITICAL/HIGH finding from the last review
@@ -226,8 +227,8 @@ Run `git diff $START_SHA` again to see the updated changes, then re-review.
 Return ONLY the structured verdict in the same format.
 ```
 
-One review per iteration, not one review per fix. Stop after 3 iterations without APPROVED.
-After 3 iterations without APPROVED, stop and report remaining issues to user.
+One review per iteration, not one review per fix. Only BLOCKED verdicts trigger a re-review; a re-review that comes back WARNING follows the WARNING rule above (fix accepted HIGHs, proceed, no further call).
+After 3 iterations still BLOCKED, stop and report remaining issues to user.
 
 **Step R3 — MEDIUM / LOW Issues**
 

@@ -1,5 +1,5 @@
 ---
-description: "Claude plans with Opus, Codex audits, loop until approved"
+description: "Claude plans with Opus, Codex audits once, re-audit only on BLOCKED"
 argument-hint: "<task description>"
 model: claude-opus-4-6
 allowed-tools: ["AskUserQuestion", "mcp__codex__codex", "mcp__codex__codex-reply", "Task", "Read", "Glob", "Grep", "Write", "Bash"]
@@ -37,25 +37,31 @@ Save the returned plan to `.claude/plan/<feature-name>.md`.
 
 ### Phase 2: Codex Audit Loop (max 3 iterations)
 
-Read `~/.claude/prompts/codex/analyzer.md` and inject as `developer-instructions`.
+Read `~/.claude/skills/plan-codex/codex-analyzer-role.md` and inject as `developer-instructions`. (That file defines the `VERDICT: APPROVED | WARNING | BLOCKED` grammar the parse step below branches on; `prompts/codex/analyzer.md` also exists but predates the verdict contract and defines no grammar, so it must not be used here.)
+
+**MANDATORY Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). Do NOT skip or bypass this phase. If the tool is genuinely absent from both locations, **stop and tell the user**: "Codex MCP is not available. This command requires Codex for plan audit. Please add the Codex MCP server." Do not proceed without Codex.
+
+**MANDATORY mid-call failure handling**: a Codex call that errors, times out or is aborted mid-audit is NOT an approval and NOT a skippable step. Retry the call exactly once. If the MCP transport itself is failing, retry via the CLI with the full audit context supplied explicitly (a bare `codex exec` with no prompt hangs reading stdin): `codex exec --sandbox read-only "$(cat ~/.claude/skills/plan-codex/codex-analyzer-role.md)"$'\n\n'"Read the plan file at .claude/plan/<feature-name>.md and audit it for correctness, completeness, security, and edge cases. Return the structured verdict."` and validate the output against the same `VERDICT:` grammar below. If the retry also dies, **stop and tell the user**: "Codex audit incomplete. The review did not run. The plan is UNREVIEWED." Never proceed to Phase 3 on a dead audit.
 
 **Call `mcp__codex__codex`** (iteration 1):
-- prompt: "Read the plan file at `.claude/plan/<feature-name>.md` and audit it for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
+- prompt: "Read the plan file at `.claude/plan/<feature-name>.md` and audit it for correctness, completeness, security, and edge cases. Return the structured verdict (VERDICT: APPROVED | WARNING | BLOCKED) with severity-prefixed findings per your instructions."
 - sandbox: "read-only"
 - approval-policy: "never"
-- developer-instructions: {content of ~/.claude/prompts/codex/analyzer.md} + "\nBe concise. Output result only, no reasoning process."
+- developer-instructions: {content of ~/.claude/skills/plan-codex/codex-analyzer-role.md} + "\nBe concise. Output result only, no reasoning process."
 
 Save the returned `threadId`.
 
-**Parse response**:
-- Contains "APPROVED" → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
-- Contains issues → address every issue, revise plan, update `.claude/plan/<feature-name>.md`
+**Parse the exact `VERDICT:` line** (line-anchored; exactly one must be present). The word APPROVED appearing inside prose or a finding is NOT approval. A response with no verdict line, multiple verdict lines, or a value other than APPROVED, WARNING or BLOCKED is malformed: retry the call once, and if the retry is also malformed, stop and tell the user the plan is UNREVIEWED.
+**Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual codebase, whether the reviewer had full context for intentional decisions, and whether it improves the plan or is a preference/false positive. Contest doubtful findings via `codex-reply` with specific reasoning; discussion replies do not count as audit iterations. Only findings that survive this gate are "accepted" below.
+- `VERDICT: APPROVED` → fold any accompanying MEDIUM/LOW findings into the plan's notes (the analyzer role explicitly permits them), update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
+- `VERDICT: WARNING` (no CRITICAL) → fold the accepted findings into the plan, update `.claude/plan/<feature-name>.md`, go to Phase 3 with no further Codex call
+- `VERDICT: BLOCKED` (CRITICAL findings) → address every CRITICAL and any accompanying HIGH findings, revise plan, update `.claude/plan/<feature-name>.md`, re-audit
 
 **Call `mcp__codex__codex-reply`** (iterations 2-3):
 - threadId: {saved threadId}
-- prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
+- prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Return the structured verdict (VERDICT: APPROVED | WARNING | BLOCKED) with severity-prefixed findings per your instructions."
 
-After 3 iterations without APPROVED, stop and ask user for direction.
+After 3 iterations still BLOCKED, stop and ask user for direction.
 
 ### Phase 3: Deliver
 

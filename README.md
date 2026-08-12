@@ -8,7 +8,7 @@ Skills are the primary interface. They support eval-based testing via skill-crea
 
 | Skill | Trigger | Description |
 |-------|---------|-------------|
-| `plan-codex` | `/plan-codex <task>` | Claude plans with Opus, Codex audits for correctness/completeness/security until approved |
+| `plan-codex` | `/plan-codex <task>` | Claude plans with Opus, Codex audits once for correctness/completeness/security; re-audit only on BLOCKED |
 | `claude-codex` | `/claude-codex <task or plan>` | Claude implements, Codex reviews with APPROVED/WARNING/BLOCKED verdicts |
 | `execute-codex` | `/execute-codex <task or plan>` | Smart size-based routing: Claude (small) or Codex (large) implements, code-reviewer reviews |
 | `tdd-claude-codex` | `/tdd-claude-codex <task or plan>` | TDD: Claude writes tests, Codex audits tests, Claude implements, Codex reviews implementation |
@@ -32,7 +32,7 @@ Commands (`commands/`) are retained for backward compatibility — they support 
 /claude-codex <task or plan file>
   Claude implements (any model)       → Edit/Write + self-verify
   Codex reviews uncommitted changes   → returns structured verdict (APPROVED/WARNING/BLOCKED)
-  Claude fixes CRITICAL/HIGH issues   → re-reviews (max 3 rounds)
+  Claude fixes findings               → re-review only on BLOCKED (max 3 rounds)
   MEDIUM/LOW issues                   → user decides before delivery
 ```
 
@@ -48,7 +48,13 @@ Install from [claude.ai/code](https://claude.ai/code).
 npm install -g @openai/codex
 ```
 
-Authenticate with your OpenAI API key:
+Authenticate with your ChatGPT account (recommended):
+
+```bash
+codex login
+```
+
+Or with your OpenAI API key:
 
 ```bash
 export OPENAI_API_KEY=your-key-here
@@ -61,7 +67,7 @@ This setup uses the `code-reviewer` agent from [claude-plugins-official](https:/
 Install the plugin in Claude Code:
 
 ```
-claude plugin add claude-plugins-official/feature-dev
+claude plugin install feature-dev@claude-plugins-official
 ```
 
 ## Installation
@@ -71,6 +77,8 @@ claude plugin add claude-plugins-official/feature-dev
 ```bash
 git clone https://github.com/<your-username>/claude-codex
 cd claude-codex
+
+mkdir -p ~/.claude/skills ~/.claude/prompts ~/.claude/commands
 
 cp -r skills/*   ~/.claude/skills/
 cp -r prompts/*  ~/.claude/prompts/
@@ -85,13 +93,15 @@ Suppress reasoning tokens by adding the following to `~/.codex/config.toml`:
 hide_agent_reasoning = true
 ```
 
+Note: this is a top-level key. If your `config.toml` already has `[table]` sections, add it above the first one (TOML keys appended after a table header belong to that table).
+
 ### 3. Add Codex as an MCP server
 
 ```bash
-claude mcp add codex -s user -- codex -c model=gpt-5.3-codex -c model_reasoning_effort=high mcp-server
+claude mcp add codex -s user -- codex -c model=gpt-5.6-sol -c model_reasoning_effort=xhigh mcp-server
 ```
 
-Adjust `model` and `model_reasoning_effort` (`low`/`medium`/`high`/`xhigh`) to your preference.
+Adjust `model` and `model_reasoning_effort` (`low`/`medium`/`high`/`xhigh`) to your preference. Available models depend on your Codex plan, account type and CLI version: on ChatGPT-account auth the bare `gpt-5.6` alias is API-only and gets rejected, use `gpt-5.6-sol`. If Codex calls fail with an `invalid_request_error`, re-run with a model your account supports.
 
 ### 4. Restart Claude Code
 
@@ -146,7 +156,7 @@ Or for a direct task:
 
 Claude implements using the active model (default: Sonnet; override with `/model opus` for heavier tasks). Codex reviews the uncommitted diff via MCP, returning a structured verdict (APPROVED / WARNING / BLOCKED):
 - **BLOCKED** (CRITICAL issues) — Claude fixes, Codex re-reviews (max 3 rounds)
-- **WARNING** (HIGH issues) — Claude fixes, Codex re-reviews (max 3 rounds)
+- **WARNING** (HIGH issues) — Claude fixes them, verifies with tests/lint, and proceeds; no re-review call
 - **MEDIUM/LOW issues** — surfaced to user; user decides whether to fix before delivery
 
 ### Model Override
