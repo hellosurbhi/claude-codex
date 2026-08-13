@@ -59,6 +59,19 @@
         "Claude stops at Phase 6 and tells user Codex is required for final review",
         "Claude does NOT deliver without the Phase 6 Codex review"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Add retry with exponential backoff to the webhook dispatcher using TDD.",
+      "expected_output": "TDD phases complete, then the Phase 6 Codex review returns VERDICT: WARNING with HIGH and MEDIUM findings. Claude fixes the HIGH issues, re-reviews via codex-reply, and surfaces the remaining MEDIUM issues to the user.",
+      "files": [],
+      "expectations": [
+        "Claude does NOT treat the WARNING verdict as approval",
+        "Claude fixes all HIGH issues while keeping the tests passing",
+        "Claude re-reviews via mcp__codex__codex-reply reusing the Phase 6 threadId",
+        "After CRITICAL/HIGH are resolved, Claude lists the remaining MEDIUM/LOW issues and asks the user whether to fix them before delivery",
+        "The delivery includes the Remaining MEDIUM/LOW issues line and the iteration count"
+      ]
     }
   ]
 }

@@ -50,6 +50,7 @@ Save the returned `threadId`.
 **Parse response**:
 - Contains "APPROVED" → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
 - Contains issues → address every issue, revise plan, update `.claude/plan/<feature-name>.md`
+- Malformed (empty output or no recognizable APPROVED/issue list) → retry once on the same thread: call `mcp__codex__codex-reply` with the saved `threadId`, asking Codex to re-read the plan file and reply again in the required format. Do NOT start a fresh `mcp__codex__codex` call for this retry: a fresh call opens a new thread and returns a replacement `threadId`, so later re-audits on the saved `threadId` would miss the retry. A malformed retry does not count as an iteration. If the retry is also malformed, stop and report to the user.
 
 **Call `mcp__codex__codex-reply`** (iterations 2-3):
 - threadId: {saved threadId}

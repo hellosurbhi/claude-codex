@@ -63,6 +63,20 @@
         "Claude launches code-reviewer Task agent for review",
         "Claude delivers successfully despite Codex being unavailable"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Fix the duplicate-email check in the signup handler so the comparison is case-insensitive, using TDD.",
+      "expected_output": "TDD phases complete, small change route. The code-reviewer first flags one HIGH issue plus MEDIUM and LOW issues. Claude fixes the HIGH issue while keeping tests green, re-reviews, then surfaces the remaining MEDIUM/LOW issues instead of dropping them.",
+      "files": [],
+      "expectations": [
+        "Claude writes test files first and verifies RED",
+        "The code-reviewer first returns a HIGH finding along with MEDIUM/LOW findings",
+        "Claude fixes the HIGH finding and re-runs the code-reviewer with tests still passing",
+        "After the re-review returns no CRITICAL/HIGH findings, Claude does NOT silently drop the remaining MEDIUM/LOW findings",
+        "Claude lists the MEDIUM/LOW findings and asks the user whether to fix them before delivery",
+        "The delivery includes the Remaining MEDIUM/LOW issues line"
+      ]
     }
   ]
 }
