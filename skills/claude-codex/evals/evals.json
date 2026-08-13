@@ -26,7 +26,7 @@
         "Claude calls mcp__codex__codex for review after implementation",
         "The Codex prompt includes 'git diff HEAD' instruction",
         "If Codex returns WARNING or BLOCKED, Claude fixes CRITICAL/HIGH issues before re-reviewing",
-        "If MEDIUM/LOW issues remain after APPROVED, Claude asks user whether to fix them",
+        "If MEDIUM/LOW issues remain after CRITICAL/HIGH are resolved (on any verdict path, not only APPROVED), Claude asks user whether to fix them",
         "Delivery includes a changes table and review result"
       ]
     },
@@ -55,6 +55,19 @@
         "Claude mentions that this skill requires Codex for review",
         "Claude does NOT deliver a completion table without Codex review",
         "Claude does NOT fall back to a non-Codex review — it fails closed"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Refactor the session cleanup job to batch its database deletes.",
+      "expected_output": "Codex returns VERDICT: WARNING with HIGH and MEDIUM findings. Claude fixes the HIGH issues, re-reviews via codex-reply until approved, then surfaces the remaining MEDIUM issues to the user instead of dropping them.",
+      "files": [],
+      "expectations": [
+        "Claude does NOT treat a WARNING verdict as approval",
+        "Claude fixes all HIGH issues before re-reviewing",
+        "Claude re-reviews via mcp__codex__codex-reply reusing the saved threadId (not a fresh mcp__codex__codex call)",
+        "After CRITICAL/HIGH are resolved, Claude lists the remaining MEDIUM/LOW issues and asks the user whether to fix them before delivery",
+        "The delivery table includes the Remaining MEDIUM/LOW issues line and the iteration count"
       ]
     }
   ]

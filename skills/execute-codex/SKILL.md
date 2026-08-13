@@ -85,7 +85,11 @@ After all tasks complete (either path):
    - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
    - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
 4. If reviewer finds CRITICAL/HIGH issues (after evaluation): fix directly with Edit/Write and re-review (max 2 rounds)
-5. Go to Phase 3
+5. After CRITICAL/HIGH resolved, collect remaining MEDIUM/LOW issues and ask user:
+   > "Reviewer flagged N MEDIUM/LOW issue(s) that were not fixed:
+   > - [list issues]
+   > Should I fix these before delivery, or proceed as-is?"
+6. Go to Phase 3
 
 ---
 
@@ -167,7 +171,7 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 - Original task requirements
 
 Parse reviewer response:
-- No CRITICAL/HIGH issues → approved, go to Phase 3
+- No CRITICAL/HIGH issues → approved; collect remaining MEDIUM/LOW issues, ask user (same prompt as Route A step 5), then go to Phase 3
 
 **Critical Evaluation** (before fixing): Critically evaluate each CRITICAL/HIGH finding:
 - **Assess correctness**: Is it technically accurate? Check actual code and project conventions.
@@ -196,6 +200,7 @@ After 3 iterations without approval, stop and report status to user.
 ### Review Result
 - Route: Small (Claude) / Large (Codex, N/3 iterations)
 - Code review: Passed / N issues resolved
+- Remaining MEDIUM/LOW issues: N (skipped by user) / none
 
 ### Recommended Next Steps
 1. [ ] <test step>
