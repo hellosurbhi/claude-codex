@@ -103,7 +103,7 @@ Save the returned `threadId` (separate from the implementation review threadId).
 - **APPROVED** → proceed to Phase 4
 - **WARNING/BLOCKED** → Claude fixes all CRITICAL/HIGH issues in the test files, re-verifies RED, then re-calls via `mcp__codex__codex-reply` (max 2 iterations)
 
-After 2 iterations without APPROVED, stop and ask user for direction.
+After 2 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 4 (routing or implementation) and do not deliver — continuing is prohibited without an explicit user instruction to proceed.
 
 ### Phase 4: Route by Change Size
 

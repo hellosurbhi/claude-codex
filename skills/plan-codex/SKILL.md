@@ -83,7 +83,7 @@ Before addressing any issues, critically evaluate each finding:
 - threadId: {saved threadId}
 - prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
 
-After 3 iterations without APPROVED, stop and ask user for direction.
+After 3 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 3 and do not present the plan as ready — delivery is prohibited without an explicit user instruction to proceed.
 
 ### Phase 3: Deliver
 
