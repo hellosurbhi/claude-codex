@@ -61,7 +61,7 @@ Save the returned `threadId`.
 **Validate the response before acting on it.** A substring match on "APPROVED" is not an approval. The verdict must be consistent with the findings the same response reports:
 
 - **Approval** requires both: the response states APPROVED as its verdict, AND it reports no CRITICAL or HIGH findings.
-- **Contradictory → malformed, never an approval**: APPROVED (or `VERDICT: APPROVED`) accompanied by any `CRITICAL:` or `HIGH:` finding; also `NOT APPROVED`, "APPROVED once you fix …", or two conflicting verdicts in one response.
+- **Contradictory → malformed, never an approval**: APPROVED (or `VERDICT: APPROVED`) accompanied by any `CRITICAL:` or `HIGH:` finding; also `NOT APPROVED`, "APPROVED once you fix …" or two conflicting verdicts in one response.
 - On a malformed response: do NOT go to Phase 3 and do NOT silently drop the findings. Call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration.
 - After 2 consecutive malformed responses, stop and report the raw response to the user. Do not proceed to Phase 3.
 

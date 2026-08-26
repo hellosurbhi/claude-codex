@@ -85,7 +85,7 @@ Classify the verdict:
 - **BLOCKED** — CRITICAL issues → fix all, increment iteration, re-review
 - **MALFORMED**: the verdict contradicts the findings in the same response → never an approval, see below
 
-A substring match on "APPROVED" is not an approval. `VERDICT: APPROVED` accompanied by any `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …", or two conflicting verdicts in one response is malformed. Do NOT go to Phase 4 and do NOT silently drop the findings; call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
+A substring match on "APPROVED" is not an approval. `VERDICT: APPROVED` accompanied by any `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …" or two conflicting verdicts in one response is malformed. Do NOT go to Phase 4 and do NOT silently drop the findings; call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
 
 **Step R2 — Fix and Re-review**
 

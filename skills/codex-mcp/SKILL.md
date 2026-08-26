@@ -39,10 +39,10 @@ Always include: `"Be concise. Do not include your reasoning process in the respo
 
 ## Prompting Best Practices
 
-1. **Termination signals**: Ask Codex to reply "APPROVED" or "CHANGES NEEDED" for clear loop control. Never terminate on a substring match for "APPROVED" alone: the verdict must be consistent with the findings in the same response. `VERDICT: APPROVED` alongside a `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …", or two conflicting verdicts is malformed, not an approval. Reply asking for a single unambiguous verdict instead of exiting the loop and dropping the findings.
+1. **Termination signals**: Ask Codex to reply "APPROVED" or "CHANGES NEEDED" for clear loop control. Never terminate on a substring match for "APPROVED" alone: the verdict must be consistent with the findings in the same response. `VERDICT: APPROVED` alongside a `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …" or two conflicting verdicts is malformed, not an approval. Reply asking for a single unambiguous verdict instead of exiting the loop and dropping the findings.
 2. **Feedback verbatim**: When sending review feedback via codex-reply, quote specific issues exactly. Do not summarize.
 3. **Concise responses**: Always instruct Codex to be concise via developer-instructions to save tokens
-4. **Max iterations**: Always enforce a hard cap (default: 3) on review loops. Hitting the cap fails closed: stop, report the unresolved findings, and ask the user for direction. Do not advance to the next phase or deliver without an explicit user instruction to proceed.
+4. **Max iterations**: Always enforce a hard cap (default: 3) on review loops. Hitting the cap fails closed: stop, report the unresolved findings and ask the user for direction. Do not advance to the next phase or deliver without an explicit user instruction to proceed.
 
 ## stderr Suppression
 
