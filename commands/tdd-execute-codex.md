@@ -233,7 +233,7 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 
 Parse reviewer response. Approval requires both: the reviewer states approval AND reports no CRITICAL or HIGH findings. A stated approval alongside a CRITICAL/HIGH finding is malformed, never an approval: do NOT go to Phase 5 and do NOT silently drop the findings. Re-launch the `code-reviewer` agent with the same diff, quoting the contradiction and asking for a single unambiguous verdict; this does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
 
-- No CRITICAL/HIGH → collect MEDIUM/LOW, ask user (same prompt as Route A step 9), then Phase 5
+- No CRITICAL/HIGH → collect MEDIUM/LOW, ask user (same prompt as Route A step 10), then Phase 5
 - Has CRITICAL/HIGH (3+ task path) → dispatch a Claude subagent per affected task with the reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
 - Has CRITICAL/HIGH (single Codex session path) → call `mcp__codex__codex-reply` with reviewer feedback verbatim, increment iteration (max 3 total iterations).
 

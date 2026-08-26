@@ -4,3 +4,6 @@
 - [ ] MEDIUM: COPY-VOICE Newly added prose repeatedly uses prohibited em dash characters, including `README.md:213`, `commands/claude-codex.md:88` and `skills/codex-mcp/SKILL.md:42-45`.
 - [ ] MEDIUM: COPY-VOICE The fix is incomplete. Branch-added prose still contains prohibited em dashes at `commands/claude-codex.md:86,106`, `commands/execute-codex.md:133,139` and `skills/codex-mcp/reference.md:84-85`, so `BUGS.md:19` incorrectly marks the finding fixed.
 - [ ] MEDIUM: COPY-VOICE Modified prose retains prohibited Oxford commas in `commands/tdd-claude-codex.md:105,169`, `commands/tdd-execute-codex.md:107`, `skills/tdd-claude-codex/SKILL.md:119,202`, `skills/tdd-execute-codex/SKILL.md:117` and `BUGS.md:22`.
+- [ ] MEDIUM: STALE-REFERENCE `commands/tdd-execute-codex.md:236` points Route B at "the same prompt as Route A step 9", but adding the Route A fail-closed step shifted the MEDIUM/LOW prompt to step 10.
+- [ ] LOW: `BUGS.md:1-2` opened with two `WONTFIX` entries that sat above every heading, so they belonged to no section.
+- [ ] LOW: BROKEN-INVARIANT `reviews/REVIEW-OUTAGE-20260826T172322Z-dafd2bff-15881-tierE.md:8` claims the outage was queued for retry, but `reviews/retry-queue.md` had no row for it.
