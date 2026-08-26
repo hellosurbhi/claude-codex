@@ -8,3 +8,5 @@
 - [ ] LOW: `BUGS.md:1-2` opened with two `WONTFIX` entries that sat above every heading, so they belonged to no section.
 - [ ] LOW: BROKEN-INVARIANT `reviews/REVIEW-OUTAGE-20260826T172322Z-dafd2bff-15881-tierE.md:8` claims the outage was queued for retry, but `reviews/retry-queue.md` had no row for it.
 - [ ] MEDIUM: Correct the self-review count. (BUGS.md:29-35)
+- [ ] MEDIUM: STALE-COUNT `ENHANCEMENTS.md:12` said `10 of the 11 commits on this branch carry the phrase` and `the ten commit bodies`, but committing the entry made the branch 12 commits with 11 carrying it.
+- [ ] LOW: STALE-COUNT `BUGS.md:33` claimed `Route A step` has `exactly two occurrences in the tree`, but a plain grep has always returned more: the two cross-references plus a prose match for every entry that quotes the finding.
