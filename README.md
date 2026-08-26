@@ -210,6 +210,6 @@ The `prompts/codex/` files are injected into `developer-instructions` on each Co
 ## Notes
 
 - Plans are saved to `.claude/plan/` in your project directory — add to `.gitignore` if you don't want them committed
-- Max 3 iterations on all loops to keep token usage predictable
+- Max 3 iterations on all loops to keep token usage predictable. The cap fails closed — on reaching it without an approval, the loop stops and reports the unresolved findings rather than delivering. A verdict that contradicts the findings in the same response (`APPROVED` alongside a CRITICAL/HIGH issue) is treated as malformed, not an approval
 - The `codex-mcp` skill auto-loads when Codex MCP tools are relevant, providing Claude with session management patterns and best practices
 - `/claude-codex` uses the Codex MCP server for review — Codex runs `git diff HEAD` itself and returns a structured verdict only, minimising token usage

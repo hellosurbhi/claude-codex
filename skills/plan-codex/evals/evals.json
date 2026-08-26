@@ -28,7 +28,8 @@
         "If Codex returns issues, Claude revises the plan file before re-auditing",
         "Claude uses mcp__codex__codex-reply (not a new mcp__codex__codex call) for iterations 2-3",
         "Claude reuses the saved threadId for follow-up audit calls",
-        "After 3 iterations without APPROVED, Claude stops and asks user for direction"
+        "After 3 iterations without APPROVED, Claude stops, reports the unresolved findings, and asks user for direction",
+        "Claude does NOT proceed to Phase 3 or present the plan as ready after the iteration cap is hit"
       ]
     },
     {

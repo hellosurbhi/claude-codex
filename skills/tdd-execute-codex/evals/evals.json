@@ -63,6 +63,20 @@
         "Claude launches code-reviewer Task agent for review",
         "Claude delivers successfully despite Codex being unavailable"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Add rate limiting to the public API endpoints using TDD.",
+      "expected_output": "Codex's test audit still reports CRITICAL/HIGH findings after 2 iterations. Claude stops, reports the unresolved findings, and does NOT route or implement.",
+      "files": [],
+      "expectations": [
+        "Claude writes test files first and verifies RED",
+        "Claude calls mcp__codex__codex for test audit (Phase 3), then mcp__codex__codex-reply for iteration 2",
+        "After 2 iterations without APPROVED, Claude stops and reports the unresolved findings to the user",
+        "Claude asks the user for direction before doing anything further",
+        "Claude does NOT proceed to Phase 4 routing or implementation",
+        "Claude does NOT deliver, and does NOT treat the cap as an implicit approval"
+      ]
     }
   ]
 }
