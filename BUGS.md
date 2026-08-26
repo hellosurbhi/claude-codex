@@ -37,3 +37,10 @@ The 2026-08-26T17:23Z push review was a tier E outage, so no reviewer findings w
 ### Codex (2026-08-26T17:54Z)
 - [x] MEDIUM: Correct the self-review count. (BUGS.md:29-35) | Fixed 2026-08-26: the section intro at `BUGS.md:31` said `two defects` while three entries follow it (one MEDIUM and two LOW), so it now reads `three defects`. The qualifier `introduced by this branch's own edits` was checked against each entry rather than assumed, and it holds for all three: `BUGS.md` and `reviews/REVIEW-OUTAGE-20260826T172322Z-dafd2bff-15881-tierE.md` are both files this branch created, and the stale `Route A step 9` pointer was produced by this branch's own renumbering of the Route A steps. So the count was the only thing wrong with the sentence. Verified: the intro now claims three defects and exactly three `- [x]` entries sit under the heading. The other counted claims in the same section were rechecked and hold: `Route A step` resolves to the MEDIUM/LOW user prompt in both `commands/tdd-execute-codex.md:236` and `skills/tdd-execute-codex/SKILL.md:294`; `reviews/retry-queue.md` holds four rows, one for each of the four `reviews/REVIEW-OUTAGE-*.md` files.
 
+## Low priority (filed, not fixed)
+
+LOW findings that were triaged as deferred live in `ENHANCEMENTS.md`, one entry per
+finding with the reason it was not fixed. LOW findings this branch did fix stay in
+this file under the section that fixed them, such as the two under the 2026-08-26T17:23Z
+self-review above.
+
