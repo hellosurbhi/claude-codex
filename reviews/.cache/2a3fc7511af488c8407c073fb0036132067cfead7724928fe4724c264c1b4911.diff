@@ -1,0 +1,87 @@
+### Ref: refs/heads/fix/medium-bugs-20260819 (9847101d1b15980ba3005429816f2a2ff0ccff62..b13d9587c22fbc51753cf94445b0887a3799d37b)
+- b13d958 fix(medium-bugs): overnight auto-fix pass 2026-08-19T07:00Z
+Files: BUGS.md commands/plan-codex.md commands/tdd-execute-codex.md skills/plan-codex/SKILL.md skills/tdd-execute-codex/SKILL.md
+
+Verified: automated sandboxed pass; each fix targeted a queued backlog item. CI must pass before merge, do not merge on faith.
+
+
+diff --git a/BUGS.md b/BUGS.md
+new file mode 100644
+index 0000000..bf0a6e9
+--- /dev/null
++++ b/BUGS.md
+@@ -0,0 +1,2 @@
++- WONTFIX(HIGH, 2026-08-19): `skills/plan-codex/SKILL.md:51,61,76-87`: The CLI fallback provides no MCP `threadId`. A BLOCKED result or contested finding therefore reaches `mcp__codex__codex-reply` with no valid saved thread. Define a CLI follow-up path for the full audit loop. | Reason: False positive — no CLI fallback exists in this tree (SKILL.md:49 mandates stopping when Codex MCP is absent) and `commands/claude-codex.md` has no "ANY finding" evaluation gate to contradict or over-broaden, so the entry's head finding and two of its three continuations describe text that is not present.
++- WONTFIX(HIGH, 2026-08-19): 1. `skills/plan-codex/SKILL.md:51,61,76-87` provides no MCP `threadId` after a successful CLI fallback. BLOCKED results and contested findings cannot continue through `mcp__codex__codex-reply`. | Reason: Findings 1-3 are false positives (no CLI fallback and no "ANY finding" gate exist in this tree), so the entry cannot be fixed whole, though its real parts — findings 4 (verdict/severity consistency) and 5 (explicit fail-closed after the iteration cap in all four cited locations) — were fixed.
+diff --git a/commands/plan-codex.md b/commands/plan-codex.md
+index ec9357f..42a29ed 100644
+--- a/commands/plan-codex.md
++++ b/commands/plan-codex.md
+@@ -47,15 +47,24 @@ Read `~/.claude/prompts/codex/analyzer.md` and inject as `developer-instructions
+ 
+ Save the returned `threadId`.
+ 
+-**Parse response**:
+-- Contains "APPROVED" → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
++**Validate the response before acting on it.** A substring match on "APPROVED" is not an approval — the verdict must be consistent with the findings the same response reports:
++
++- **Approval** requires both: the response states APPROVED as its verdict, AND it reports no CRITICAL or HIGH findings.
++- **Contradictory → malformed, never an approval**: APPROVED (or `VERDICT: APPROVED`) accompanied by any `CRITICAL:` or `HIGH:` finding; also `NOT APPROVED`, "APPROVED once you fix …", or two conflicting verdicts in one response.
++- On a malformed response: do NOT go to Phase 3 and do NOT silently drop the findings. Call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration.
++- After 2 consecutive malformed responses, stop and report the raw response to the user. Do not proceed to Phase 3.
++
++**Parse the validated response**:
++- APPROVED → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
+ - Contains issues → address every issue, revise plan, update `.claude/plan/<feature-name>.md`
+ 
+ **Call `mcp__codex__codex-reply`** (iterations 2-3):
+ - threadId: {saved threadId}
+ - prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
+ 
+-After 3 iterations without APPROVED, stop and ask user for direction.
++Apply the same validation to every re-audit response.
++
++After 3 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 3 and do not present the plan as ready — delivery is prohibited without an explicit user instruction to proceed.
+ 
+ ### Phase 3: Deliver
+ 
+diff --git a/commands/tdd-execute-codex.md b/commands/tdd-execute-codex.md
+index 8c387ea..5930d0c 100644
+--- a/commands/tdd-execute-codex.md
++++ b/commands/tdd-execute-codex.md
+@@ -103,7 +103,7 @@ Save the returned `threadId` (separate from the implementation review threadId).
+ - **APPROVED** → proceed to Phase 4
+ - **WARNING/BLOCKED** → Claude fixes all CRITICAL/HIGH issues in the test files, re-verifies RED, then re-calls via `mcp__codex__codex-reply` (max 2 iterations)
+ 
+-After 2 iterations without APPROVED, stop and ask user for direction.
++After 2 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 4 (routing or implementation) and do not deliver — continuing is prohibited without an explicit user instruction to proceed.
+ 
+ ### Phase 4: Route by Change Size
+ 
+diff --git a/skills/plan-codex/SKILL.md b/skills/plan-codex/SKILL.md
+index afda551..6f0caf1 100644
+--- a/skills/plan-codex/SKILL.md
++++ b/skills/plan-codex/SKILL.md
+@@ -83,7 +83,7 @@ Before addressing any issues, critically evaluate each finding:
+ - threadId: {saved threadId}
+ - prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
+ 
+-After 3 iterations without APPROVED, stop and ask user for direction.
++After 3 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 3 and do not present the plan as ready — delivery is prohibited without an explicit user instruction to proceed.
+ 
+ ### Phase 3: Deliver
+ 
+diff --git a/skills/tdd-execute-codex/SKILL.md b/skills/tdd-execute-codex/SKILL.md
+index c27f51a..72ae458 100644
+--- a/skills/tdd-execute-codex/SKILL.md
++++ b/skills/tdd-execute-codex/SKILL.md
+@@ -130,7 +130,7 @@ Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
+ 
+ **If findings are accepted:** Claude fixes all accepted CRITICAL/HIGH issues in the test files, re-verifies RED, then re-calls via `mcp__codex__codex-reply` (max 2 iterations).
+ 
+-After 2 iterations without APPROVED, stop and ask user for direction.
++After 2 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 4 (routing or implementation) and do not deliver — continuing is prohibited without an explicit user instruction to proceed.
+ 
+ ### Phase 4: Route by Change Size
+ 
+

@@ -54,8 +54,14 @@ mcp__codex__codex-reply:
 
 | Loop Type | Termination Signal | Who Decides |
 |-----------|-------------------|-------------|
-| Plan review | Codex response contains "APPROVED" | Codex |
-| Execute review | Claude reviewer response contains "APPROVED" | Claude |
+| Plan review | Codex states APPROVED as its verdict **and** reports no CRITICAL or HIGH findings | Codex |
+| Execute review | Claude reviewer states APPROVED as its verdict **and** reports no CRITICAL or HIGH findings | Claude |
+
+Never terminate on a substring match for "APPROVED" alone. A verdict that
+contradicts the findings in the same response — `VERDICT: APPROVED` alongside a
+populated `CRITICAL:` or `HIGH:` list, `NOT APPROVED`, "APPROVED once you fix …",
+or two conflicting verdicts — is malformed, not an approval. Reply asking for a
+single unambiguous verdict rather than exiting the loop and dropping the findings.
 
 Always enforce max iteration count (default: 5).
 After iteration 3, consider asking the user if the approach is viable.

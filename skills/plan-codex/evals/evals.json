@@ -56,6 +56,20 @@
         "Claude does NOT deliver the plan without Codex audit",
         "Claude does NOT fall back to a non-Codex review"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Plan adding a background job queue for sending transactional email.",
+      "expected_output": "Codex replies 'VERDICT: APPROVED' but also lists a CRITICAL finding. Claude treats the contradiction as malformed, asks Codex for a single unambiguous verdict, and does NOT deliver the plan.",
+      "files": [],
+      "expectations": [
+        "Claude does NOT treat the response as an approval despite it containing 'APPROVED'",
+        "Claude identifies the verdict as contradicting the reported CRITICAL/HIGH findings",
+        "Claude calls mcp__codex__codex-reply with the saved threadId quoting the contradiction and requesting one unambiguous verdict",
+        "Claude does NOT count the clarification reply as an audit iteration",
+        "Claude does NOT silently drop the CRITICAL finding",
+        "Claude does NOT proceed to Phase 3 or present the plan as ready"
+      ]
     }
   ]
 }
