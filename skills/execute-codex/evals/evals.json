@@ -65,7 +65,7 @@
         "Claude does NOT treat the response as an approval despite it stating approval",
         "Claude identifies the stated approval as contradicting the reported CRITICAL/HIGH findings",
         "Claude re-launches the code-reviewer agent with the same diff, quoting the contradiction and requesting one unambiguous verdict",
-        "Claude does NOT call mcp__codex__codex-reply for the reviewer clarification — the reviewer is a Task agent with no threadId",
+        "Claude does NOT call mcp__codex__codex-reply for the reviewer clarification, since the reviewer is a Task agent with no threadId",
         "Claude does NOT count the clarification round as a review iteration",
         "Claude does NOT silently drop the CRITICAL finding",
         "Claude does NOT proceed to Phase 3 or deliver"

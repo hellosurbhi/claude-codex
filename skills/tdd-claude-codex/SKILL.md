@@ -112,11 +112,11 @@ LOW: <list or 'none'>
 Save the returned `threadId` (separate from the implementation review threadId).
 
 **Parse response**:
-- **APPROVED** — stated as the verdict, with no CRITICAL or HIGH findings → proceed to Phase 4
+- **APPROVED**: stated as the verdict, with no CRITICAL or HIGH findings → proceed to Phase 4
 - **WARNING/BLOCKED** → critically evaluate findings before fixing (see below)
-- **MALFORMED** — the verdict contradicts the findings in the same response → never an approval, see below
+- **MALFORMED**: the verdict contradicts the findings in the same response → never an approval, see below
 
-A substring match on "APPROVED" is not an approval. `VERDICT: APPROVED` accompanied by any `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …", or two conflicting verdicts in one response is malformed. Do NOT proceed to Phase 4 and do NOT silently drop the findings — call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
+A substring match on "APPROVED" is not an approval. `VERDICT: APPROVED` accompanied by any `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …", or two conflicting verdicts in one response is malformed. Do NOT proceed to Phase 4 and do NOT silently drop the findings. Call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
 
 **Critical Evaluation of Test Audit Findings**
 
@@ -135,7 +135,7 @@ Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
 
 **If findings are accepted:** Claude fixes all accepted CRITICAL/HIGH issues in the test files, re-verifies RED, then re-calls via `mcp__codex__codex-reply` (max 2 iterations).
 
-After 2 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 4 (implementation) and do not deliver — continuing is prohibited without an explicit user instruction to proceed.
+After 2 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 4 (implementation) and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
 
 ### Phase 4: Claude Implements (GREEN)
 
@@ -197,9 +197,9 @@ Classify the verdict:
 - **APPROVED** — no CRITICAL or HIGH → go to Phase 7
 - **WARNING** — HIGH issues only → fix all, increment iteration, re-review
 - **BLOCKED** — CRITICAL issues → fix all, increment iteration, re-review
-- **MALFORMED** — the verdict contradicts the findings in the same response → never an approval, see below
+- **MALFORMED**: the verdict contradicts the findings in the same response → never an approval, see below
 
-A substring match on "APPROVED" is not an approval. `VERDICT: APPROVED` accompanied by any `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …", or two conflicting verdicts in one response is malformed. Do NOT go to Phase 7 and do NOT silently drop the findings — call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
+A substring match on "APPROVED" is not an approval. `VERDICT: APPROVED` accompanied by any `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …", or two conflicting verdicts in one response is malformed. Do NOT go to Phase 7 and do NOT silently drop the findings. Call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
 
 **Step R1.5 — Critical Evaluation of Review Findings**
 
@@ -233,7 +233,7 @@ Return ONLY the structured verdict in the same format.
 ```
 
 One review per iteration, not one review per fix. Stop after 3 iterations without APPROVED.
-After 3 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 7 and do not deliver — continuing is prohibited without an explicit user instruction to proceed.
+After 3 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 7 and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
 
 **Step R3 — MEDIUM / LOW Issues**
 

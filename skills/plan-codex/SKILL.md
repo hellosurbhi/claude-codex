@@ -58,7 +58,7 @@ Read `codex-analyzer-role.md` from this skill directory and inject as `developer
 
 Save the returned `threadId`.
 
-**Validate the response before acting on it.** A substring match on "APPROVED" is not an approval — the verdict must be consistent with the findings the same response reports:
+**Validate the response before acting on it.** A substring match on "APPROVED" is not an approval. The verdict must be consistent with the findings the same response reports:
 
 - **Approval** requires both: the response states APPROVED as its verdict, AND it reports no CRITICAL or HIGH findings.
 - **Contradictory → malformed, never an approval**: APPROVED (or `VERDICT: APPROVED`) accompanied by any `CRITICAL:` or `HIGH:` finding; also `NOT APPROVED`, "APPROVED once you fix …", or two conflicting verdicts in one response.
@@ -92,7 +92,7 @@ Before addressing any issues, critically evaluate each finding:
 
 Apply the same validation to every re-audit response.
 
-After 3 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 3 and do not present the plan as ready — delivery is prohibited without an explicit user instruction to proceed.
+After 3 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 3 and do not present the plan as ready; delivery is prohibited without an explicit user instruction to proceed.
 
 ### Phase 3: Deliver
 

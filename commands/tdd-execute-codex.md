@@ -100,13 +100,13 @@ LOW: <list or 'none'>
 Save the returned `threadId` (separate from the implementation review threadId).
 
 **Parse response**:
-- **APPROVED** — stated as the verdict, with no CRITICAL or HIGH findings → proceed to Phase 4
+- **APPROVED**: stated as the verdict, with no CRITICAL or HIGH findings → proceed to Phase 4
 - **WARNING/BLOCKED** → Claude fixes all CRITICAL/HIGH issues in the test files, re-verifies RED, then re-calls via `mcp__codex__codex-reply` (max 2 iterations)
-- **MALFORMED** — the verdict contradicts the findings in the same response → never an approval, see below
+- **MALFORMED**: the verdict contradicts the findings in the same response → never an approval, see below
 
-A substring match on "APPROVED" is not an approval. `VERDICT: APPROVED` accompanied by any `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …", or two conflicting verdicts in one response is malformed. Do NOT proceed to Phase 4 and do NOT silently drop the findings — call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
+A substring match on "APPROVED" is not an approval. `VERDICT: APPROVED` accompanied by any `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …", or two conflicting verdicts in one response is malformed. Do NOT proceed to Phase 4 and do NOT silently drop the findings. Call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
 
-After 2 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 4 (routing or implementation) and do not deliver — continuing is prohibited without an explicit user instruction to proceed.
+After 2 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 4 (routing or implementation) and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
 
 ### Phase 4: Route by Change Size
 
@@ -231,13 +231,13 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 - `git diff $START_SHA` output
 - Original task requirements
 
-Parse reviewer response. Approval requires both: the reviewer states approval AND reports no CRITICAL or HIGH findings. A stated approval alongside a CRITICAL/HIGH finding is malformed, never an approval — do NOT go to Phase 5 and do NOT silently drop the findings. Re-launch the `code-reviewer` agent with the same diff, quoting the contradiction and asking for a single unambiguous verdict; this does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
+Parse reviewer response. Approval requires both: the reviewer states approval AND reports no CRITICAL or HIGH findings. A stated approval alongside a CRITICAL/HIGH finding is malformed, never an approval: do NOT go to Phase 5 and do NOT silently drop the findings. Re-launch the `code-reviewer` agent with the same diff, quoting the contradiction and asking for a single unambiguous verdict; this does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
 
 - No CRITICAL/HIGH → collect MEDIUM/LOW, ask user (same prompt as Route A step 9), then Phase 5
 - Has CRITICAL/HIGH (3+ task path) → dispatch a Claude subagent per affected task with the reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
 - Has CRITICAL/HIGH (single Codex session path) → call `mcp__codex__codex-reply` with reviewer feedback verbatim, increment iteration (max 3 total iterations).
 
-After 3 iterations without approval, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 5 and do not deliver — continuing is prohibited without an explicit user instruction to proceed.
+After 3 iterations without approval, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 5 and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
 
 ---
 

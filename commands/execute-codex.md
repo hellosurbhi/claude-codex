@@ -130,13 +130,13 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 - `git diff HEAD`
 - Original task requirements
 
-Parse reviewer response. Approval requires both: the reviewer states approval AND reports no CRITICAL or HIGH findings. A stated approval alongside a CRITICAL/HIGH finding is malformed, never an approval — do NOT go to Phase 3 and do NOT silently drop the findings. Re-launch the `code-reviewer` agent with the same diff, quoting the contradiction and asking for a single unambiguous verdict; this does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
+Parse reviewer response. Approval requires both: the reviewer states approval AND reports no CRITICAL or HIGH findings. A stated approval alongside a CRITICAL/HIGH finding is malformed, never an approval: do NOT go to Phase 3 and do NOT silently drop the findings. Re-launch the `code-reviewer` agent with the same diff, quoting the contradiction and asking for a single unambiguous verdict; this does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
 
 - No CRITICAL/HIGH issues → approved, go to Phase 3
 - Has CRITICAL/HIGH (3+ task path) → dispatch a Claude subagent per affected task with the reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
 - Has CRITICAL/HIGH (single Codex session path) → call `mcp__codex__codex-reply` with reviewer feedback verbatim, increment iteration count (max 3 total iterations).
 
-After 3 iterations without approval, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 3 and do not deliver — continuing is prohibited without an explicit user instruction to proceed.
+After 3 iterations without approval, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 3 and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
 
 ---
 
