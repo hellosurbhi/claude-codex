@@ -3,7 +3,7 @@
 
 ## Critical priority (from push reviews, fix first)
 
-### Codex (2026-08-26, pending verdict `reviews/.verdicts/pending-f3b724efe75bac5d`)
+### Codex (2026-08-26)
 - [x] CRITICAL: FABRICATED-REFERENCE `reviews/retry-queue.md:1` names `retry-skipped-reviews.sh`, but that script does not exist anywhere in the repository or its declared dependencies. | Fixed 2026-08-26: the header no longer names a drainer script. It now states that there is no automated drainer and documents the manual drain procedure (re-run the review for each queued commit/diff_sha, then delete the row and its matching `REVIEW-OUTAGE-*.md`). The two 2026-08-26 outages that claimed to be queued but had no row were also added, so every `REVIEW-OUTAGE-*.md` claim now matches a queue entry.
 
 
