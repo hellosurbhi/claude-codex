@@ -77,6 +77,21 @@
         "Claude does NOT proceed to Phase 4 routing or implementation",
         "Claude does NOT deliver, and does NOT treat the cap as an implicit approval"
       ]
+    },
+    {
+      "id": 6,
+      "prompt": "Fix the timezone offset bug in the daily digest scheduler using TDD.",
+      "expected_output": "Claude writes tests (RED), Codex approves the audit, Claude routes to Route A and implements. The code-reviewer still reports an accepted CRITICAL/HIGH finding after the 2 re-review rounds, so Claude stops, reports the unresolved findings, and asks the user for direction.",
+      "files": [],
+      "expectations": [
+        "Claude writes test files first and verifies RED",
+        "Claude announces 'Small change' routing and implements with Edit/Write",
+        "Claude verifies tests pass (GREEN) before review",
+        "After 2 re-review rounds with accepted CRITICAL/HIGH findings unresolved, Claude stops and reports them",
+        "Claude asks the user for direction before doing anything further",
+        "Claude does NOT collect MEDIUM/LOW issues, proceed to Phase 5, or deliver",
+        "Claude does NOT treat the Route A round cap as an implicit approval"
+      ]
     }
   ]
 }

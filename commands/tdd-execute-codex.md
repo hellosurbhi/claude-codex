@@ -147,11 +147,12 @@ After all tasks complete (either path):
    - `git diff $START_SHA` output
    - Original task requirements
 8. If CRITICAL/HIGH issues: fix with Edit/Write, re-review (max 2 rounds)
-9. After CRITICAL/HIGH resolved, collect MEDIUM/LOW issues and ask user:
-   > "Reviewer flagged N MEDIUM/LOW issue(s) that were not fixed:
-   > - [list issues]
-   > Should I fix these before delivery, or proceed as-is?"
-10. Go to Phase 5
+9. After 2 rounds with CRITICAL/HIGH findings still unresolved, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 5 and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
+10. After CRITICAL/HIGH resolved, collect MEDIUM/LOW issues and ask user:
+    > "Reviewer flagged N MEDIUM/LOW issue(s) that were not fixed:
+    > - [list issues]
+    > Should I fix these before delivery, or proceed as-is?"
+11. Go to Phase 5
 
 ---
 

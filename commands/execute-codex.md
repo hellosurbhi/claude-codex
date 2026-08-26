@@ -70,7 +70,8 @@ After all tasks complete (either path):
    - `git diff HEAD`
    - Original task requirements
 3. If reviewer finds CRITICAL/HIGH issues: fix directly with Edit/Write and re-review (max 2 rounds)
-4. Go to Phase 3
+4. After 2 rounds without approval, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 3 and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
+5. Go to Phase 3
 
 ---
 

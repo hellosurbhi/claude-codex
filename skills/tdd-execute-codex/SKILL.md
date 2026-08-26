@@ -179,11 +179,12 @@ After all tasks complete (either path):
    - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
    - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
 9. If accepted CRITICAL/HIGH issues remain: fix with Edit/Write, re-review (max 2 rounds)
-10. After CRITICAL/HIGH resolved, collect MEDIUM/LOW issues and ask user:
-   > "Reviewer flagged N MEDIUM/LOW issue(s) that were not fixed:
-   > - [list issues]
-   > Should I fix these before delivery, or proceed as-is?"
-10. Go to Phase 5
+10. After 2 rounds with accepted CRITICAL/HIGH findings still unresolved, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 5 and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
+11. After CRITICAL/HIGH resolved, collect MEDIUM/LOW issues and ask user:
+    > "Reviewer flagged N MEDIUM/LOW issue(s) that were not fixed:
+    > - [list issues]
+    > Should I fix these before delivery, or proceed as-is?"
+12. Go to Phase 5
 
 ---
 

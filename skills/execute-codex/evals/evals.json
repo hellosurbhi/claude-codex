@@ -82,6 +82,20 @@
         "Claude does NOT proceed to Phase 3 or deliver",
         "Claude does NOT treat the iteration cap as an implicit approval"
       ]
+    },
+    {
+      "id": 7,
+      "prompt": "Rename the `retryCount` field to `attemptCount` in the queue config and its one consumer.",
+      "expected_output": "Claude routes to Route A (small change), implements directly, and the code-reviewer still reports a CRITICAL/HIGH finding after the 2 re-review rounds. Claude stops, reports the unresolved findings, and asks the user for direction.",
+      "files": [],
+      "expectations": [
+        "Claude announces routing decision containing 'Small change' before implementing",
+        "Claude implements with Edit or Write tools",
+        "After 2 re-review rounds without approval, Claude stops and reports the unresolved findings",
+        "Claude asks the user for direction before doing anything further",
+        "Claude does NOT proceed to Phase 3 or deliver",
+        "Claude does NOT treat the Route A round cap as an implicit approval"
+      ]
     }
   ]
 }

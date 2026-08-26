@@ -58,17 +58,19 @@ mcp__codex__codex-reply:
 | Execute review | Claude reviewer states APPROVED as its verdict **and** reports no CRITICAL or HIGH findings | Claude |
 
 Never terminate on a substring match for "APPROVED" alone. A verdict that
-contradicts the findings in the same response — `VERDICT: APPROVED` alongside a
-populated `CRITICAL:` or `HIGH:` list, `NOT APPROVED`, "APPROVED once you fix …",
-or two conflicting verdicts — is malformed, not an approval. Reply asking for a
-single unambiguous verdict rather than exiting the loop and dropping the findings.
+contradicts the findings in the same response is malformed, not an approval:
+`VERDICT: APPROVED` alongside a populated `CRITICAL:` or `HIGH:` list, `NOT
+APPROVED`, "APPROVED once you fix …", or two conflicting verdicts. Reply asking
+for a single unambiguous verdict rather than exiting the loop and dropping the
+findings.
 
-Always enforce max iteration count (default: 5).
-After iteration 3, consider asking the user if the approach is viable.
+Always enforce a max iteration count (default: 3). The shipped skills use 3
+rounds for plan audits, Codex implementation and implementation reviews, and 2
+rounds for test audits and the Route A code review.
 
 The cap fails closed. When it is reached without a valid approval, **stop**:
 report the unresolved findings and ask the user for direction. Do not advance to
-the next phase and do not deliver — continuing is prohibited without an explicit
+the next phase and do not deliver; continuing is prohibited without an explicit
 user instruction to proceed. Clarification replies (asking for an unambiguous
 verdict, or contesting a finding) do not increment the counter; only
 revise-and-re-review cycles do.
