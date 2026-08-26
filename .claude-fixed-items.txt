@@ -12,3 +12,5 @@
 - [ ] LOW: STALE-COUNT `BUGS.md:33` claimed `Route A step` has `exactly two occurrences in the tree`, but a plain grep has always returned more: the two cross-references plus a prose match for every entry that quotes the finding.
 - [ ] LOW: BROKEN-INVARIANT `reviews/REVIEW-OUTAGE-20260826T214904Z-34af5de5-69034-tierE.md:9` claims the outage was queued for retry, but `reviews/retry-queue.md` had no row for it.
 - [ ] MEDIUM: STALE-COUNT `BUGS.md:35,38` counted four `REVIEW-OUTAGE-*.md` files and four queue rows, but the fifth outage file and its queue row make both claims false.
+- [ ] LOW: BROKEN-INVARIANT `reviews/REVIEW-OUTAGE-20260826T221953Z-5290fe3f-46778-tierE.md:9` claims the outage was queued for retry, but `reviews/retry-queue.md` had no row for it.
+- [ ] MEDIUM: STALE-CLAIM `ENHANCEMENTS.md:16` named `1fa9c41` as the one commit carrying an outage file and its row together, but the commit that shipped the sentence carries both as well.
