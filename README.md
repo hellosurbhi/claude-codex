@@ -27,7 +27,7 @@ Commands (`commands/`) are retained for backward compatibility — they support 
 /execute-codex <task or plan file>
   Small change (≤2 files, ≤30 lines) → Claude implements directly
   Large change                        → Codex implements
-  feature-dev code-reviewer agent      → reviews diff (max 3 rounds)
+  feature-dev code-reviewer agent      → reviews diff (max 2 rounds on the small path, 3 on the large path)
 
 /claude-codex <task or plan file>
   Claude implements (any model)       → Edit/Write + self-verify
