@@ -7,3 +7,4 @@
 - [ ] MEDIUM: STALE-REFERENCE `commands/tdd-execute-codex.md:236` points Route B at "the same prompt as Route A step 9", but adding the Route A fail-closed step shifted the MEDIUM/LOW prompt to step 10.
 - [ ] LOW: `BUGS.md:1-2` opened with two `WONTFIX` entries that sat above every heading, so they belonged to no section.
 - [ ] LOW: BROKEN-INVARIANT `reviews/REVIEW-OUTAGE-20260826T172322Z-dafd2bff-15881-tierE.md:8` claims the outage was queued for retry, but `reviews/retry-queue.md` had no row for it.
+- [ ] MEDIUM: Correct the self-review count. (BUGS.md:29-35)
