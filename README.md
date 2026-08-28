@@ -27,7 +27,7 @@ Commands (`commands/`) are retained for backward compatibility — they support 
 /execute-codex <task or plan file>
   Small change (≤2 files, ≤30 lines) → Claude implements directly
   Large change                        → Codex implements
-  feature-dev code-reviewer agent      → reviews diff (max 3 rounds)
+  feature-dev code-reviewer agent      → reviews diff (max 2 rounds on the small path, 3 on the large path)
 
 /claude-codex <task or plan file>
   Claude implements (any model)       → Edit/Write + self-verify
@@ -210,6 +210,6 @@ The `prompts/codex/` files are injected into `developer-instructions` on each Co
 ## Notes
 
 - Plans are saved to `.claude/plan/` in your project directory — add to `.gitignore` if you don't want them committed
-- Max 3 iterations on all loops to keep token usage predictable
+- Every loop has a hard iteration cap to keep token usage predictable: 3 rounds for plan audits, Codex implementation and implementation reviews; 2 rounds for test audits and the Route A code review. Every cap fails closed: on reaching it without an approval, the loop stops and reports the unresolved findings rather than delivering. A verdict that contradicts the findings in the same response (`APPROVED` alongside a CRITICAL/HIGH issue) is treated as malformed, not an approval
 - The `codex-mcp` skill auto-loads when Codex MCP tools are relevant, providing Claude with session management patterns and best practices
 - `/claude-codex` uses the Codex MCP server for review — Codex runs `git diff HEAD` itself and returns a structured verdict only, minimising token usage

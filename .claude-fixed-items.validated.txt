@@ -1,0 +1,1 @@
+- [ ] HIGH: `commands/plan-codex.md:50-53` validates the verdict line but not its consistency with severity findings. `VERDICT: APPROVED` accompanied by `CRITICAL:` or `HIGH:` still reaches Phase 3 and silently drops those findings. Treat contradictory severity and verdict combinations as malformed.

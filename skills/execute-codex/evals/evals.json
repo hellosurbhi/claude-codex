@@ -55,6 +55,47 @@
         "Claude launches code-reviewer after all subagents complete (not mcp__codex__codex-reply)",
         "Claude notes that each subagent owns its own Codex threadId"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Extract the billing calculation into a shared service used by the invoice and subscription modules.",
+      "expected_output": "The code-reviewer agent states approval while also listing a CRITICAL finding. Claude treats the contradiction as malformed, re-launches the reviewer for a single unambiguous verdict and does NOT deliver.",
+      "files": [],
+      "expectations": [
+        "Claude does NOT treat the response as an approval despite it stating approval",
+        "Claude identifies the stated approval as contradicting the reported CRITICAL/HIGH findings",
+        "Claude re-launches the code-reviewer agent with the same diff, quoting the contradiction and requesting one unambiguous verdict",
+        "Claude does NOT call mcp__codex__codex-reply for the reviewer clarification, since the reviewer is a Task agent with no threadId",
+        "Claude does NOT count the clarification round as a review iteration",
+        "Claude does NOT silently drop the CRITICAL finding",
+        "Claude does NOT proceed to Phase 3 or deliver"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Migrate the job scheduler from cron expressions to interval-based scheduling.",
+      "expected_output": "The code-reviewer still reports CRITICAL/HIGH findings after 3 iterations. Claude stops, reports the unresolved findings and asks the user for direction.",
+      "files": [],
+      "expectations": [
+        "After 3 iterations without approval, Claude stops and reports the unresolved findings",
+        "Claude asks the user for direction before doing anything further",
+        "Claude does NOT proceed to Phase 3 or deliver",
+        "Claude does NOT treat the iteration cap as an implicit approval"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Rename the `retryCount` field to `attemptCount` in the queue config and its one consumer.",
+      "expected_output": "Claude routes to Route A (small change), implements directly and the code-reviewer still reports a CRITICAL/HIGH finding after the 2 re-review rounds. Claude stops, reports the unresolved findings and asks the user for direction.",
+      "files": [],
+      "expectations": [
+        "Claude announces routing decision containing 'Small change' before implementing",
+        "Claude implements with Edit or Write tools",
+        "After 2 re-review rounds without approval, Claude stops and reports the unresolved findings",
+        "Claude asks the user for direction before doing anything further",
+        "Claude does NOT proceed to Phase 3 or deliver",
+        "Claude does NOT treat the Route A round cap as an implicit approval"
+      ]
     }
   ]
 }

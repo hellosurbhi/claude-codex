@@ -83,6 +83,9 @@ Classify the verdict:
 - **APPROVED** — no CRITICAL or HIGH → go to Phase 4
 - **WARNING** — HIGH issues only → fix all, increment iteration, re-review
 - **BLOCKED** — CRITICAL issues → fix all, increment iteration, re-review
+- **MALFORMED**: the verdict contradicts the findings in the same response → never an approval, see below
+
+A substring match on "APPROVED" is not an approval. `VERDICT: APPROVED` accompanied by any `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …" or two conflicting verdicts in one response is malformed. Do NOT go to Phase 4 and do NOT silently drop the findings; call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
 
 **Step R2 — Fix and Re-review**
 
@@ -100,7 +103,7 @@ Return ONLY the structured verdict in the same format.
 
 One review per iteration, not one review per fix. Stop after 3 iterations without APPROVED.
 
-After 3 iterations without APPROVED, stop and report remaining issues to user.
+After 3 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 4 and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
 
 **Step R3 — MEDIUM / LOW Issues**
 

@@ -1,0 +1,16 @@
+- [ ] HIGH: `commands/plan-codex.md:50-53` validates the verdict line but not its consistency with severity findings. `VERDICT: APPROVED` accompanied by `CRITICAL:` or `HIGH:` still reaches Phase 3 and silently drops those findings. Treat contradictory severity and verdict combinations as malformed.
+- [ ] CRITICAL: FABRICATED-REFERENCE `reviews/retry-queue.md:1` names `retry-skipped-reviews.sh`, but that script does not exist anywhere in the repository or its declared dependencies.
+- [ ] HIGH: INCOMPLETE-FIX `README.md:213` claims every loop fails closed, but the Route A paths still proceed to delivery after capped re-reviews without requiring approval: `commands/execute-codex.md:72-73`, `skills/execute-codex/SKILL.md:87-88`, `commands/tdd-execute-codex.md:149-154` and `skills/tdd-execute-codex/SKILL.md:181-186`.
+- [ ] MEDIUM: COPY-VOICE Newly added prose repeatedly uses prohibited em dash characters, including `README.md:213`, `commands/claude-codex.md:88` and `skills/codex-mcp/SKILL.md:42-45`.
+- [ ] MEDIUM: COPY-VOICE The fix is incomplete. Branch-added prose still contains prohibited em dashes at `commands/claude-codex.md:86,106`, `commands/execute-codex.md:133,139` and `skills/codex-mcp/reference.md:84-85`, so `BUGS.md:19` incorrectly marks the finding fixed.
+- [ ] MEDIUM: COPY-VOICE Modified prose retains prohibited Oxford commas in `commands/tdd-claude-codex.md:105,169`, `commands/tdd-execute-codex.md:107`, `skills/tdd-claude-codex/SKILL.md:119,202`, `skills/tdd-execute-codex/SKILL.md:117` and `BUGS.md:22`.
+- [ ] MEDIUM: STALE-REFERENCE `commands/tdd-execute-codex.md:236` points Route B at "the same prompt as Route A step 9", but adding the Route A fail-closed step shifted the MEDIUM/LOW prompt to step 10.
+- [ ] LOW: `BUGS.md:1-2` opened with two `WONTFIX` entries that sat above every heading, so they belonged to no section.
+- [ ] LOW: BROKEN-INVARIANT `reviews/REVIEW-OUTAGE-20260826T172322Z-dafd2bff-15881-tierE.md:8` claims the outage was queued for retry, but `reviews/retry-queue.md` had no row for it.
+- [ ] MEDIUM: Correct the self-review count. (BUGS.md:29-35)
+- [ ] MEDIUM: STALE-COUNT `ENHANCEMENTS.md:12` said `10 of the 11 commits on this branch carry the phrase` and `the ten commit bodies`, but committing the entry made the branch 12 commits with 11 carrying it.
+- [ ] LOW: STALE-COUNT `BUGS.md:33` claimed `Route A step` has `exactly two occurrences in the tree`, but a plain grep has always returned more: the two cross-references plus a prose match for every entry that quotes the finding.
+- [ ] LOW: BROKEN-INVARIANT `reviews/REVIEW-OUTAGE-20260826T214904Z-34af5de5-69034-tierE.md:9` claims the outage was queued for retry, but `reviews/retry-queue.md` had no row for it.
+- [ ] MEDIUM: STALE-COUNT `BUGS.md:35,38` counted four `REVIEW-OUTAGE-*.md` files and four queue rows, but the fifth outage file and its queue row make both claims false.
+- [ ] LOW: BROKEN-INVARIANT `reviews/REVIEW-OUTAGE-20260826T221953Z-5290fe3f-46778-tierE.md:9` claims the outage was queued for retry, but `reviews/retry-queue.md` had no row for it.
+- [ ] MEDIUM: STALE-CLAIM `ENHANCEMENTS.md:16` named `1fa9c41` as the one commit carrying an outage file and its row together, but the commit that shipped the sentence carries both as well.
