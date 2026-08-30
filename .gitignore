@@ -22,8 +22,9 @@ package.json
 package-lock.json
 node_modules/
 
-# Review-loop state from automated fix passes (ENHANCEMENTS.md is the tracked backlog)
-BUGS.md
-reviews/
-.claude-fixed-items.validated.txt
-.claude-wontfix-items.txt
+# Transient review-loop state from automated fix passes, repo root only.
+# BUGS.md (open findings) and ENHANCEMENTS.md (deferred/WONTFIX records) are the
+# tracked backlogs and stay in version control.
+/reviews/
+/.claude-fixed-items.validated.txt
+/.claude-wontfix-items.txt
