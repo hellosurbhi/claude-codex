@@ -1,20 +1,28 @@
 # Enhancement backlog
 
-Findings from the automated triage passes that are not defects in the shipped
-copy or in a published figure, so they do not belong in `BUGS.md`. Resolved
-entries stay here as a record of what was changed or dismissed and why. The
-pending queue below is empty when every triaged finding has been closed out.
+Findings from the automated triage passes that a pass rates LOW. Severity is
+what routes a finding here rather than what the finding is about, so a MEDIUM
+raised against this file is recorded in `BUGS.md` while the text fix it calls
+for lands here. Resolved entries stay here as a record of what was changed or
+dismissed and why. The pending queue below is empty when every triaged finding
+has been closed out.
 
-Severity here is LOW by definition. Anything a pass rates MEDIUM or above goes
-to `BUGS.md`, whose Mechanical checks section carries the commands behind every
-figure either file publishes. Check 8 there covers this file.
+The Mechanical checks section of `BUGS.md` reaches this file through check 8
+alone, which greps two punctuation patterns over it: the em dash pattern plus
+the serial comma pattern. That is the whole of the coverage. Any other figure
+published here carries its own command beside it rather than deferring to that
+section.
 
 This file was created by the pass of 2026-08-31 that closed the finding below.
-The three WONTFIX entries in `BUGS.md` dated 2026-08-29 say that
-`ENHANCEMENTS.md` does not exist in this repository. That was true when they
-were written. It is no longer true, so those entries are read as the record of a
-finding dismissed against the tree as it then stood rather than as a standing
-claim about the tree.
+Two of the three WONTFIX entries in `BUGS.md` dated 2026-08-29 say that
+`ENHANCEMENTS.md` does not exist in this repository. They are the second entry
+of that run together with the third, sitting at `BUGS.md:37-38` as the file
+stood at `07a2d4b`, cited by position as well as by line because a later edit to
+that file moves the lines while the positions hold. The first of the three says
+no such thing: it dismisses a quotation that matches nothing in the tree, naming
+neither file. What the other two say was true when they were written. It is no
+longer true, so those two are read as the record of a finding dismissed against
+the tree as it then stood rather than as a standing claim about the tree.
 
 ## Resolved (2026-08-31)
 
@@ -23,4 +31,8 @@ claim about the tree.
 ## Low priority (pending)
 
 Empty. The one finding from the Codex pass of 2026-08-31T20:01Z is closed out
-under Resolved (2026-08-31) above.
+under Resolved (2026-08-31) above. The pass of 2026-08-31T20:55Z raised a MEDIUM
+severity finding against the preamble of this file. It is closed out under
+Resolved (2026-09-01) in `BUGS.md` rather than here, because severity rather
+than location decides which file records a finding. The edit it called for
+landed above.
