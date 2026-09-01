@@ -7,11 +7,16 @@ for lands here. Resolved entries stay here as a record of what was changed or
 dismissed and why. The pending queue below is empty when every triaged finding
 has been closed out.
 
-The Mechanical checks section of `BUGS.md` reaches this file through check 8
-alone, which greps two punctuation patterns over it: the em dash pattern plus
-the serial comma pattern. That is the whole of the coverage. Any other figure
-published here carries its own command beside it rather than deferring to that
-section.
+The Mechanical checks section of `BUGS.md` reaches this file through three of
+its eight checks rather than through one. Checks 1 plus 2 grep every tracked
+Markdown file together with every tracked JSON file at the pinned branch tip, a
+set this file has belonged to since `07a2d4b` made it tracked. Check 8 greps
+this file by name in the working copy, which is what puts the edit a pass is
+still holding uncommitted inside the record. All three look for the same two
+punctuation patterns: the em dash pattern plus the serial comma pattern. That is
+the whole of the coverage. No other figure published here is backed by that
+section, so each one carries its own command beside it rather than deferring
+there.
 
 This file was created by the pass of 2026-08-31 that closed the finding below.
 Two of the three WONTFIX entries in `BUGS.md` dated 2026-08-29 say that
@@ -31,8 +36,10 @@ the tree as it then stood rather than as a standing claim about the tree.
 ## Low priority (pending)
 
 Empty. The one finding from the Codex pass of 2026-08-31T20:01Z is closed out
-under Resolved (2026-08-31) above. The pass of 2026-08-31T20:55Z raised a MEDIUM
-severity finding against the preamble of this file. It is closed out under
+under Resolved (2026-08-31) above. Two later passes raised MEDIUM severity
+findings against the preamble of this file, the pass of 2026-08-31T20:55Z
+against the coverage claim it carried then plus the pass of 2026-09-01T19:00Z
+against the sentence that replaced it. Both are closed out under
 Resolved (2026-09-01) in `BUGS.md` rather than here, because severity rather
-than location decides which file records a finding. The edit it called for
+than location decides which file records a finding. The edits they called for
 landed above.
