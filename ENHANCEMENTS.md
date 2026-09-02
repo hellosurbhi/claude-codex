@@ -18,6 +18,17 @@ the whole of the coverage. No other figure published here is backed by that
 section, so each one carries its own command beside it rather than deferring
 there.
 
+One condition travels with that coverage into this file. The em dash half of
+each of the three greps passes `-P`, which is an optional feature of a `git`
+build rather than a property of every `git`, so a reader whose build lacks
+libpcre2 gets an error in place of the result recorded there. The serial comma
+half passes `-E` plus carries no such condition. `BUGS.md` records the
+substitution that lets a reader in that position run the check anyway, together
+with why that substitution cannot itself be published as the command. This is
+stated here rather than left in `BUGS.md` for the reason the entry below
+records: a scope that reaches into a second file has to be readable from that
+file.
+
 This file was created by the pass of 2026-08-31 that closed the finding below.
 Two of the three WONTFIX entries in `BUGS.md` dated 2026-08-29 say that
 `ENHANCEMENTS.md` does not exist in this repository. They are the second entry
@@ -43,3 +54,10 @@ against the sentence that replaced it. Both are closed out under
 Resolved (2026-09-01) in `BUGS.md` rather than here, because severity rather
 than location decides which file records a finding. The edits they called for
 landed above.
+
+The build condition paragraph above landed under the same rule, from a CRITICAL
+raised against `BUGS.md` by the Codex pass of 2026-09-02T07:05Z plus closed out
+under Resolved (2026-09-02) there. No finding was raised against this file that
+time. The paragraph is here because the condition qualifies a figure this file
+would otherwise appear to stand behind unconditionally, which is the same
+reason the coverage sentence above had to be corrected twice.
