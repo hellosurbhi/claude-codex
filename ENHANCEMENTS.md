@@ -12,22 +12,29 @@ its eight checks rather than through one. Checks 1 plus 2 grep every tracked
 Markdown file together with every tracked JSON file at the pinned branch tip, a
 set this file has belonged to since `07a2d4b` made it tracked. Check 8 greps
 this file by name in the working copy, which is what puts the edit a pass is
-still holding uncommitted inside the record. All three look for the same two
-punctuation patterns: the em dash pattern plus the serial comma pattern. That is
-the whole of the coverage. No other figure published here is backed by that
-section, so each one carries its own command beside it rather than deferring
-there.
+still holding uncommitted inside the record. Two punctuation patterns are looked
+for across the three rather than by each of them. Check 1 is the em dash grep on
+its own. Check 2 is the serial comma grep on its own. Check 8 runs one of each
+over this file by name, so it is the only one of the three that covers both
+patterns by itself while the three together cover both. That is the whole of the
+coverage. No other figure published here is backed by that section, so each one
+carries its own command beside it rather than deferring there.
 
-One condition travels with that coverage into this file. The em dash half of
-each of the three greps passes `-P`, which is an optional feature of a `git`
-build rather than a property of every `git`, so a reader whose build lacks
-libpcre2 gets an error in place of the result recorded there. The serial comma
-half passes `-E` plus carries no such condition. `BUGS.md` records the
-substitution that lets a reader in that position run the check anyway, together
-with why that substitution cannot itself be published as the command. This is
-stated here rather than left in `BUGS.md` for the reason the entry below
-records: a scope that reaches into a second file has to be readable from that
-file.
+One condition travels with part of that coverage into this file. Two of the
+three checks run an em dash grep at all: check 1, which is one entire, plus the
+em dash half of check 8. Both pass `-P`, which is an optional feature
+of a `git` build rather than a property of every `git`, so a reader whose build
+lacks libpcre2 gets an error in place of the result recorded there. Check 2
+passes `-E`, as does the serial comma half of check 8, so neither of those two
+carries the condition. The condition therefore reaches two of the three checks
+that read this file rather than all three, which is the narrowing recorded under
+Resolved (2026-09-02) in `BUGS.md`: the sentence this one replaces gave every
+one of the three an em dash half together with a serial comma half, a shape only
+check 8 has. `BUGS.md` records the substitution that lets a reader in that
+position run the em dash checks anyway, together with why that substitution
+cannot itself be published as the command. This is stated here rather than left
+in `BUGS.md` for the reason the entry below records: a scope that reaches into a
+second file has to be readable from that file.
 
 This file was created by the pass of 2026-08-31 that closed the finding below.
 Two of the three WONTFIX entries in `BUGS.md` dated 2026-08-29 say that
@@ -47,17 +54,29 @@ the tree as it then stood rather than as a standing claim about the tree.
 ## Low priority (pending)
 
 Empty. The one finding from the Codex pass of 2026-08-31T20:01Z is closed out
-under Resolved (2026-08-31) above. Two later passes raised MEDIUM severity
-findings against the preamble of this file, the pass of 2026-08-31T20:55Z
-against the coverage claim it carried then plus the pass of 2026-09-01T19:00Z
-against the sentence that replaced it. Both are closed out under
-Resolved (2026-09-01) in `BUGS.md` rather than here, because severity rather
-than location decides which file records a finding. The edits they called for
-landed above.
+under Resolved (2026-08-31) above. Two of the three later passes that raised
+MEDIUM severity findings against the preamble of this file are closed out under
+Resolved (2026-09-01) in `BUGS.md`, the pass of 2026-08-31T20:55Z against the
+coverage claim it carried then plus the pass of 2026-09-01T19:00Z against the
+sentence that replaced it. The third is recorded in the paragraph below. None of
+the three is recorded here, because severity rather than location decides which
+file records a finding. The edits they called for landed above.
 
 The build condition paragraph above landed under the same rule, from a CRITICAL
 raised against `BUGS.md` by the Codex pass of 2026-09-02T07:05Z plus closed out
 under Resolved (2026-09-02) there. No finding was raised against this file that
 time. The paragraph is here because the condition qualifies a figure this file
 would otherwise appear to stand behind unconditionally, which is the same
-reason the coverage sentence above had to be corrected twice.
+reason the coverage sentence above has now had to be corrected three times.
+
+That paragraph then drew a MEDIUM of its own, from the Codex pass of
+2026-09-02T08:23Z, closed out under Resolved (2026-09-02) in `BUGS.md` by the
+same severity rule. It had put an em dash half together with a serial comma half
+inside each of the three checks, where check 1 runs the first pattern alone,
+check 2 the second alone plus check 8 one of each. The correction reaches the
+coverage sentence above it as well, which distributed the same two patterns over
+the same three checks, so neither paragraph now describes the three as one
+command repeated. That is the third finding against the preamble of this file,
+each one on a claim it makes about commands published in `BUGS.md` rather than
+on anything measured here, which is where a description of a check that lives in
+another file has to be read back against the check itself.
