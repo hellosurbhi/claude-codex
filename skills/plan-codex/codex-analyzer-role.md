@@ -41,3 +41,5 @@ Verdict rules:
 - **APPROVED** — no CRITICAL or HIGH issues
 - **WARNING** — HIGH issues exist but no CRITICAL
 - **BLOCKED** — at least one CRITICAL issue
+
+Emit exactly one verdict line, and make it consistent with the findings below it. Never pair `VERDICT: APPROVED` with a non-empty `CRITICAL:` or `HIGH:` list, and never qualify the verdict ("APPROVED once you fix …"). A contradictory response is rejected as malformed and sent back for a single unambiguous verdict.
