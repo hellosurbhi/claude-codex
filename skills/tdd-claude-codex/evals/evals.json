@@ -59,6 +59,34 @@
         "Claude stops at Phase 6 and tells user Codex is required for final review",
         "Claude does NOT deliver without the Phase 6 Codex review"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Add pagination to the search results endpoint using TDD.",
+      "expected_output": "The Phase 6 Codex review returns 'VERDICT: APPROVED' while also listing a HIGH finding. Claude treats the contradiction as malformed, asks for a single unambiguous verdict and does NOT deliver.",
+      "files": [],
+      "expectations": [
+        "Claude does NOT treat the response as an approval despite it containing 'APPROVED'",
+        "Claude identifies the verdict as contradicting the reported CRITICAL/HIGH findings",
+        "Claude calls mcp__codex__codex-reply with the saved threadId quoting the contradiction and requesting one unambiguous verdict",
+        "Claude does NOT count the clarification reply as a review iteration",
+        "Claude does NOT silently drop the HIGH finding",
+        "Claude does NOT proceed to Phase 7 or deliver"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Add optimistic locking to the inventory update path using TDD.",
+      "expected_output": "The Phase 3 test audit still reports CRITICAL/HIGH findings after 2 iterations. Claude stops, reports the unresolved findings and does NOT implement.",
+      "files": [],
+      "expectations": [
+        "Claude writes test files first and verifies RED",
+        "Claude calls mcp__codex__codex for the test audit, then mcp__codex__codex-reply for iteration 2",
+        "After 2 iterations without APPROVED, Claude stops and reports the unresolved findings to the user",
+        "Claude asks the user for direction before doing anything further",
+        "Claude does NOT proceed to Phase 4 implementation",
+        "Claude does NOT deliver, and does NOT treat the cap as an implicit approval"
+      ]
     }
   ]
 }

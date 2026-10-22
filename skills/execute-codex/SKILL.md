@@ -85,7 +85,8 @@ After all tasks complete (either path):
    - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
    - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
 4. If reviewer finds CRITICAL/HIGH issues (after evaluation): fix directly with Edit/Write and re-review (max 2 rounds)
-5. Go to Phase 3
+5. After 2 rounds without approval, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 3 and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
+6. Go to Phase 3
 
 ---
 
@@ -166,7 +167,8 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 - `git diff HEAD`
 - Original task requirements
 
-Parse reviewer response:
+Parse reviewer response. Approval requires both: the reviewer states approval AND reports no CRITICAL or HIGH findings. A stated approval alongside a CRITICAL/HIGH finding is malformed, never an approval: do NOT go to Phase 3 and do NOT silently drop the findings. Re-launch the `code-reviewer` agent with the same diff, quoting the contradiction and asking for a single unambiguous verdict; this does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
+
 - No CRITICAL/HIGH issues → approved, go to Phase 3
 
 **Critical Evaluation** (before fixing): Critically evaluate each CRITICAL/HIGH finding:
@@ -179,7 +181,7 @@ After evaluation:
 - Has CRITICAL/HIGH (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
 - Has CRITICAL/HIGH (single Codex session path) → call `mcp__codex__codex-reply` with accepted reviewer feedback verbatim, increment iteration count (max 3 total iterations).
 
-After 3 iterations without approval, stop and report status to user.
+After 3 iterations without approval, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 3 and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
 
 ---
 

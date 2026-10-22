@@ -58,8 +58,15 @@ Read `codex-analyzer-role.md` from this skill directory and inject as `developer
 
 Save the returned `threadId`.
 
-**Parse response**:
-- Contains "APPROVED" → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
+**Validate the response before acting on it.** A substring match on "APPROVED" is not an approval. The verdict must be consistent with the findings the same response reports:
+
+- **Approval** requires both: the response states APPROVED as its verdict, AND it reports no CRITICAL or HIGH findings.
+- **Contradictory → malformed, never an approval**: APPROVED (or `VERDICT: APPROVED`) accompanied by any `CRITICAL:` or `HIGH:` finding; also `NOT APPROVED`, "APPROVED once you fix …" or two conflicting verdicts in one response.
+- On a malformed response: do NOT go to Phase 3 and do NOT silently drop the findings. Call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration.
+- After 2 consecutive malformed responses, stop and report the raw response to the user. Do not proceed to Phase 3.
+
+**Parse the validated response**:
+- APPROVED → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
 - Contains issues → critically evaluate before addressing (see below)
 
 **Critical Evaluation of Audit Findings**
@@ -83,7 +90,9 @@ Before addressing any issues, critically evaluate each finding:
 - threadId: {saved threadId}
 - prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
 
-After 3 iterations without APPROVED, stop and ask user for direction.
+Apply the same validation to every re-audit response.
+
+After 3 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 3 and do not present the plan as ready; delivery is prohibited without an explicit user instruction to proceed.
 
 ### Phase 3: Deliver
 

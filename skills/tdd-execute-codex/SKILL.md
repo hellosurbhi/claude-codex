@@ -110,8 +110,11 @@ LOW: <list or 'none'>
 Save the returned `threadId` (separate from the implementation review threadId).
 
 **Parse response**:
-- **APPROVED** → proceed to Phase 4
+- **APPROVED**: stated as the verdict, with no CRITICAL or HIGH findings → proceed to Phase 4
 - **WARNING/BLOCKED** → critically evaluate findings before fixing (see below)
+- **MALFORMED**: the verdict contradicts the findings in the same response → never an approval, see below
+
+A substring match on "APPROVED" is not an approval. `VERDICT: APPROVED` accompanied by any `CRITICAL:` or `HIGH:` finding, `NOT APPROVED`, "APPROVED once you fix …" or two conflicting verdicts in one response is malformed. Do NOT proceed to Phase 4 and do NOT silently drop the findings. Call `mcp__codex__codex-reply` (reuse threadId) quoting the contradiction and asking for a single unambiguous verdict. This does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
 
 **Critical Evaluation of Test Audit Findings**
 
@@ -130,7 +133,7 @@ Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
 
 **If findings are accepted:** Claude fixes all accepted CRITICAL/HIGH issues in the test files, re-verifies RED, then re-calls via `mcp__codex__codex-reply` (max 2 iterations).
 
-After 2 iterations without APPROVED, stop and ask user for direction.
+After 2 iterations without APPROVED, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 4 (routing or implementation) and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
 
 ### Phase 4: Route by Change Size
 
@@ -176,11 +179,12 @@ After all tasks complete (either path):
    - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
    - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
 9. If accepted CRITICAL/HIGH issues remain: fix with Edit/Write, re-review (max 2 rounds)
-10. After CRITICAL/HIGH resolved, collect MEDIUM/LOW issues and ask user:
-   > "Reviewer flagged N MEDIUM/LOW issue(s) that were not fixed:
-   > - [list issues]
-   > Should I fix these before delivery, or proceed as-is?"
-10. Go to Phase 5
+10. After 2 rounds with accepted CRITICAL/HIGH findings still unresolved, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 5 and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
+11. After CRITICAL/HIGH resolved, collect MEDIUM/LOW issues and ask user:
+    > "Reviewer flagged N MEDIUM/LOW issue(s) that were not fixed:
+    > - [list issues]
+    > Should I fix these before delivery, or proceed as-is?"
+12. Go to Phase 5
 
 ---
 
@@ -285,7 +289,8 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 - `git diff $START_SHA` output
 - Original task requirements
 
-Parse reviewer response:
+Parse reviewer response. Approval requires both: the reviewer states approval AND reports no CRITICAL or HIGH findings. A stated approval alongside a CRITICAL/HIGH finding is malformed, never an approval: do NOT go to Phase 5 and do NOT silently drop the findings. Re-launch the `code-reviewer` agent with the same diff, quoting the contradiction and asking for a single unambiguous verdict; this does not count as an iteration. After 2 consecutive malformed responses, stop and report the raw response to the user.
+
 - No CRITICAL/HIGH → collect MEDIUM/LOW, ask user (same prompt as Route A step 10), then Phase 5
 
 **Critical Evaluation** (before fixing): Critically evaluate each CRITICAL/HIGH finding:
@@ -298,7 +303,7 @@ After evaluation:
 - Has CRITICAL/HIGH (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
 - Has CRITICAL/HIGH (single Codex session path) → call `mcp__codex__codex-reply` with accepted reviewer feedback verbatim, increment iteration (max 3 total iterations).
 
-After 3 iterations without approval, stop and report remaining issues to user.
+After 3 iterations without approval, **stop**. Report the unresolved findings and ask the user for direction. Do not proceed to Phase 5 and do not deliver; continuing is prohibited without an explicit user instruction to proceed.
 
 ---
 

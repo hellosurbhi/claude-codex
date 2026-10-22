@@ -54,11 +54,26 @@ mcp__codex__codex-reply:
 
 | Loop Type | Termination Signal | Who Decides |
 |-----------|-------------------|-------------|
-| Plan review | Codex response contains "APPROVED" | Codex |
-| Execute review | Claude reviewer response contains "APPROVED" | Claude |
+| Plan review | Codex states APPROVED as its verdict **and** reports no CRITICAL or HIGH findings | Codex |
+| Execute review | Claude reviewer states APPROVED as its verdict **and** reports no CRITICAL or HIGH findings | Claude |
 
-Always enforce max iteration count (default: 5).
-After iteration 3, consider asking the user if the approach is viable.
+Never terminate on a substring match for "APPROVED" alone. A verdict that
+contradicts the findings in the same response is malformed, not an approval:
+`VERDICT: APPROVED` alongside a populated `CRITICAL:` or `HIGH:` list, `NOT
+APPROVED`, "APPROVED once you fix …" or two conflicting verdicts. Reply asking
+for a single unambiguous verdict rather than exiting the loop and dropping the
+findings.
+
+Always enforce a max iteration count (default: 3). The shipped skills use 3
+rounds for plan audits, Codex implementation and implementation reviews; test
+audits and the Route A code review get 2 rounds.
+
+The cap fails closed. When it is reached without a valid approval, **stop**:
+report the unresolved findings and ask the user for direction. Do not advance to
+the next phase and do not deliver; continuing is prohibited without an explicit
+user instruction to proceed. Clarification replies (asking for an unambiguous
+verdict or contesting a finding) do not increment the counter; only
+revise-and-re-review cycles do.
 
 ## Anti-Patterns
 
@@ -66,6 +81,8 @@ After iteration 3, consider asking the user if the approach is viable.
 - **Don't summarize reviewer feedback** — Codex needs exact file:line references to fix issues
 - **Don't use `danger-full-access` sandbox** — `workspace-write` is sufficient for implementation
 - **Don't skip `developer-instructions`** — it shapes response quality significantly
+- **Don't exit a loop on a substring match for "APPROVED"**: a verdict that contradicts the findings in the same response is malformed, and treating it as approval silently drops CRITICAL/HIGH issues
+- **Don't proceed after the iteration cap**: hitting the cap without an approval means stop and ask the user, not deliver anyway
 - **Don't omit conciseness instruction** — Codex may include lengthy reasoning that wastes context tokens
 - **Don't add `2>/dev/null` to tool calls** — MCP handles this at the server process level
 
