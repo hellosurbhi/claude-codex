@@ -21,7 +21,7 @@ Works best with `claude-opus-4-6`. Override with `/model opus` before invoking f
 
 Advisory checklist — ensure these tools are available:
 - `AskUserQuestion` — ask clarifying questions
-- `mcp__codex__codex` and `mcp__codex__codex-reply` — Codex audit loop
+- `Bash` running `~/.claude/config/scripts/codex-call.sh` (wraps `codex exec`; follow-ups use `--resume THREAD_ID`) — Codex audit loop
 - `Task` — launch planner subagent
 - `Read`, `Glob`, `Grep` — codebase research
 - `Write`, `Bash` — save plan file
@@ -46,19 +46,22 @@ Save the returned plan to `.claude/plan/<feature-name>.md`.
 
 ### Phase 2: Codex Audit (single pass; re-audit only on BLOCKED, max 3 iterations)
 
-**MANDATORY Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). Do NOT skip or bypass this phase. If the tool is genuinely absent from both locations, **stop and tell the user**: "Codex MCP is not available. This skill requires Codex for plan audit. Please add the Codex MCP server." Do not proceed without Codex — the audit loop is this skill's core value.
+**MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
-**MANDATORY mid-call failure handling**: a Codex call that errors, times out, or is aborted mid-audit (e.g. "sent no response or progress", MCP idle timeout, task failed) is NOT an approval and NOT a skippable step. Retry the call exactly once — if the MCP transport is the thing failing (the per-session MCP connection does not pick up config changes until restart), retry via the CLI with the full audit context supplied explicitly, since a bare `codex exec` with no prompt hangs reading stdin: `codex exec --sandbox read-only "$(cat ~/.claude/skills/plan-codex/codex-analyzer-role.md)"$'\n\n'"Read the plan file at .claude/plan/<feature-name>.md and audit it for correctness, completeness, security, and edge cases. Return the structured verdict."` and validate the output against the same VERDICT grammar. If the retry also dies, **stop and tell the user**: "Codex audit incomplete — the review did not run. The plan is UNREVIEWED." Never proceed to Phase 3 or to implementation on a dead audit; an unreviewed plan must be labeled as such, out loud, every time. (Added 2026-07-28 after an xhigh audit was silently killed by a 1800s MCP idle timeout and work continued without it.)
+**MANDATORY mid-call failure handling**: a Codex call that errors, times out, or exits without a final message (`codex-call.sh` exits non-zero with "UNREVIEWED") is NOT an approval and NOT a skippable step. Retry the same `codex-call.sh` call exactly once, and validate the output against the same VERDICT grammar.
 
-Read `codex-analyzer-role.md` from this skill directory and inject as `developer-instructions`.
+**Usage-limit carve-out (never block on quota, owner mandate 2026-08-26: "never block cause codex")**: if the retry also dies AND the error is a quota/usage-limit error (the tool names its own reset time, e.g. "usage limit... try again at <time>", as opposed to a transport failure or unexplained timeout) — do NOT stop. This is a self-resolving external constraint, not a broken review, and this skill's audit is a best-effort pre-code check, not the actual enforcement boundary: the repo's push-time Codex review is that boundary, and it already degrades gracefully on the identical failure (`reviewer.sh`'s outage path logs to `reviews/retry-queue.md` and exits nonblocking; `retry-skipped-reviews.sh` re-reviews the real diff once quota returns — non-config repos never blocked on this in the first place). Append a `## Audit status` section to `.claude/plan/<feature-name>.md`: "Plan audit SKIPPED — Codex usage limit (tool reported: '<verbatim message>'). Relies on this repo's push-time Codex review of the resulting diff." Tell the user in one line ("Plan audit deferred: Codex is over quota until <time>; proceeding without it, push-time review still covers the diff") and go straight to Phase 3 / implementation with no further Codex call.
 
-**Call `mcp__codex__codex`** (iteration 1):
+If the retry dies for any OTHER reason (transport failure, timeout with no reset time given, or any error that isn't a named quota limit): **stop and tell the user**: "Codex audit incomplete — the review did not run. The plan is UNREVIEWED." Never proceed to Phase 3 or to implementation on a dead audit for these cases; an unreviewed plan must be labeled as such, out loud, every time. (Added 2026-07-28 after an xhigh audit was silently killed by a 1800s MCP idle timeout and work continued without it. Usage-limit carve-out added 2026-08-26: a multi-hour quota wall was stalling all work in the security-boundary repo for zero extra safety, since push-time review already catches the same outage the same way.)
+
+Read `codex-analyzer-role.md` from this skill directory and pass as `--role <file>`.
+
+**Call `codex-call.sh`** (iteration 1):
 - prompt: "Read the plan file at `.claude/plan/<feature-name>.md` and audit it for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
-- sandbox: "read-only"
-- approval-policy: "never"
-- developer-instructions: {content of codex-analyzer-role.md} + "\nBe concise. Output result only, no reasoning process."
+- flag: `--sandbox read-only`
+- append to prompt: (`--role codex-analyzer-role.md`) "\nBe concise. Output result only, no reasoning process."
 
-Save the returned `threadId`.
+Save the returned `THREAD_ID`.
 
 **Parse the VERDICT line** (the analyzer role emits `VERDICT: APPROVED | WARNING | BLOCKED`):
 - **APPROVED** → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3.
@@ -75,15 +78,15 @@ Before addressing any issues, critically evaluate each finding:
 
 **If a finding seems incorrect or questionable:**
 - Do NOT address it or count it as an iteration. Instead, reply to the reviewer with your technical reasoning.
-- Call `mcp__codex__codex-reply` (reuse threadId) explaining why the finding appears incorrect, with specific references to the plan and codebase.
+- Call `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) explaining why the finding appears incorrect, with specific references to the plan and codebase.
 - If the reviewer provides additional justification that is convincing, accept the finding.
 - If the reviewer concedes or cannot justify further, drop the finding.
 - Discussion replies do NOT increment the iteration counter — only revise-and-re-audit cycles count.
 
 **If findings are accepted:** address every accepted issue, revise plan, update `.claude/plan/<feature-name>.md`.
 
-**Call `mcp__codex__codex-reply`** (iterations 2-3, **BLOCKED verdicts only**):
-- threadId: {saved threadId}
+**Call `codex-call.sh --resume <THREAD_ID>`** (iterations 2-3, **BLOCKED verdicts only**):
+- THREAD_ID: {saved THREAD_ID}
 - prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
 - A re-audit that comes back WARNING follows the WARNING rule above: incorporate and proceed, no further call.
 

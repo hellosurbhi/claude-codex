@@ -25,7 +25,7 @@ Advisory checklist — ensure these tools are available:
 - `Read`, `Glob`, `Grep` — context retrieval
 - `Write`, `Edit` — write tests and implement
 - `Bash` — run tests/lint/git commands
-- `mcp__codex__codex` and `mcp__codex__codex-reply` — Codex test audit and implementation review
+- `Bash` running `~/.claude/config/scripts/codex-call.sh` (wraps `codex exec`; follow-ups use `--resume THREAD_ID`) — Codex test audit and implementation review
 
 ## Core Protocols
 
@@ -33,7 +33,7 @@ Advisory checklist — ensure these tools are available:
 - **Sovereignty**: Claude implements; Codex is the external reviewer — do not skip review
 - **Stop-Loss**: Do not proceed to the next phase until the current phase output is validated
 - **Language**: Use English when calling tools/models; communicate with user in their language
-- **MCP for review**: Always call Codex review via `mcp__codex__codex`. Do NOT use Bash `codex review`
+- **Wrapper for review**: Always call Codex review via `codex-call.sh`. Do NOT use bare `codex review`: it produces verbose output that wastes context.
 - **Context Sanitization**: Never pass `.env`, secrets, tokens, API keys, or credentials to any external agent or MCP. Exclude files matching `.env*`, `*secret*`, `*credential*`, `*.pem`, `*.key`. Redact inline secrets before sending.
 
 ## Execution Workflow
@@ -78,16 +78,16 @@ Apply the returned test files using Write/Edit.
 
 ### Phase 3: Codex Test Audit (max 2 iterations)
 
-**MANDATORY Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). If the tool is genuinely absent from both locations, **degrade gracefully**: note "Codex unavailable — test audit skipped" and proceed to Phase 4. Do not stop — implementation can continue without the test audit.
+**MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
 Before implementing, have Codex review the tests for quality, completeness, and edge case coverage.
 
 Run `git add -N .` to mark new test files as intent-to-add.
 
-Read `codex-analyzer-role.md` from this skill directory and inject as `developer-instructions`.
+Read `codex-analyzer-role.md` from this skill directory and pass as `--role <file>`.
 
-**Call `mcp__codex__codex`** (iteration 1):
-- `developer-instructions`: {content of codex-analyzer-role.md} + `"\nBe concise. Return only the structured verdict format. No prose."`
+**Call `codex-call.sh`** (iteration 1):
+- append to prompt: (`--role codex-analyzer-role.md`) `"\nBe concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
 ```
@@ -109,7 +109,7 @@ MEDIUM: <list or 'none'>
 LOW: <list or 'none'>
 ```
 
-Save the returned `threadId` (separate from the implementation review threadId).
+Save the returned `THREAD_ID` (separate from the implementation review THREAD_ID).
 
 **Parse response**:
 - **APPROVED** → proceed to Phase 4
@@ -126,12 +126,12 @@ Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
 
 **If a finding seems incorrect or questionable:**
 - Do NOT fix it or count it as an iteration. Instead, reply to the reviewer with your technical reasoning.
-- Call `mcp__codex__codex-reply` (reuse threadId) explaining why the finding appears incorrect, with specific test code references.
+- Call `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) explaining why the finding appears incorrect, with specific test code references.
 - If the reviewer provides additional justification that is convincing, accept the finding.
 - If the reviewer concedes or cannot justify further, drop the finding.
 - Discussion replies do NOT increment the iteration counter — only fix-and-re-review cycles count.
 
-**If findings are accepted:** Claude fixes all accepted CRITICAL/HIGH issues in the test files and re-verifies RED. Only a BLOCKED verdict re-calls via `mcp__codex__codex-reply` (max 2 iterations); a WARNING proceeds after the fixes with no further call.
+**If findings are accepted:** Claude fixes all accepted CRITICAL/HIGH issues in the test files and re-verifies RED. Only a BLOCKED verdict re-calls via `codex-call.sh --resume <THREAD_ID>` (max 2 iterations); a WARNING proceeds after the fixes with no further call.
 
 After 2 iterations still BLOCKED, stop and ask user for direction.
 
@@ -166,14 +166,14 @@ After all tasks complete (either path):
 
 ### Phase 6: Codex Review (max 3 iterations)
 
-**MANDATORY Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). Do NOT skip or bypass this phase. If the tool is genuinely absent from both locations, **stop and tell the user**: "Codex MCP is not available for implementation review. This skill requires Codex for the final review. Please add the Codex MCP server or use a different skill." Do not proceed without Codex — the final Codex review is this skill's differentiator from plain TDD.
+**MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
-**Step R1 — Run Codex Review via MCP**
+**Step R1 — Run Codex Review via codex-call.sh**
 
 Before calling Codex, run `git add -N .` to mark any new untracked files as intent-to-add. This ensures `git diff $START_SHA` shows all created files, not just modifications.
 
-Call `mcp__codex__codex` with:
-- `developer-instructions`: `"Be concise. Return only the structured verdict format. No prose."`
+Call `codex-call.sh` with:
+- append to prompt: `"Be concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
 ```
@@ -189,7 +189,7 @@ MEDIUM: <list or 'none'>
 LOW: <list or 'none'>
 ```
 
-Save the returned `threadId` for follow-up replies.
+Save the returned `THREAD_ID` for follow-up replies.
 
 Classify the verdict:
 - **APPROVED** — no CRITICAL or HIGH → go to Phase 7
@@ -206,7 +206,7 @@ Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
 
 **If a finding seems incorrect or questionable:**
 - Do NOT fix it or count it as an iteration. Instead, reply to the reviewer with your technical reasoning.
-- Call `mcp__codex__codex-reply` (reuse threadId) explaining why the finding appears incorrect, with specific code references.
+- Call `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) explaining why the finding appears incorrect, with specific code references.
 - If the reviewer provides additional justification that is convincing, accept the finding and include it in the fix batch.
 - If the reviewer concedes or cannot justify further, drop the finding.
 - Discussion replies do NOT increment the iteration counter — only fix-and-re-review cycles count.
@@ -219,7 +219,7 @@ Address ALL accepted CRITICAL and HIGH issues before re-reviewing:
 - Collect every CRITICAL/HIGH finding from the last review
 - Fix them all with Edit/Write in one batch
 - Run available tests/lint to verify
-- Re-call Codex via `mcp__codex__codex-reply` (reuse threadId) with:
+- Re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
 Run `git diff $START_SHA` again to see the updated changes, then re-review.

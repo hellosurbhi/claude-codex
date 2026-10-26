@@ -2,7 +2,7 @@
 description: "Claude implements, Codex reviews uncommitted changes"
 argument-hint: "<task description or path/to/plan.md>"
 model: claude-sonnet-4-6
-allowed-tools: ["AskUserQuestion", "Task", "Read", "Glob", "Grep", "Write", "Edit", "Bash", "mcp__codex__codex", "mcp__codex__codex-reply"]
+allowed-tools: ["AskUserQuestion", "Task", "Read", "Glob", "Grep", "Write", "Edit", "Bash"]
 ---
 
 > **Deprecated**: This command has been converted to a skill (`/claude-codex`).
@@ -20,7 +20,7 @@ $ARGUMENTS
 - **Sovereignty**: Claude implements; Codex is the external reviewer — do not skip review
 - **Stop-Loss**: Do not proceed to the next phase until the current phase output is validated
 - **Language**: Use English when calling tools/models; communicate with user in their language
-- **MCP for review**: Always call Codex review via `mcp__codex__codex`. Do NOT use Bash `codex review` — it produces verbose output that wastes tokens
+- **Wrapper for review**: Always call Codex review via `codex-call.sh`. Do NOT use bare `codex review`: it produces verbose output that wastes tokens.
 - **Context Sanitization**: Never pass `.env`, secrets, tokens, API keys, or credentials to any external agent or MCP. Exclude files matching `.env*`, `*secret*`, `*credential*`, `*.pem`, `*.key`. Redact inline secrets before sending.
 
 ---
@@ -58,10 +58,10 @@ After all tasks complete (either path):
 
 ### Phase 3: Codex Review (max 3 iterations)
 
-**Step R1 — Run Codex Review via MCP**
+**Step R1 — Run Codex Review via codex-call.sh**
 
-Call Codex via `mcp__codex__codex` with:
-- `developer-instructions`: `"Be concise. Return only the structured verdict format. No prose."`
+Call Codex via `codex-call.sh` with:
+- append to prompt: `"Be concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
 ```
@@ -77,7 +77,7 @@ MEDIUM: <list or 'none'>
 LOW: <list or 'none'>
 ```
 
-Save the returned `threadId` for follow-up replies.
+Save the returned `THREAD_ID` for follow-up replies.
 
 **Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual code, whether the reviewer had full context for intentional decisions, and whether it improves correctness/security or is a preference/false positive. Contest doubtful findings via `codex-reply` with specific reasoning; discussion replies do not count as iterations. Only findings that survive this gate are "accepted" below.
 
@@ -92,7 +92,7 @@ Address ALL CRITICAL and HIGH issues before re-reviewing:
 - Collect every CRITICAL/HIGH finding from the last review
 - Fix them all with Edit/Write in one batch
 - Run available tests/lint to verify
-- Re-call Codex via `mcp__codex__codex-reply` (reuse threadId) with:
+- Re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
 Run `git diff HEAD` again to see the updated changes after fixes, then re-review.

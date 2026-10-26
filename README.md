@@ -95,26 +95,27 @@ hide_agent_reasoning = true
 
 Note: this is a top-level key. If your `config.toml` already has `[table]` sections, add it above the first one (TOML keys appended after a table header belong to that table).
 
-### 3. Add Codex as an MCP server
+### 3. Install the Codex wrapper
+
+Codex CLI 0.154.0 removed `codex mcp-server`, so there is no MCP server to add. The skills call `codex exec` through one wrapper script, `codex-call.sh` (copy it from `claude-global-config/scripts/` to `~/.claude/config/scripts/codex-call.sh` and `chmod +x` it).
+
+Put the model in a `review` profile at `~/.codex/review.config.toml` (one file per profile in Codex 0.164+):
+
+```toml
+model = "<newest model your plan offers>"
+model_reasoning_effort = "xhigh"
+approval_policy = "never"
+```
+
+Available models depend on your Codex plan, account type and CLI version (`~/.codex/models_cache.json` lists them).
+
+### 4. Verify
 
 ```bash
-claude mcp add codex -s user -- codex -c model=gpt-5.6-sol -c model_reasoning_effort=xhigh mcp-server
+~/.claude/config/scripts/codex-call.sh "Reply with the single word OK"
 ```
 
-Adjust `model` and `model_reasoning_effort` (`low`/`medium`/`high`/`xhigh`) to your preference. Available models depend on your Codex plan, account type and CLI version: on ChatGPT-account auth the bare `gpt-5.6` alias is API-only and gets rejected, use `gpt-5.6-sol`. If Codex calls fail with an `invalid_request_error`, re-run with a model your account supports.
-
-### 4. Restart Claude Code
-
-```
-/exit
-claude
-```
-
-Verify the MCP server is connected:
-
-```
-/mcp
-```
+It prints `THREAD_ID: <id>` then `OK`.
 
 ## Usage
 
@@ -154,7 +155,7 @@ Or for a direct task:
 /claude-codex Add input validation to the registration endpoint
 ```
 
-Claude implements using the active model (default: Sonnet; override with `/model opus` for heavier tasks). Codex reviews the uncommitted diff via MCP, returning a structured verdict (APPROVED / WARNING / BLOCKED):
+Claude implements using the active model (default: Sonnet; override with `/model opus` for heavier tasks). Codex reviews the uncommitted diff via `codex exec`, returning a structured verdict (APPROVED / WARNING / BLOCKED):
 - **BLOCKED** (CRITICAL issues) — Claude fixes, Codex re-reviews (max 3 rounds)
 - **WARNING** (HIGH issues) — Claude fixes them, verifies with tests/lint, and proceeds; no re-review call
 - **MEDIUM/LOW issues** — surfaced to user; user decides whether to fix before delivery
@@ -174,7 +175,7 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
 ~/.claude/
 ├── skills/
 │   ├── codex-mcp/
-│   │   ├── SKILL.md                  # Auto-loaded Codex MCP usage knowledge
+│   │   ├── SKILL.md                  # Auto-loaded Codex usage knowledge
 │   │   └── reference.md              # Detailed patterns and examples
 │   ├── plan-codex/
 │   │   ├── SKILL.md                  # /plan-codex skill
@@ -210,7 +211,7 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
         └── reviewer.md      # Codex role: code reviewer
 ```
 
-The `prompts/codex/` files are injected into `developer-instructions` on each Codex MCP call to shape its behaviour per phase.
+The `prompts/codex/` files are passed via `--role` on each Codex call to shape its behaviour per phase.
 
 ## Credits
 
@@ -221,5 +222,5 @@ The `prompts/codex/` files are injected into `developer-instructions` on each Co
 
 - Plans are saved to `.claude/plan/` in your project directory — add to `.gitignore` if you don't want them committed
 - Max 3 iterations on all loops to keep token usage predictable
-- The `codex-mcp` skill auto-loads when Codex MCP tools are relevant, providing Claude with session management patterns and best practices
-- `/claude-codex` uses the Codex MCP server for review — Codex runs `git diff HEAD` itself and returns a structured verdict only, minimising token usage
+- The `codex-mcp` skill auto-loads when Codex calls are relevant, providing Claude with session management patterns and best practices
+- `/claude-codex` uses `codex exec` for review — Codex runs `git diff HEAD` itself and returns a structured verdict only, minimising token usage

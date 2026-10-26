@@ -1,6 +1,6 @@
 ---
 name: claude-codex
-description: "Claude implements code changes, Codex reviews via MCP with structured APPROVED/WARNING/BLOCKED verdicts. Best for: straightforward implementation where you want an external Codex review. Triggers on: /claude-codex, implement and review, build with Codex review, code with external review."
+description: "Claude implements code changes, Codex reviews via `codex exec` with structured APPROVED/WARNING/BLOCKED verdicts. Best for: straightforward implementation where you want an external Codex review. Triggers on: /claude-codex, implement and review, build with Codex review, code with external review."
 ---
 
 # Claude-Codex — Claude Implements, Codex Reviews
@@ -25,14 +25,14 @@ Advisory checklist — ensure these tools are available:
 - `Read`, `Glob`, `Grep` — context retrieval
 - `Write`, `Edit` — implement changes
 - `Bash` — run lint/tests/git commands
-- `mcp__codex__codex` and `mcp__codex__codex-reply` — Codex review
+- `Bash` running `~/.claude/config/scripts/codex-call.sh` (wraps `codex exec`; follow-ups use `--resume THREAD_ID`) — Codex review
 
 ## Core Protocols
 
 - **Sovereignty**: Claude implements; Codex is the external reviewer — do not skip review
 - **Stop-Loss**: Do not proceed to the next phase until the current phase output is validated
 - **Language**: Use English when calling tools/models; communicate with user in their language
-- **MCP for review**: Always call Codex review via `mcp__codex__codex`. Do NOT use Bash `codex review` — it produces verbose output that wastes tokens
+- **Wrapper for review**: Always call Codex review via `codex-call.sh`. Do NOT use bare `codex review`: it produces verbose output that wastes context.
 - **Context Sanitization**: Never pass `.env`, secrets, tokens, API keys, or credentials to any external agent or MCP. Exclude files matching `.env*`, `*secret*`, `*credential*`, `*.pem`, `*.key`. Redact inline secrets before sending.
 
 ## Execution Workflow
@@ -68,12 +68,12 @@ After all tasks complete (either path):
 
 ### Phase 3: Codex Review (max 3 iterations)
 
-**MANDATORY Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). Do NOT skip or bypass this phase. If the tool is genuinely absent from both locations, **stop and tell the user**: "Codex MCP is not available. This skill requires Codex for review. Please add the Codex MCP server or use a different skill." Do not proceed without Codex — the review is this skill's core value.
+**MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
-**Step R1 — Run Codex Review via MCP**
+**Step R1 — Run Codex Review via codex-call.sh**
 
-Call Codex via `mcp__codex__codex` with:
-- `developer-instructions`: `"Be concise. Return only the structured verdict format. No prose."`
+Call Codex via `codex-call.sh` with:
+- append to prompt: `"Be concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
 ```
@@ -89,7 +89,7 @@ MEDIUM: <list or 'none'>
 LOW: <list or 'none'>
 ```
 
-Save the returned `threadId` for follow-up replies.
+Save the returned `THREAD_ID` for follow-up replies.
 
 Classify the verdict:
 - **APPROVED** — no CRITICAL or HIGH → go to Phase 4
@@ -106,7 +106,7 @@ Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
 
 **If a finding seems incorrect or questionable:**
 - Do NOT fix it or count it as an iteration. Instead, reply to the reviewer with your technical reasoning.
-- Call `mcp__codex__codex-reply` (reuse threadId) explaining why the finding appears incorrect, with specific code references.
+- Call `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) explaining why the finding appears incorrect, with specific code references.
 - If the reviewer provides additional justification that is convincing, accept the finding and include it in the fix batch.
 - If the reviewer concedes or cannot justify further, drop the finding.
 - Discussion replies do NOT increment the iteration counter — only fix-and-re-review cycles count.
@@ -119,7 +119,7 @@ Address ALL CRITICAL and HIGH issues before re-reviewing:
 - Collect every CRITICAL/HIGH finding from the last review
 - Fix them all with Edit/Write in one batch
 - Run available tests/lint to verify
-- Re-call Codex via `mcp__codex__codex-reply` (reuse threadId) with:
+- Re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
 Run `git diff HEAD` again to see the updated changes after fixes, then re-review.

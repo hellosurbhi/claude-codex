@@ -21,7 +21,7 @@ Works with `claude-sonnet-4-6` (default). No model override needed — routing h
 
 Advisory checklist — ensure these tools are available:
 - `AskUserQuestion` — confirm missing context
-- `mcp__codex__codex` and `mcp__codex__codex-reply` — Codex implementation (Route B)
+- `Bash` running `~/.claude/config/scripts/codex-call.sh` (wraps `codex exec`; follow-ups use `--resume THREAD_ID`) — Codex implementation (Route B)
 - `Task` — dispatch subagents
 - `Read`, `Glob`, `Grep` — context retrieval
 - `Write`, `Edit` — Claude implementation (Route A)
@@ -92,13 +92,13 @@ After all tasks complete (either path):
 
 ### Route B: Large Change — Codex First (max 3 iterations)
 
-**MANDATORY**: When Route B is selected, you MUST NOT use Edit/Write tools for implementation. All implementation MUST go through `mcp__codex__codex`. Claude's role in Route B is context retrieval, verification, and review — not implementation. The ONLY exception is fixing minor regressions found during self-verification (Step B2) that are clearly caused by Codex output (e.g. a missing import, a typo in a generated file).
+**MANDATORY**: When Route B is selected, you MUST NOT use Edit/Write tools for implementation. All implementation MUST go through `codex-call.sh`. Claude's role in Route B is context retrieval, verification, and review — not implementation. The ONLY exception is fixing minor regressions found during self-verification (Step B2) that are clearly caused by Codex output (e.g. a missing import, a typo in a generated file).
 
 **No post-routing rationalization**: Once Route B is selected, the routing decision applies to ALL tasks in the plan. Do NOT re-evaluate individual tasks for complexity. If you find yourself thinking "this task is simple enough to do directly" or "this is just a deletion" — STOP. That is the routing decision being second-guessed. The routing already accounted for overall complexity. Every task goes through Codex.
 
-**Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). If the tool is genuinely absent from both locations (i.e. the MCP server is not configured or not responding), fall back to Route A and announce: "Codex MCP unavailable — falling back to Claude direct implementation." This fallback is ONLY for when `mcp__codex__codex` is technically inaccessible. It MUST NOT be used because a task seems "too simple for Codex" or because Claude judges direct editing would be faster.
+**Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
-Read `codex-architect-role.md` from this skill directory and inject as `developer-instructions` for all Codex calls.
+Read `codex-architect-role.md` from this skill directory and pass as `--role <file>` for all Codex calls.
 
 **Step B1 — Dispatch to Codex**
 
@@ -110,13 +110,12 @@ Choose the path based on how the task was provided in Phase 0:
 
 When the input was a plan file path, make a single Codex call with the plan file path. Codex reads the plan, identifies task dependencies, and spawns sub-agents to run independent tasks in parallel.
 
-Call `mcp__codex__codex`:
+Call `codex-call.sh`:
 - prompt: `"Read the plan file at \`{plan_file_path}\`. Implement all tasks listed in the plan. For tasks with no shared file conflicts or ordering dependencies, use sub-agents to run them in parallel. For dependent tasks, execute sequentially after prerequisites complete."`
-- sandbox: `"workspace-write"`
-- approval-policy: `"on-failure"`
-- developer-instructions: `{content of codex-architect-role.md}` + `"\nBe concise. Output result only, no reasoning process."`
+- flag: `--sandbox workspace-write`
+- append to prompt: (`--role codex-architect-role.md`) `"\nBe concise. Output result only, no reasoning process."`
 
-Save the returned `threadId`. Proceed to Step B2.
+Save the returned `THREAD_ID`. Proceed to Step B2.
 
 ---
 
@@ -127,34 +126,32 @@ Save the returned `threadId`. Proceed to Step B2.
 For each implementation task (sequentially):
 
 1. Record `$TASK_SHA` via `git rev-parse HEAD` before dispatching
-2. Launch a general-purpose Task agent with the task description, sanitized context files, the `mcp__codex__codex` and `mcp__codex__codex-reply` tools, and instruction:
+2. Launch a general-purpose Task agent with the task description, sanitized context files, the `codex-call.sh` and `codex-call.sh --resume <THREAD_ID>` tools, and instruction:
 
 ```
-Call mcp__codex__codex with:
+Call codex-call.sh with:
 - prompt: "Implement the following task.\n\nTask: {task}\n\nContext:\n{sanitized key file contents}"
-- sandbox: "workspace-write"
-- approval-policy: "on-failure"
-- developer-instructions: {content of codex-architect-role.md} + "\nBe concise. Output result only, no reasoning process."
+- flag: `--sandbox workspace-write`
+- append to prompt: (`--role codex-architect-role.md`) "\nBe concise. Output result only, no reasoning process."
 
-Save the threadId. Run lint/tests scoped to changed files to verify. If failures, call mcp__codex__codex-reply with the threadId and failure output (max 3 retries). Report: files changed, verification result, any unresolved failures.
+Save the THREAD_ID. Run lint/tests scoped to changed files to verify. If failures, call codex-call.sh --resume <THREAD_ID> with the THREAD_ID and failure output (max 3 retries). Report: files changed, verification result, any unresolved failures.
 ```
 
 3. After each subagent: run `git diff $TASK_SHA` (scoped to this task only) to verify changes, run scoped lint/tests to confirm no regressions
 
-**Important**: Each subagent owns its own Codex `threadId`. There is no shared threadId across tasks. The outer review loop (Step B3) therefore uses the `code-reviewer` Task agent — not `mcp__codex__codex-reply` — since there is no single session to reply to.
+**Important**: Each subagent owns its own Codex `THREAD_ID`. There is no shared THREAD_ID across tasks. The outer review loop (Step B3) therefore uses the `code-reviewer` Task agent — not `codex-call.sh --resume <THREAD_ID>` — since there is no single session to reply to.
 
 ---
 
 **Path 3 (direct task description, <3 tasks)** — Direct Codex call
 
-Call `mcp__codex__codex` (iteration 1) or `mcp__codex__codex-reply` (iterations 2-3):
+Call `codex-call.sh` (iteration 1) or `codex-call.sh --resume <THREAD_ID>` (iterations 2-3):
 - prompt (first call): `"Implement the following task.\n\nTask: {task}\n\nContext:\n{key file contents}"`
 - prompt (retry): `"Fix the following issues found in code review:\n\n{reviewer feedback verbatim}"`
-- sandbox: `"workspace-write"`
-- approval-policy: `"on-failure"`
-- developer-instructions: `{content of codex-architect-role.md}` + `"\nBe concise. Output result only, no reasoning process."`
+- flag: `--sandbox workspace-write`
+- append to prompt: (`--role codex-architect-role.md`) `"\nBe concise. Output result only, no reasoning process."`
 
-Save the returned `threadId`. Reuse it for all subsequent calls.
+Save the returned `THREAD_ID`. Reuse it for all subsequent calls.
 
 **Step B2 — Self-Verification**
 
@@ -177,9 +174,9 @@ Parse reviewer response:
 - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
 
 After evaluation (re-review rounds trigger on CRITICAL findings only; HIGH-only rounds apply fixes through the same path-specific mechanisms below and skip only the re-review verdict):
-- Has CRITICAL (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
-- Has CRITICAL (single Codex session path) → call `mcp__codex__codex-reply` with accepted reviewer feedback verbatim, increment iteration count (max 3 total iterations).
-- HIGH only (3+ task path) → dispatch a Claude subagent per affected task with the accepted feedback verbatim; (single Codex session path) → call `mcp__codex__codex-reply` with the accepted feedback, instructing it to apply the fixes and reply with a change summary, no re-review verdict. Route B's no-Edit/Write rule holds either way. Verify with scoped lint/tests, then go to Phase 3, carrying any MEDIUM/LOW findings into the delivery report exactly as the approved branch does.
+- Has CRITICAL (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `THREAD_ID` to reply to, so do not call `codex-call.sh --resume <THREAD_ID>`. After fixes, re-run `code-reviewer` (max 3 total iterations).
+- Has CRITICAL (single Codex session path) → call `codex-call.sh --resume <THREAD_ID>` with accepted reviewer feedback verbatim, increment iteration count (max 3 total iterations).
+- HIGH only (3+ task path) → dispatch a Claude subagent per affected task with the accepted feedback verbatim; (single Codex session path) → call `codex-call.sh --resume <THREAD_ID>` with the accepted feedback, instructing it to apply the fixes and reply with a change summary, no re-review verdict. Route B's no-Edit/Write rule holds either way. Verify with scoped lint/tests, then go to Phase 3, carrying any MEDIUM/LOW findings into the delivery report exactly as the approved branch does.
 
 After 3 iterations still finding CRITICALs, stop and report status to user.
 
