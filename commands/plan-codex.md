@@ -50,7 +50,7 @@ Save the returned `threadId`.
 **Parse response**:
 - Malformed (no verdict line, multiple verdict lines or a value other than `VERDICT: APPROVED` or `VERDICT: ISSUES`) → re-ask on the saved `threadId` with `mcp__codex__codex-reply`, never a new `mcp__codex__codex` call, so the thread stays the same. Counts as an iteration.
 - Malformed (`VERDICT: APPROVED` together with any `CRITICAL:` or `HIGH:` finding) → treat the same as above. Never drop findings.
-- `VERDICT: APPROVED` with no `CRITICAL:` or `HIGH:` finding → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
+- `VERDICT: APPROVED` with no `CRITICAL:` or `HIGH:` finding → resolve every `MEDIUM:` or `LOW:` finding that is in scope by revising the plan. Record each one that is beyond the task scope under a `## Deferred Findings` heading in `.claude/plan/<feature-name>.md`, with its severity and a one-line reason. Then save the final version and go to Phase 3. Never accept findings silently.
 - `VERDICT: ISSUES` → address every issue, revise plan, update `.claude/plan/<feature-name>.md`
 
 **Call `mcp__codex__codex-reply`** (iterations 2-3, and malformed-response retries):
@@ -61,7 +61,7 @@ After 3 iterations without APPROVED, stop and ask user for direction.
 
 ### Phase 3: Deliver
 
-Present the final plan and output:
+Present the final plan, list any deferred findings, and output:
 
 ---
 **Plan saved to `.claude/plan/<feature-name>.md`**
