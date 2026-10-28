@@ -6,3 +6,9 @@
 ### Codex (2026-10-28T14:10Z)
 - [x] MEDIUM (fixed: execute-codex.md Step B3 now triages MEDIUM/LOW and the delivery template has a "Remaining MEDIUM/LOW issues" field): BUGS.md:1 marks the entire bundled entry WONTFIX because some findings lack context, discarding an independently verifiable bug: commands/execute-codex.md:133 advances to delivery with MEDIUM/LOW findings, but lines 143 onward provide no field to report them. Split the entry and retain this actionable issue in the overnight queue with a remediation plan.
 
+
+## Critical (round cap reached, push allowed, fix before merge)
+
+### Codex (2026-10-28T14:44Z)
+- [ ] CRITICAL (not fixable from files: this is a commit-message claim, and history cannot be rewritten here; `safe_pr_create` is not defined anywhere in this repo, so treat the "Verified" line in 69c0a06 as unverified; the commit only touches `.coderabbit.yaml`, so no code depends on it; reviewer must confirm or reword on merge): FABRICATED-REFERENCE: Commit 69c0a06 still claims verification through `safe_pr_create`, but `git grep -n safe_pr_create HEAD` returns no matches. Commit a6c73c0 neither corrects that claim nor supplies a verifiable reference. The prior critical finding remains unresolved.
+
