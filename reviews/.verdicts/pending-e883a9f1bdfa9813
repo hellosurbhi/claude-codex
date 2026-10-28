@@ -1,0 +1,1 @@
+CRITICAL: FABRICATED-REFERENCE: Commit f3c9a7c still claims verification by `safe_pr_create`, but repository search finds no implementation. BUGS.md:16 acknowledges this without correcting the commit. Reword the unsupported verification claim or provide a verifiable implementation reference; a PR disclaimer does not resolve it.
