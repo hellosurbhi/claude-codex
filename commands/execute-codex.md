@@ -130,7 +130,7 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 - Original task requirements
 
 Parse reviewer response:
-- No CRITICAL/HIGH issues → approved, go to Phase 3
+- No CRITICAL/HIGH issues → approved. Collect any remaining MEDIUM/LOW findings and ask the user whether to fix them or proceed as-is, then go to Phase 3 and list any unfixed ones in the delivery report
 - Has CRITICAL/HIGH (3+ task path) → dispatch a Claude subagent per affected task with the reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
 - Has CRITICAL/HIGH (single Codex session path) → call `mcp__codex__codex-reply` with reviewer feedback verbatim, increment iteration count (max 3 total iterations).
 
@@ -151,6 +151,7 @@ After 3 iterations without approval, stop and report status to user.
 ### Review Result
 - Route: Small (Claude) / Large (Codex, N/3 iterations)
 - Code review: Passed / N issues resolved
+- Remaining MEDIUM/LOW issues: N (skipped by user, list each) / none
 
 ### Recommended Next Steps
 1. [ ] <test step>
