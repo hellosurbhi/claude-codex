@@ -1,1 +1,1 @@
-CRITICAL: FABRICATED-REFERENCE: The commit message attributes the change to `safe_pr_create`, but that function is absent from the repository. Provide a verifiable reference or correct the commit message.
+CRITICAL: FABRICATED-REFERENCE: Commit f3c9a7c still attributes verification to `safe_pr_create`. The function remains absent from the current repository; its only tracked occurrence is the pending review finding. Provide a verifiable reference or correct the commit message.
