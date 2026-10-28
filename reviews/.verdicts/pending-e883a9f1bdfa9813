@@ -1,1 +1,0 @@
-CRITICAL: FABRICATED-REFERENCE: Commit f3c9a7c still attributes verification to `safe_pr_create`. The function remains absent from the current repository; its only tracked occurrence is the pending review finding. Provide a verifiable reference or correct the commit message.
