@@ -1,1 +1,0 @@
-CRITICAL: FABRICATED-REFERENCE: Commit f3c9a7c still claims “Verified: self-healing edit from safe_pr_create”, but current repository search finds no implementation. BUGS.md:16 acknowledges the unsupported claim without correcting it. The incremental changes only update review state. Correct the commit message or provide a verifiable implementation reference.
