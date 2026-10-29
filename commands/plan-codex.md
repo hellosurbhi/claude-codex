@@ -48,7 +48,8 @@ Read `~/.claude/prompts/codex/analyzer.md` and inject as `developer-instructions
 Save the returned `threadId`.
 
 **Parse response**:
-- Contains "APPROVED" → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
+- Verdict and findings contradict each other (e.g. `VERDICT: APPROVED` together with any `CRITICAL:` or `HIGH:` finding) → treat the response as malformed. Do not go to Phase 3. Re-ask via `mcp__codex__codex-reply` (reuse threadId) for a consistent verdict, and count it as an iteration
+- Contains "APPROVED" with no CRITICAL/HIGH findings → update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
 - Contains issues → address every issue, revise plan, update `.claude/plan/<feature-name>.md`
 
 **Call `mcp__codex__codex-reply`** (iterations 2-3):

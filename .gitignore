@@ -16,6 +16,11 @@ skills/*-workspace/
 skills/combined-workspace/
 skills/benchmark.json
 
+# Auto-fix pass scratch files and review outage reports
+.claude-fixed-items*.txt
+.claude-wontfix-items.txt
+reviews/
+
 # Generated application code from skill evals
 src/
 package.json
