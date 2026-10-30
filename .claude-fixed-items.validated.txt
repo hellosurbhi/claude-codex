@@ -1,0 +1,3 @@
+- [ ] HIGH: `commands/plan-codex.md:50-53` validates the verdict line but not its consistency with severity findings. `VERDICT: APPROVED` accompanied by `CRITICAL:` or `HIGH:` still reaches Phase 3 and silently drops those findings. Treat contradictory severity and verdict combinations as malformed.
+- [ ] MEDIUM: `commands/plan-codex.md:48-55` does not specify whether a malformed retry uses the saved thread or starts a new one. A new call can return a replacement `threadId`, yet later re-audits may use the original thread.
+- [ ] MEDIUM: `commands/plan-codex.md:50` adds the Oxford comma in “no verdict line, multiple verdict lines, or a value,” violating the repository copy mandate.
