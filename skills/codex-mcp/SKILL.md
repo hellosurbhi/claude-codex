@@ -38,7 +38,7 @@ Set once in `~/.codex/review.config.toml` (the `review` profile). Never pass `-m
 
 ## Prompting Best Practices
 
-1. **Termination signals**: Ask Codex to reply "APPROVED" or "CHANGES NEEDED" so the loop has a clear exit
+1. **Termination signals**: Ask Codex for a structured verdict with severity lines; the loop exits only on a round with no accepted findings at any severity
 2. **Feedback verbatim**: When sending review feedback via `--resume`, quote specific issues exactly. Do not summarize.
 3. **Concise responses**: Always instruct Codex to be concise to save tokens
-4. **Max iterations**: Always enforce a hard cap (default: 5) on review loops
+4. **No iteration cap**: Review loops have no round cap and no severity floor. Round 6, 10 or 20 continues the same way while accepted findings remain, and a round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed like a CRITICAL one. Preferences and false positives end through discussion via `--resume`, never a round count. A review that errors, times out or returns no verdict is retried once; if it fails again the work is UNREVIEWED, never approved

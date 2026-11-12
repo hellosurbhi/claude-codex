@@ -21,19 +21,18 @@ Commands (`commands/`) are retained for backward compatibility — they support 
 ```
 /plan-codex <task>
   Claude Opus + Plan agent    → creates structured plan
-  Codex audits the plan       → flags issues (max 3 rounds)
+  Codex audits the plan       → re-audits until a round has no findings
   Plan saved to .claude/plan/<feature>.md
 
 /execute-codex <task or plan file>
   Small change (≤2 files, ≤30 lines) → Claude implements directly
   Large change                        → Codex implements
-  feature-dev code-reviewer agent      → reviews diff (max 3 rounds)
+  feature-dev code-reviewer agent      → re-reviews until a round has no findings
 
 /claude-codex <task or plan file>
   Claude implements (any model)       → Edit/Write + self-verify
   Codex reviews uncommitted changes   → returns structured verdict (APPROVED/WARNING/BLOCKED)
-  Claude fixes findings               → re-review only on BLOCKED (max 3 rounds)
-  MEDIUM/LOW issues                   → user decides before delivery
+  Claude fixes findings               → fix and re-review at any severity until a clean round
 ```
 
 ## Dependencies
@@ -151,7 +150,7 @@ Or skip the plan step for a direct task:
 
 Claude routes automatically:
 - **Small change** (≤2 files, ≤30 lines, no new logic) — Claude implements directly, Sonnet reviews
-- **Large change** — Codex implements, Sonnet reviews and feeds back (max 3 rounds)
+- **Large change** — Codex implements, Sonnet reviews and feeds back until a round has no findings
 
 ### Execution (Claude implements, Codex reviews)
 
@@ -166,9 +165,9 @@ Or for a direct task:
 ```
 
 Claude implements using the active model (default: Sonnet; override with `/model opus` for heavier tasks). Codex reviews the uncommitted diff via `codex exec`, returning a structured verdict (APPROVED / WARNING / BLOCKED):
-- **BLOCKED** (CRITICAL issues) — Claude fixes, Codex re-reviews (max 3 rounds)
-- **WARNING** (HIGH issues) — Claude fixes them, verifies with tests/lint, and proceeds; no re-review call
-- **MEDIUM/LOW issues** — surfaced to user; user decides whether to fix before delivery
+- **Any accepted finding at any severity** (CRITICAL, HIGH, MEDIUM or LOW, under any verdict): Claude fixes it, verifies with tests/lint and Codex re-reviews
+- **Done** only when a round lists no accepted findings; there is no round cap, so round 6 and beyond continue while findings remain
+- **Failed review** (error, timeout, no verdict): retried once, then the changes are reported UNREVIEWED, never approved
 
 ### Model Override
 
@@ -233,6 +232,6 @@ The `prompts/codex/` files are passed via `--role` on each Codex call to shape i
 ## Notes
 
 - Plans are saved to `.claude/plan/` in your project directory — add to `.gitignore` if you don't want them committed
-- Max 3 iterations on all loops to keep token usage predictable
+- No iteration cap on any review loop: every loop runs until a round has no accepted findings at any severity, and a failed review leaves the work UNREVIEWED
 - The `codex-mcp` skill auto-loads when Codex calls are relevant, providing Claude with session management patterns and best practices
 - `/claude-codex` uses `codex exec` for review — Codex runs `git diff HEAD` itself and returns a structured verdict only, minimising token usage

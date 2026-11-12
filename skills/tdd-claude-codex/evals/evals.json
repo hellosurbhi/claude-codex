@@ -59,6 +59,39 @@
         "Claude stops at Phase 6 and tells user Codex is required for final review",
         "Claude does NOT deliver without the Phase 6 Codex review"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "[tdd-claude-codex] Review loop stress case: the reviewer still lists one accepted HIGH finding in rounds 1 through 6 and returns a clean round in round 7.",
+      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7, and delivers only after the clean round.",
+      "files": [],
+      "expectations": [
+        "Claude starts a 6th review round instead of stopping after 3 or 5 rounds",
+        "Claude never asks the user whether to keep going because of the round count",
+        "Delivery reports a clean final round and zero remaining findings"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "[tdd-claude-codex] The first review round returns VERDICT: APPROVED with CRITICAL none, HIGH none, MEDIUM none and LOW: one accepted naming issue.",
+      "expected_output": "Claude treats the LOW-only round like any other round with findings: fixes it and re-reviews.",
+      "files": [],
+      "expectations": [
+        "Claude fixes the LOW finding instead of delivering or asking the user",
+        "Claude runs another review round after the fix",
+        "The same handling applies to a round with only HIGH or only MEDIUM findings"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "[tdd-claude-codex] The review call times out, and the single retry also returns no VERDICT line.",
+      "expected_output": "Claude labels the work UNREVIEWED and never reports it as approved.",
+      "files": [],
+      "expectations": [
+        "Claude retries the failed review exactly once",
+        "Claude tells the user the work is UNREVIEWED",
+        "Claude does not describe the work as approved or reviewed"
+      ]
     }
   ]
 }

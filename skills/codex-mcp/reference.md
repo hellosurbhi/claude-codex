@@ -42,11 +42,10 @@ Pass the same `--sandbox` and `--cd` as the first call: the wrapper applies them
 
 | Loop Type | Termination Signal | Who Decides |
 |-----------|-------------------|-------------|
-| Plan review | Codex response contains "APPROVED" | Codex |
-| Execute review | Claude reviewer response contains "APPROVED" | Claude |
+| Plan review | A Codex round lists no accepted findings at any severity | Codex verdict plus Claude's evaluation gate |
+| Execute review | A reviewer round lists no accepted findings at any severity | Reviewer plus Claude's evaluation gate |
 
-Always enforce max iteration count (default: 5).
-After iteration 3, consider asking the user if the approach is viable.
+There is no iteration cap and no severity floor: keep fixing and re-reviewing while any accepted CRITICAL, HIGH, MEDIUM or LOW finding remains, in round 6 and beyond. Disputed findings are settled through discussion with `--resume`, never by stopping after N rounds. A review that errors, times out or returns no verdict is retried once; if it fails again, report the work as UNREVIEWED.
 
 ## Anti-Patterns
 

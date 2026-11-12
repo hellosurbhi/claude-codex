@@ -47,3 +47,5 @@ Verdict rules:
 - **APPROVED** — no CRITICAL or HIGH issues
 - **WARNING** — HIGH issues exist but no CRITICAL
 - **BLOCKED** — at least one CRITICAL issue
+
+The verdict signals urgency only. The caller fixes and re-audits every finding you list at any severity, so list every real MEDIUM and LOW finding even under APPROVED, and list none that are not real.

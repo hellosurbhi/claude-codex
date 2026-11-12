@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Implement the plan at .claude/plan/jwt-auth.md — it adds JWT authentication with refresh tokens to the Express API.",
-      "expected_output": "Claude reads the plan, implements the changes, calls codex-call.sh for review with structured verdict prompt, fixes CRITICAL/HIGH issues, and delivers a summary table.",
+      "expected_output": "Claude reads the plan, implements the changes, calls codex-call.sh for review with structured verdict prompt, fixes accepted findings at every severity until a clean round, and delivers a summary table.",
       "files": [],
       "expectations": [
         "Claude reads the plan file before implementing (Read tool called on .claude/plan/jwt-auth.md)",
@@ -13,7 +13,7 @@
         "The Codex prompt includes 'VERDICT: APPROVED | WARNING | BLOCKED' format",
         "The Codex prompt includes 'Be concise'",
         "Claude outputs a delivery table with File, Operation, and Description columns",
-        "Claude reports the Codex review result (APPROVED or iteration count) in delivery"
+        "Claude reports the Codex review result (clean after N rounds, or UNREVIEWED) in delivery"
       ]
     },
     {
@@ -25,8 +25,7 @@
         "Claude does NOT attempt to read a plan file (uses task description directly)",
         "Claude calls codex-call.sh for review after implementation",
         "The Codex prompt includes 'git diff HEAD' instruction",
-        "If Codex returns BLOCKED, Claude fixes all accepted CRITICAL and HIGH issues together before re-reviewing; if Codex returns WARNING, Claude fixes accepted HIGHs, runs tests/lint, and proceeds with no re-review call",
-        "If MEDIUM/LOW issues remain after APPROVED, Claude asks user whether to fix them",
+        "If Codex returns any accepted finding at any severity (BLOCKED, WARNING or MEDIUM/LOW under APPROVED), Claude fixes every accepted finding and re-reviews; there is no WARNING proceed-without-review path",
         "Delivery includes a changes table and review result"
       ]
     },
@@ -55,6 +54,39 @@
         "Claude mentions that this skill requires Codex for review",
         "Claude does NOT deliver a completion table without Codex review",
         "Claude does NOT fall back to a non-Codex review — it fails closed"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "[claude-codex] Review loop stress case: the reviewer still lists one accepted HIGH finding in rounds 1 through 6 and returns a clean round in round 7.",
+      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7, and delivers only after the clean round.",
+      "files": [],
+      "expectations": [
+        "Claude starts a 6th review round instead of stopping after 3 or 5 rounds",
+        "Claude never asks the user whether to keep going because of the round count",
+        "Delivery reports a clean final round and zero remaining findings"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "[claude-codex] The first review round returns VERDICT: APPROVED with CRITICAL none, HIGH none, MEDIUM none and LOW: one accepted naming issue.",
+      "expected_output": "Claude treats the LOW-only round like any other round with findings: fixes it and re-reviews.",
+      "files": [],
+      "expectations": [
+        "Claude fixes the LOW finding instead of delivering or asking the user",
+        "Claude runs another review round after the fix",
+        "The same handling applies to a round with only HIGH or only MEDIUM findings"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "[claude-codex] The review call times out, and the single retry also returns no VERDICT line.",
+      "expected_output": "Claude labels the work UNREVIEWED and never reports it as approved.",
+      "files": [],
+      "expectations": [
+        "Claude retries the failed review exactly once",
+        "Claude tells the user the work is UNREVIEWED",
+        "Claude does not describe the work as approved or reviewed"
       ]
     }
   ]
