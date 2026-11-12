@@ -8,7 +8,7 @@ Skills are the primary interface. They support eval-based testing via skill-crea
 
 | Skill | Trigger | Description |
 |-------|---------|-------------|
-| `plan-codex` | `/plan-codex <task>` | Claude plans with Opus, Codex audits once for correctness/completeness/security; re-audit only on BLOCKED |
+| `plan-codex` | `/plan-codex <task>` | Claude plans with Opus, Codex audits for correctness, completeness and security, re-auditing until no findings remain |
 | `claude-codex` | `/claude-codex <task or plan>` | Claude implements, Codex reviews with APPROVED/WARNING/BLOCKED verdicts |
 | `execute-codex` | `/execute-codex <task or plan>` | Smart size-based routing: Claude (small) or Codex (large) implements, code-reviewer reviews |
 | `tdd-claude-codex` | `/tdd-claude-codex <task or plan>` | TDD: Claude writes tests, Codex audits tests, Claude implements, Codex reviews implementation |

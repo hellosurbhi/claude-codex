@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Plan adding JWT authentication to the API with refresh tokens, token rotation, and logout support.",
-      "expected_output": "Claude launches a Plan agent, saves plan to .claude/plan/, calls Codex with read-only sandbox for a single audit (re-auditing only on BLOCKED), presents plan and stops.",
+      "expected_output": "Claude launches a Plan agent, saves plan to .claude/plan/, calls Codex with read-only sandbox and re-audits until a round has no accepted findings, presents plan and stops.",
       "files": [],
       "expectations": [
         "Claude launches a Task agent with subagent_type 'Plan' for plan creation",
@@ -20,15 +20,15 @@
     {
       "id": 2,
       "prompt": "Plan migrating our environment variable configuration from process.env usage scattered across files to a typed config module with validation.",
-      "expected_output": "Claude creates plan; a BLOCKED audit is revised and re-submitted via codex-call.sh --resume until no CRITICALs remain, with no iteration cap; a WARNING audit is folded into the plan with no further call.",
+      "expected_output": "Claude creates plan; any audit with accepted findings at any severity is revised and re-submitted via codex-call.sh --resume until a round has none, with no iteration cap.",
       "files": [],
       "expectations": [
         "Claude saves the plan to .claude/plan/ before calling Codex",
         "Claude calls codex-call.sh with --sandbox read-only (read-only audit)",
-        "If Codex returns BLOCKED, Claude revises the plan file before re-auditing; if Codex returns WARNING, Claude folds the findings into the plan and does not re-audit",
+        "If Codex returns any accepted finding (BLOCKED, WARNING or MEDIUM/LOW under APPROVED), Claude revises the plan file and re-audits",
         "Claude uses codex-call.sh --resume <THREAD_ID> (not a new session) for iteration 2 onward",
         "Claude reuses the saved THREAD_ID for follow-up audit calls",
-        "Claude keeps re-auditing while BLOCKED with no iteration cap and never stops to ask the user for direction"
+        "Claude keeps re-auditing until a round has no accepted findings, with no iteration cap and no severity floor, and never stops to ask the user for direction"
       ]
     },
     {

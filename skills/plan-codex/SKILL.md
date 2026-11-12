@@ -1,6 +1,6 @@
 ---
 name: plan-codex
-description: "Create a detailed implementation plan with Opus-level reasoning, then Codex audits it once for correctness, completeness, and security; only a BLOCKED verdict triggers re-audit. Best for: planning before coding — never modifies production code. Triggers on: /plan-codex, plan a feature, create implementation plan, design a system, architect this."
+description: "Create a detailed implementation plan with Opus-level reasoning, then Codex audits it for correctness, completeness and security and re-audits until a round has no accepted findings at any severity. Best for: planning before coding — never modifies production code. Triggers on: /plan-codex, plan a feature, create implementation plan, design a system, architect this."
 ---
 
 # Plan-Codex — Claude Plans, Codex Audits
@@ -44,7 +44,7 @@ If requirements are ambiguous before launching the planner, ask clarifying quest
 
 Save the returned plan to `.claude/plan/<feature-name>.md`.
 
-### Phase 2: Codex Audit (single pass; re-audit on BLOCKED until no CRITICAL remains, no iteration cap)
+### Phase 2: Codex Audit (re-audit until a round has no accepted findings at any severity; no iteration cap)
 
 **MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
@@ -64,9 +64,9 @@ Pass the installed path `~/.claude/skills/plan-codex/codex-analyzer-role.md` as 
 Save the returned `THREAD_ID`.
 
 **Parse the VERDICT line** (the analyzer role emits `VERDICT: APPROVED | WARNING | BLOCKED`):
-- **APPROVED** → fold any accompanying MEDIUM/LOW findings into the plan's notes, update `.claude/plan/<feature-name>.md` with final version, go to Phase 3.
-- **WARNING** (at least one HIGH finding, nothing CRITICAL) → critically evaluate the findings (see below), fold the accepted ones into the plan, note them in the Phase 3 delivery, and go to Phase 3 with **no further Codex call**. Log: "First-pass WARNING, findings incorporated, skipping re-audit." A WARNING plan is a reviewed plan; re-auditing it buys a second 10-15 minute xhigh call to confirm formatting changes. (Measured 2026-08-02: three audit rounds, zero BLOCKED findings, ~45 minutes before any code.)
-- **BLOCKED** (CRITICAL findings) → critically evaluate before addressing (see below), then revise and re-audit.
+Every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
+- **Any findings at any severity** (BLOCKED, WARNING, or APPROVED with MEDIUM/LOW findings listed) → critically evaluate each one (see below), fix every accepted finding in the plan, update `.claude/plan/<feature-name>.md`, and re-audit.
+- **Done** → a round that lists no findings, or whose every finding was dropped through the discussion path below. Only then go to Phase 3.
 
 **Critical Evaluation of Audit Findings**
 
@@ -85,12 +85,11 @@ Before addressing any issues, critically evaluate each finding:
 
 **If findings are accepted:** address every accepted issue, revise plan, update `.claude/plan/<feature-name>.md`.
 
-**Call `codex-call.sh --resume <THREAD_ID>`** (iteration 2 onward, **BLOCKED verdicts only**):
+**Call `codex-call.sh --resume <THREAD_ID>`** (iteration 2 onward, after every round with accepted findings):
 - THREAD_ID: {saved THREAD_ID}
 - prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
-- A re-audit that comes back WARNING follows the WARNING rule above: incorporate and proceed, no further call.
 
-There is no iteration cap and no stop to ask the user: keep revising and re-auditing until the verdict is no longer BLOCKED (owner mandate 2026-11-12: "keep going till there are no bugs left"). A CRITICAL that comes back after you addressed it is a disagreement, not a reason to stop: settle it through the discussion path above (Codex either justifies it, and you fix it properly, or concedes). Stop only on the dead-audit rules above.
+There is no iteration cap and no stop to ask the user: keep revising and re-auditing until a round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). There is no severity floor either: a WARNING or a MEDIUM/LOW finding gets fixed and re-audited exactly like a CRITICAL. What ends the loop on preferences and false positives is the discussion path, never a round count. A finding that comes back after you addressed it is a disagreement, not a reason to stop: settle it through the discussion path above (Codex either justifies it, and you fix it properly, or concedes). Stop only on the dead-audit rules above.
 
 ### Phase 3: Deliver
 

@@ -1,5 +1,5 @@
 ---
-description: "Claude plans with Opus, Codex audits once, re-audit only on BLOCKED"
+description: "Claude plans with Opus, Codex re-audits until no findings remain"
 argument-hint: "<task description>"
 model: claude-opus-4-6
 allowed-tools: ["AskUserQuestion", "Task", "Read", "Glob", "Grep", "Write", "Bash"]
@@ -35,7 +35,7 @@ If requirements are ambiguous before launching the planner, ask clarifying quest
 
 Save the returned plan to `.claude/plan/<feature-name>.md`.
 
-### Phase 2: Codex Audit Loop (max 3 iterations)
+### Phase 2: Codex Audit Loop (no iteration cap, no severity floor)
 
 Read `~/.claude/skills/plan-codex/codex-analyzer-role.md` and pass as `--role <file>`. (That file defines the `VERDICT: APPROVED | WARNING | BLOCKED` grammar the parse step below branches on; `prompts/codex/analyzer.md` also exists but predates the verdict contract and defines no grammar, so it must not be used here.)
 
@@ -54,15 +54,14 @@ Save the returned `THREAD_ID`.
 
 **Parse the exact `VERDICT:` line** (line-anchored; exactly one must be present). The word APPROVED appearing inside prose or a finding is NOT approval. A response with no verdict line, multiple verdict lines, or a value other than APPROVED, WARNING or BLOCKED is malformed: retry the call once, and if the retry is also malformed, stop and tell the user the plan is UNREVIEWED.
 **Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual codebase, whether the reviewer had full context for intentional decisions, and whether it improves the plan or is a preference/false positive. Contest doubtful findings via `codex-call.sh --resume <THREAD_ID>` with specific reasoning; discussion replies do not count as audit iterations. Only findings that survive this gate are "accepted" below.
-- `VERDICT: APPROVED` → fold any accompanying MEDIUM/LOW findings into the plan's notes (the analyzer role explicitly permits them), update `.claude/plan/<feature-name>.md` with final version, go to Phase 3
-- `VERDICT: WARNING` (no CRITICAL) → fold the accepted findings into the plan, update `.claude/plan/<feature-name>.md`, go to Phase 3 with no further Codex call
-- `VERDICT: BLOCKED` (CRITICAL findings) → address every CRITICAL and any accompanying HIGH findings, revise plan, update `.claude/plan/<feature-name>.md`, re-audit
+- Any accepted finding at any severity (BLOCKED, WARNING, or APPROVED with MEDIUM/LOW findings) → fix every accepted finding, revise the plan, update `.claude/plan/<feature-name>.md`, re-audit
+- A round with no findings, or whose every finding was dropped through the gate's discussion path → go to Phase 3
 
-**Call `codex-call.sh --resume <THREAD_ID>`** (iterations 2-3):
+**Call `codex-call.sh --resume <THREAD_ID>`** (iteration 2 onward):
 - THREAD_ID: {saved THREAD_ID}
 - prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Return the structured verdict (VERDICT: APPROVED | WARNING | BLOCKED) with severity-prefixed findings per your instructions."
 
-After 3 iterations still BLOCKED, stop and ask user for direction.
+There is no iteration cap and no stop to ask the user: keep revising and re-auditing until a round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). This matches `skills/plan-codex/SKILL.md`.
 
 ### Phase 3: Deliver
 
