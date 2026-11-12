@@ -128,6 +128,8 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 - `git diff HEAD`
 - Original task requirements
 
+**Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual code and project conventions, whether the reviewer had full context for intentional decisions and whether it improves correctness/security or is a preference / false positive. If a finding seems incorrect, launch a new code-reviewer agent with the original diff, the contested findings and your technical reasoning; accept confirmed findings, drop withdrawn ones. Discussion rounds do NOT count as review rounds.
+
 Parse reviewer response:
 - No findings at any severity → approved, go to Phase 3.
 - Any accepted finding at any severity (CRITICAL, HIGH, MEDIUM or LOW) → apply the fixes and re-review:

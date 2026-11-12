@@ -218,9 +218,14 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
 │       ├── analyzer.md      # Codex role: plan auditor (source for skill bundles)
 │       ├── architect.md     # Codex role: implementer (source for skill bundles)
 │       └── reviewer.md      # Codex role: code reviewer
-└── scripts/
-    └── codex-call.sh        # codex exec wrapper every skill calls (install step 3)
+├── scripts/
+│   └── codex-call.sh        # codex exec wrapper every skill calls (install step 3)
+└── tests/
+    ├── review-loop-proof.sh # runs a real headless Claude session through a skill with a scripted reviewer
+    └── fake-codex-call.sh   # the scripted reviewer: one finding per round, tied to repo state
 ```
+
+`tests/review-loop-proof.sh <skills-dir|installed> <claude-codex|plan-codex> <round6|high-only|medium-only|low-only|failed>` proves the loop has no round cap and no severity floor: it passes only when every scripted round is fixed, round 6 is reached in the `round6` scenario, the run ends on a clean re-review and a dead reviewer is reported UNREVIEWED. Each run is a real Claude session, so it uses API quota.
 
 The `prompts/codex/` files are passed via `--role` on each Codex call to shape its behaviour per phase.
 
