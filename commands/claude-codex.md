@@ -79,7 +79,7 @@ LOW: <list or 'none'>
 
 Save the returned `THREAD_ID` for follow-up replies.
 
-**Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual code, whether the reviewer had full context for intentional decisions, and whether it improves correctness/security or is a preference/false positive. Contest doubtful findings via `codex-reply` with specific reasoning; discussion replies do not count as iterations. Only findings that survive this gate are "accepted" below.
+**Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual code, whether the reviewer had full context for intentional decisions, and whether it improves correctness/security or is a preference/false positive. Contest doubtful findings via `codex-call.sh --resume <THREAD_ID>` with specific reasoning; discussion replies do not count as iterations. Only findings that survive this gate are "accepted" below.
 
 Classify the verdict:
 - **APPROVED** — no CRITICAL or HIGH → handle any MEDIUM/LOW findings per Step R3, then go to Phase 4

@@ -11,13 +11,13 @@
         "Claude extracts task description and implementation steps from the plan",
         "Claude writes test files first and verifies they FAIL (RED)",
         "Claude reads tdd-specialist-role.md for test writing guidance",
-        "Claude calls mcp__codex__codex for test audit (Phase 3) before implementing",
+        "Claude calls codex-call.sh for test audit (Phase 3) before implementing",
         "Claude classifies as large change (4+ production files) — excludes test files from size calculation",
         "Claude announces 'Large change — routing to Codex' before implementing",
-        "Claude reads codex-architect-role.md and includes it in Codex developer-instructions",
+        "Claude reads codex-architect-role.md and passes it to Codex via --role",
         "Codex call includes test file contents in the prompt so Codex can make tests pass",
-        "Codex developer-instructions include 'Do not modify test files'",
-        "Claude launches code-reviewer Task agent (not mcp__codex__codex-reply) for final review",
+        "The Codex prompt includes 'Do not modify test files'",
+        "Claude launches code-reviewer Task agent (not codex-call.sh --resume) for final review",
         "Delivery includes TDD summary and Route: Large (Codex)"
       ]
     },
@@ -28,10 +28,10 @@
       "files": [],
       "expectations": [
         "Claude writes test files first and verifies they FAIL (RED)",
-        "Claude calls mcp__codex__codex for test audit (Phase 3)",
+        "Claude calls codex-call.sh for test audit (Phase 3)",
         "Claude classifies as small change (1-2 files, <=30 lines implementation)",
         "Claude announces 'Small change — implementing directly'",
-        "Claude implements with Edit/Write (not Codex MCP)",
+        "Claude implements with Edit/Write (not Codex)",
         "Claude verifies tests pass (GREEN) after implementation",
         "Claude launches code-reviewer Task agent after implementation",
         "Delivery includes TDD summary and Route: Small (Claude)"
@@ -56,9 +56,9 @@
       "files": [],
       "expectations": [
         "Claude writes test files first and verifies RED",
-        "Claude checks for mcp__codex__codex at Phase 3 and notes 'Codex unavailable — skipping audit'",
+        "Claude runs the codex-call.sh availability check at Phase 3 and notes 'Codex unavailable — skipping audit'",
         "Claude classifies as large change (3+ production files)",
-        "Claude checks for mcp__codex__codex at Route B and detects it's unavailable",
+        "Claude runs the codex-call.sh availability check at Route B and detects it's unavailable",
         "Claude falls back to Claude direct implementation (does NOT stop)",
         "Claude launches code-reviewer Task agent for review",
         "Claude delivers successfully despite Codex being unavailable"

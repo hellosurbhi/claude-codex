@@ -17,7 +17,7 @@ Run it with Bash. Output: first line `THREAD_ID: <id>`, then Codex's final messa
 
 Sessions are stateful via the thread id. Always:
 1. Save `THREAD_ID` from the first call
-2. Pass `--resume THREAD_ID` for all follow-ups (resume keeps the original sandbox and cwd)
+2. Pass `--resume THREAD_ID` for all follow-ups, with the same `--sandbox` and `--cd` as the first call (the wrapper applies them and the review profile to the resumed turn; `--sandbox` defaults to `read-only`)
 3. Never start a new session when continuing the same task
 
 ## Key Parameters
@@ -31,7 +31,7 @@ Sessions are stateful via the thread id. Always:
 Approval is always `never` (set in the review profile); commands run inside the sandbox without prompting.
 
 ### --role FILE
-Prepends a persona or constraints file to the prompt (for example `codex-analyzer-role.md`). Add "Be concise. Output result only, no reasoning process." to the prompt itself.
+Prepends a persona or constraints file to the prompt. Use the absolute installed path (for example `~/.claude/skills/plan-codex/codex-analyzer-role.md`): a bare filename is read relative to the project directory and will not be found. Add "Be concise. Output result only, no reasoning process." to the prompt itself.
 
 ### Model
 Set once in `~/.codex/review.config.toml` (the `review` profile). Never pass `-m` anywhere.

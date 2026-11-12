@@ -78,16 +78,16 @@ Apply the returned test files using Write/Edit.
 
 ### Phase 3: Codex Test Audit (max 2 iterations)
 
-**MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
+**MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **degrade gracefully**: note "Codex unavailable: test audit skipped" and proceed to Phase 4. Do not stop; implementation can continue without the test audit. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
 Before implementing, have Codex review the tests for quality, completeness, and edge case coverage.
 
 Run `git add -N .` to mark new test files as intent-to-add.
 
-Read `codex-analyzer-role.md` from this skill directory and pass as `--role <file>`.
+Pass the installed path `~/.claude/skills/tdd-claude-codex/codex-analyzer-role.md` as `--role` (an absolute path: a bare filename is read relative to the project directory).
 
 **Call `codex-call.sh`** (iteration 1):
-- append to prompt: (`--role codex-analyzer-role.md`) `"\nBe concise. Return only the structured verdict format. No prose."`
+- append to prompt: (`--role ~/.claude/skills/tdd-claude-codex/codex-analyzer-role.md`) `"\nBe concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
 ```

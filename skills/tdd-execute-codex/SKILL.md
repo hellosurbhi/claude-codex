@@ -78,7 +78,7 @@ Apply the returned test files using Write/Edit.
 
 ### Phase 3: Codex Test Audit (max 2 iterations)
 
-**MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
+**MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. Do NOT skip or bypass this phase and do NOT assume Codex is unavailable without running the check. If both pass, use Codex, no exceptions. If either fails, note "Codex unavailable: skipping audit" and proceed to Phase 4. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
 Before implementing, have Codex review the tests for quality, completeness, and edge case coverage.
 
@@ -191,9 +191,9 @@ After all tasks complete (either path):
 
 **No post-routing rationalization**: Once Route B is selected, the routing decision applies to ALL tasks in the plan. Do NOT re-evaluate individual tasks for complexity. If you find yourself thinking "this task is simple enough to do directly" or "this is just a deletion" — STOP. That is the routing decision being second-guessed. The routing already accounted for overall complexity. Every task goes through Codex.
 
-**Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
+**Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, fall back to Route A and announce: "Codex unavailable: falling back to Claude direct implementation." This fallback is ONLY for when Codex is technically unavailable (the wrapper or the CLI is missing). It MUST NOT be used because a task seems "too simple for Codex" or because Claude judges direct editing would be faster. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
-Read `codex-architect-role.md` from this skill directory and pass as `--role <file>` for all Codex calls.
+Pass the installed path `~/.claude/skills/tdd-execute-codex/codex-architect-role.md` as `--role` (an absolute path: a bare filename is read relative to the project directory) for all Codex calls.
 
 **Step B1 — Dispatch to Codex**
 
@@ -208,7 +208,7 @@ When the input was a plan file path, make a single Codex call with the plan file
 Call `codex-call.sh`:
 - prompt: `"Read the plan file at \`{plan_file_path}\`. Tests have already been written by Claude — your implementation must make them pass. Do NOT modify any test files.\n\nFor implementation tasks with no shared file conflicts or ordering dependencies, use sub-agents to run them in parallel. For dependent tasks, execute sequentially after prerequisites complete.\n\nTest files written:\n{list of test file paths from Phase 2}"`
 - flag: `--sandbox workspace-write`
-- append to prompt: (`--role codex-architect-role.md`) `"\nTests are pre-written. Write minimal implementation to pass all tests. Do not modify test files. Be concise. Output result only, no reasoning process."`
+- append to prompt: (`--role ~/.claude/skills/tdd-execute-codex/codex-architect-role.md`) `"\nTests are pre-written. Write minimal implementation to pass all tests. Do not modify test files. Be concise. Output result only, no reasoning process."`
 
 Save the returned `THREAD_ID`. Proceed to Step B2.
 
@@ -216,7 +216,7 @@ Save the returned `THREAD_ID`. Proceed to Step B2.
 
 **Path 2 (direct task description, 3+ tasks)** — Claude dispatches per-task subagents sequentially
 
-**Note on agent spawning**: Codex runs in a sandboxed shell and cannot spawn Claude agents directly. For direct task descriptions with 3+ tasks, Claude spawns a subagent per task — each subagent owns its Codex MCP session for that task, keeping both the main context and each Codex session scoped and clean.
+**Note on agent spawning**: Codex runs in a sandboxed shell and cannot spawn Claude agents directly. For direct task descriptions with 3+ tasks, Claude spawns a subagent per task — each subagent owns its Codex thread (its own `THREAD_ID`) for that task, keeping both the main context and each Codex session scoped and clean.
 
 For each implementation task (sequentially — next starts only after current passes tests):
 
@@ -234,7 +234,7 @@ You are implementing one task using Codex via codex-call.sh. Follow these steps:
 1. Call codex-call.sh with:
    - prompt: "Implement the following task. Tests are pre-written — make them pass.\n\nTask: {task}\n\nTest files:\n{test file contents}\n\nContext:\n{sanitized key file contents}"
    - flag: `--sandbox workspace-write`
-   - append to prompt: (`--role codex-architect-role.md`) "\nTests are pre-written. Write minimal implementation to pass all tests. Do not modify test files."
+   - append to prompt: (`--role ~/.claude/skills/tdd-execute-codex/codex-architect-role.md`) "\nTests are pre-written. Write minimal implementation to pass all tests. Do not modify test files."
 
 2. Save the returned THREAD_ID.
 
@@ -257,7 +257,7 @@ Call `codex-call.sh` (iteration 1) or `codex-call.sh --resume <THREAD_ID>` (iter
 - prompt: `"Implement the following task. Tests have already been written — your implementation must make all tests pass.\n\nTask: {task}\n\nTest files:\n{test file contents}\n\nContext:\n{sanitized key file contents}"`
 - prompt (retry): `"Fix the following issues:\n\n{failure output or reviewer feedback verbatim}"`
 - flag: `--sandbox workspace-write`
-- append to prompt: (`--role codex-architect-role.md`) `"\nTests are pre-written. Write minimal implementation to pass all tests. Do not modify test files."`
+- append to prompt: (`--role ~/.claude/skills/tdd-execute-codex/codex-architect-role.md`) `"\nTests are pre-written. Write minimal implementation to pass all tests. Do not modify test files."`
 
 Save the returned `THREAD_ID`. Reuse for all subsequent calls.
 

@@ -8,8 +8,8 @@
       "files": [],
       "expectations": [
         "Claude announces routing decision containing 'Small change' before implementing",
-        "Claude implements with Edit or Write tools (not mcp__codex__codex)",
-        "Claude does NOT call mcp__codex__codex for implementation",
+        "Claude implements with Edit or Write tools (not codex-call.sh)",
+        "Claude does NOT call codex-call.sh for implementation",
         "Claude launches a code-reviewer Task agent (feature-dev:code-reviewer) after implementation",
         "Claude delivers with a table showing Route: Small (Claude)"
       ]
@@ -17,13 +17,13 @@
     {
       "id": 2,
       "prompt": "Add a caching layer with Redis to the user service, session service, and product service — including connection pooling, cache invalidation, and TTL configuration.",
-      "expected_output": "Claude classifies as large change, reads codex-architect-role.md, routes to Codex via MCP, launches code-reviewer after.",
+      "expected_output": "Claude classifies as large change, reads codex-architect-role.md, routes to Codex via codex-call.sh, launches code-reviewer after.",
       "files": [],
       "expectations": [
         "Claude announces routing decision containing 'Large change' before implementing",
         "Claude reads codex-architect-role.md from the skill directory",
-        "Claude calls mcp__codex__codex with sandbox set to 'workspace-write'",
-        "The Codex call includes developer-instructions from codex-architect-role.md",
+        "Claude calls codex-call.sh with --sandbox workspace-write",
+        "The Codex call passes ~/.claude/skills/execute-codex/codex-architect-role.md via --role",
         "Claude launches a code-reviewer Task agent after Codex implementation",
         "Claude delivers with a table showing Route: Large (Codex)"
       ]
@@ -35,7 +35,7 @@
       "files": [],
       "expectations": [
         "Claude classifies this as a large change (4+ files, new logic)",
-        "Claude checks for mcp__codex__codex availability",
+        "Claude runs the codex-call.sh availability check",
         "Claude announces fallback: 'Codex unavailable' and falls back to direct implementation",
         "Claude does NOT stop or tell the user to add Codex — it proceeds with Route A",
         "Claude launches code-reviewer Task agent after implementation",
@@ -50,10 +50,10 @@
       "expectations": [
         "Claude identifies 4+ implementation tasks and dispatches Task subagents",
         "Claude records git SHA before each subagent (git rev-parse HEAD)",
-        "Each subagent gets the mcp__codex__codex tool and codex-architect-role.md instructions",
+        "Each subagent gets codex-call.sh and codex-architect-role.md instructions",
         "Claude runs git diff after each subagent to verify scoped changes",
-        "Claude launches code-reviewer after all subagents complete (not mcp__codex__codex-reply)",
-        "Claude notes that each subagent owns its own Codex threadId"
+        "Claude launches code-reviewer after all subagents complete (not codex-call.sh --resume)",
+        "Claude notes that each subagent owns its own Codex THREAD_ID"
       ]
     }
   ]

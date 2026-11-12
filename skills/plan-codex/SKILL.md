@@ -54,12 +54,12 @@ Save the returned plan to `.claude/plan/<feature-name>.md`.
 
 If the retry dies for any OTHER reason (transport failure, timeout with no reset time given, or any error that isn't a named quota limit): **stop and tell the user**: "Codex audit incomplete — the review did not run. The plan is UNREVIEWED." Never proceed to Phase 3 or to implementation on a dead audit for these cases; an unreviewed plan must be labeled as such, out loud, every time. (Added 2026-07-28 after an xhigh audit was silently killed by a 1800s MCP idle timeout and work continued without it. Usage-limit carve-out added 2026-08-26: a multi-hour quota wall was stalling all work in the security-boundary repo for zero extra safety, since push-time review already catches the same outage the same way.)
 
-Read `codex-analyzer-role.md` from this skill directory and pass as `--role <file>`.
+Pass the installed path `~/.claude/skills/plan-codex/codex-analyzer-role.md` as `--role` (an absolute path: a bare filename is read relative to the project directory).
 
 **Call `codex-call.sh`** (iteration 1):
 - prompt: "Read the plan file at `.claude/plan/<feature-name>.md` and audit it for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
 - flag: `--sandbox read-only`
-- append to prompt: (`--role codex-analyzer-role.md`) "\nBe concise. Output result only, no reasoning process."
+- append to prompt: (`--role ~/.claude/skills/plan-codex/codex-analyzer-role.md`) "\nBe concise. Output result only, no reasoning process."
 
 Save the returned `THREAD_ID`.
 

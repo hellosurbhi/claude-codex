@@ -12,10 +12,10 @@
         "Claude writes test files BEFORE any production code (RED phase)",
         "Claude runs new tests and verifies they FAIL before implementing",
         "Claude reads tdd-specialist-role.md from the skill directory",
-        "Claude calls mcp__codex__codex for test audit (Phase 3) with test-focused verdict prompt",
+        "Claude calls codex-call.sh for test audit (Phase 3) with test-focused verdict prompt",
         "Claude implements minimal code to make tests pass (GREEN phase)",
-        "Claude calls mcp__codex__codex for implementation review (Phase 6) with 'git diff $START_SHA'",
-        "Phase 6 Codex call is a separate mcp__codex__codex call (not reusing Phase 3 threadId)",
+        "Claude calls codex-call.sh for implementation review (Phase 6) with 'git diff $START_SHA'",
+        "Phase 6 Codex call is a separate codex-call.sh call (not reusing Phase 3 THREAD_ID)",
         "Delivery includes TDD summary with test count, coverage, and RED/GREEN confirmation"
       ]
     },
@@ -53,9 +53,9 @@
       "files": [],
       "expectations": [
         "Claude writes tests first and verifies RED",
-        "Claude checks for mcp__codex__codex at Phase 3 and notes 'Codex unavailable — test audit skipped'",
+        "Claude runs the codex-call.sh availability check at Phase 3 and notes 'Codex unavailable — test audit skipped'",
         "Claude proceeds to implement despite Codex being unavailable at Phase 3 (graceful degradation)",
-        "Claude checks for mcp__codex__codex again at Phase 6",
+        "Claude runs the codex-call.sh availability check again at Phase 6",
         "Claude stops at Phase 6 and tells user Codex is required for final review",
         "Claude does NOT deliver without the Phase 6 Codex review"
       ]

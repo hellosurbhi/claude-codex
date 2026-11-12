@@ -97,7 +97,15 @@ Note: this is a top-level key. If your `config.toml` already has `[table]` secti
 
 ### 3. Install the Codex wrapper
 
-Codex CLI 0.154.0 removed `codex mcp-server`, so there is no MCP server to add. The skills call `codex exec` through one wrapper script, `codex-call.sh` (copy it from `claude-global-config/scripts/` to `~/.claude/config/scripts/codex-call.sh` and `chmod +x` it).
+Codex CLI 0.154.0 removed `codex mcp-server`, so there is no MCP server to add. The skills call `codex exec` through one wrapper script, `scripts/codex-call.sh` in this repo. Every skill calls it at one fixed path, so install it there:
+
+```bash
+mkdir -p ~/.claude/config/scripts
+cp scripts/codex-call.sh ~/.claude/config/scripts/codex-call.sh
+chmod +x ~/.claude/config/scripts/codex-call.sh
+```
+
+Without it, each skill's availability check fails: `/plan-codex`, `/claude-codex` and the final review in `/tdd-claude-codex` stop and say Codex is unavailable, while `/execute-codex` and `/tdd-execute-codex` fall back to Claude implementing directly. Both TDD skills skip the Codex test audit.
 
 Put the model in a `review` profile at `~/.codex/review.config.toml` (one file per profile in Codex 0.164+):
 
@@ -204,11 +212,13 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
 │   ├── claude-codex.md
 │   ├── tdd-claude-codex.md
 │   └── tdd-execute-codex.md
-└── prompts/
-    └── codex/
-        ├── analyzer.md      # Codex role: plan auditor (source for skill bundles)
-        ├── architect.md     # Codex role: implementer (source for skill bundles)
-        └── reviewer.md      # Codex role: code reviewer
+├── prompts/
+│   └── codex/
+│       ├── analyzer.md      # Codex role: plan auditor (source for skill bundles)
+│       ├── architect.md     # Codex role: implementer (source for skill bundles)
+│       └── reviewer.md      # Codex role: code reviewer
+└── scripts/
+    └── codex-call.sh        # codex exec wrapper every skill calls (install step 3)
 ```
 
 The `prompts/codex/` files are passed via `--role` on each Codex call to shape its behaviour per phase.

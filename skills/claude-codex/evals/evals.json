@@ -4,14 +4,14 @@
     {
       "id": 1,
       "prompt": "Implement the plan at .claude/plan/jwt-auth.md — it adds JWT authentication with refresh tokens to the Express API.",
-      "expected_output": "Claude reads the plan, implements the changes, calls mcp__codex__codex for review with structured verdict prompt, fixes CRITICAL/HIGH issues, and delivers a summary table.",
+      "expected_output": "Claude reads the plan, implements the changes, calls codex-call.sh for review with structured verdict prompt, fixes CRITICAL/HIGH issues, and delivers a summary table.",
       "files": [],
       "expectations": [
         "Claude reads the plan file before implementing (Read tool called on .claude/plan/jwt-auth.md)",
         "Claude uses Edit or Write tools to modify production files",
-        "Claude calls mcp__codex__codex (not Bash codex review) for the review phase",
+        "Claude calls codex-call.sh (not `codex review`) for the review phase",
         "The Codex prompt includes 'VERDICT: APPROVED | WARNING | BLOCKED' format",
-        "The Codex call includes developer-instructions parameter with 'Be concise'",
+        "The Codex prompt includes 'Be concise'",
         "Claude outputs a delivery table with File, Operation, and Description columns",
         "Claude reports the Codex review result (APPROVED or iteration count) in delivery"
       ]
@@ -23,7 +23,7 @@
       "files": [],
       "expectations": [
         "Claude does NOT attempt to read a plan file (uses task description directly)",
-        "Claude calls mcp__codex__codex for review after implementation",
+        "Claude calls codex-call.sh for review after implementation",
         "The Codex prompt includes 'git diff HEAD' instruction",
         "If Codex returns BLOCKED, Claude fixes all accepted CRITICAL and HIGH issues together before re-reviewing; if Codex returns WARNING, Claude fixes accepted HIGHs, runs tests/lint, and proceeds with no re-review call",
         "If MEDIUM/LOW issues remain after APPROVED, Claude asks user whether to fix them",
@@ -40,18 +40,18 @@
         "Claude records git SHA before each subagent dispatch (git rev-parse HEAD)",
         "Claude runs git diff after each subagent to verify changes",
         "Claude runs scoped lint/tests after each subagent completes",
-        "Claude calls mcp__codex__codex for review after all subagents complete",
+        "Claude calls codex-call.sh for review after all subagents complete",
         "Claude does NOT use Bash codex review command"
       ]
     },
     {
       "id": 4,
       "prompt": "Add a health check endpoint to the API server.",
-      "expected_output": "Claude detects that mcp__codex__codex is not available and stops with a clear error message — does NOT proceed without review.",
+      "expected_output": "Claude detects that Codex (codex-call.sh or the CLI) is not available and stops with a clear error message — does NOT proceed without review.",
       "files": [],
       "expectations": [
-        "Claude checks for mcp__codex__codex availability before Phase 3",
-        "Claude stops and tells the user that Codex MCP is not available",
+        "Claude runs the codex-call.sh availability check before Phase 3",
+        "Claude stops and tells the user that Codex CLI or codex-call.sh is not available",
         "Claude mentions that this skill requires Codex for review",
         "Claude does NOT deliver a completion table without Codex review",
         "Claude does NOT fall back to a non-Codex review — it fails closed"
