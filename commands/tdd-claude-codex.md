@@ -66,7 +66,7 @@ Apply the returned test files using Write/Edit.
 - If tests pass unexpectedly → tests are wrong; revise and re-verify RED
 - If tests fail for wrong reasons (syntax errors, broken imports unrelated to missing implementation) → fix the test file, re-run
 
-### Phase 3: Codex Test Audit (max 2 iterations)
+### Phase 3: Codex Test Audit (re-audit until a round has no accepted findings at any severity; no iteration cap)
 
 Before implementing, have Codex review the tests for quality, completeness, and edge case coverage.
 
@@ -97,12 +97,12 @@ LOW: <list or 'none'>
 
 Save the returned `THREAD_ID` (separate from the implementation review THREAD_ID).
 
-**Parse response**:
-- **APPROVED** → proceed to Phase 4
-- **WARNING** (no CRITICAL) → Claude fixes the accepted issues in the test files, re-verifies RED, proceeds with no further Codex call
-- **BLOCKED** → Claude fixes all CRITICAL/HIGH issues in the test files, re-verifies RED, then re-calls via `codex-call.sh --resume <THREAD_ID>` (max 2 iterations)
+**Parse response**: every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
+- **Any accepted finding at any severity** (BLOCKED, WARNING, or APPROVED with MEDIUM/LOW findings listed) → Claude fixes every accepted finding in the test files, re-verifies RED, then re-audits via `codex-call.sh --resume <THREAD_ID>`.
+- **Done** → a round that lists no findings, or whose every finding was dropped through the evaluation gate. Only then proceed to Phase 4.
+- **Failed audit** (error, timeout or no verdict) → retry once; if it fails again, report "test audit incomplete, the tests are UNREVIEWED" in the delivery report and proceed to Phase 4. Never report it as approved.
 
-After 2 iterations still BLOCKED, stop and ask user for direction.
+There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict is NOT an approval: retry it once, and if it fails again stop and tell the user the changes are UNREVIEWED.
 
 ### Phase 4: Claude Implements (GREEN)
 
@@ -133,7 +133,7 @@ After all tasks complete (either path):
 - If coverage tooling is available: check coverage (target 80%+); add tests if below threshold
 - If coverage tooling is not available: skip and note "coverage not measured" in delivery
 
-### Phase 6: Codex Review (max 3 iterations)
+### Phase 6: Codex Review (re-review until a round has no accepted findings at any severity; no iteration cap)
 
 **Step R1 — Run Codex Review via codex-call.sh**
 
@@ -158,17 +158,16 @@ LOW: <list or 'none'>
 
 Save the returned `THREAD_ID` for follow-up replies.
 
-Classify the verdict:
-- **APPROVED** — no CRITICAL or HIGH → handle any MEDIUM/LOW findings per Step R3, then go to Phase 7
-- **WARNING** — HIGH issues only → fix all accepted HIGHs in one batch, re-run the test suite (must stay GREEN), handle MEDIUM/LOW per Step R3, then go to Phase 7 with no re-review call
-- **BLOCKED** — CRITICAL issues → fix all, increment iteration, re-review
+Classify the verdict. Every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
+- **Any accepted finding at any severity** (BLOCKED, WARNING, or APPROVED with MEDIUM/LOW findings listed) → fix and re-review (R2).
+- **Done** → a round that lists no findings (`none` on every severity line), or whose every finding was dropped through the evaluation gate. Only then go to Phase 7.
 
-**Step R2 — Fix and Re-review (BLOCKED verdicts only)**
+**Step R2 — Fix and Re-review (every round with accepted findings)**
 
-Address ALL CRITICAL and HIGH issues before re-reviewing:
-- Collect every CRITICAL/HIGH finding from the last review
+Address ALL accepted findings before re-reviewing:
+- Collect every accepted CRITICAL, HIGH, MEDIUM and LOW finding from the last review
 - Fix them all with Edit/Write in one batch
-- Run available tests/lint to verify
+- Run the test suite (must stay GREEN) and lint to verify
 - Re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
@@ -177,19 +176,9 @@ Run `git diff $START_SHA` again to see the updated changes, then re-review.
 Return ONLY the structured verdict in the same format.
 ```
 
-One review per iteration, not one review per fix. Only BLOCKED verdicts trigger a re-review.
-After 3 iterations still BLOCKED, stop and report remaining issues to user.
+One review per round, not one review per fix.
 
-**Step R3 — MEDIUM / LOW Issues**
-
-After CRITICAL/HIGH are resolved, collect any remaining MEDIUM and LOW issues.
-If any exist, ask the user:
-
-> "Codex flagged N MEDIUM/LOW issue(s) that were not fixed:
-> - [list issues]
-> Should I fix these before delivery, or proceed as-is?"
-
-Wait for user response before proceeding.
+There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict is NOT an approval: retry it once, and if it fails again stop and tell the user the changes are UNREVIEWED.
 
 ### Phase 7: Delivery
 
@@ -208,10 +197,10 @@ Wait for user response before proceeding.
 - GREEN phase: All tests passing, no regressions
 
 ### Review Result
-- Codex test audit: APPROVED / N issues resolved (N/2 iterations)
+- Codex test audit: clean after N rounds / UNREVIEWED (audit skipped or failed)
 - Implemented by: Claude (active model)
-- Codex implementation review: APPROVED / N issues resolved (N/3 iterations)
-- Remaining MEDIUM/LOW issues: N (skipped by user) / none
+- Codex implementation review: clean after N rounds / N findings fixed, N dropped through discussion
+- Remaining findings: none (the loop only ends on a clean round)
 
 ### Recommended Next Steps
 1. [ ] Run full test suite

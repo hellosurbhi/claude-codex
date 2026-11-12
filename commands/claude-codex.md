@@ -56,7 +56,7 @@ After all tasks complete (either path):
 - Run lint / typecheck / tests if available (minimal related scope)
 - Fix any regressions before proceeding to review
 
-### Phase 3: Codex Review (max 3 iterations)
+### Phase 3: Codex Review (re-review until a round has no accepted findings at any severity; no iteration cap)
 
 **Step R1 — Run Codex Review via codex-call.sh**
 
@@ -81,15 +81,14 @@ Save the returned `THREAD_ID` for follow-up replies.
 
 **Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual code, whether the reviewer had full context for intentional decisions, and whether it improves correctness/security or is a preference/false positive. Contest doubtful findings via `codex-call.sh --resume <THREAD_ID>` with specific reasoning; discussion replies do not count as iterations. Only findings that survive this gate are "accepted" below.
 
-Classify the verdict:
-- **APPROVED** — no CRITICAL or HIGH → handle any MEDIUM/LOW findings per Step R3, then go to Phase 4
-- **WARNING** — HIGH issues only → fix all accepted HIGHs in one batch, run available tests/lint, handle MEDIUM/LOW per Step R3, then go to Phase 4 with no re-review call
-- **BLOCKED** — CRITICAL issues → fix all accepted ones, increment iteration, re-review
+Classify the verdict. Every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
+- **Any accepted finding at any severity** (BLOCKED, WARNING, or APPROVED with MEDIUM/LOW findings listed) → fix and re-review (R2).
+- **Done** → a round that lists no findings (`none` on every severity line), or whose every finding was dropped through the evaluation gate. Only then go to Phase 4.
 
-**Step R2 — Fix and Re-review (BLOCKED verdicts only)**
+**Step R2 — Fix and Re-review (every round with accepted findings)**
 
-Address ALL CRITICAL and HIGH issues before re-reviewing:
-- Collect every CRITICAL/HIGH finding from the last review
+Address ALL accepted findings before re-reviewing:
+- Collect every accepted CRITICAL, HIGH, MEDIUM and LOW finding from the last review
 - Fix them all with Edit/Write in one batch
 - Run available tests/lint to verify
 - Re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
@@ -100,20 +99,9 @@ Run `git diff HEAD` again to see the updated changes after fixes, then re-review
 Return ONLY the structured verdict in the same format.
 ```
 
-One review per iteration, not one review per fix. Only BLOCKED verdicts trigger a re-review.
+One review per round, not one review per fix.
 
-After 3 iterations still BLOCKED, stop and report remaining issues to user.
-
-**Step R3 — MEDIUM / LOW Issues**
-
-After CRITICAL/HIGH are resolved, collect any remaining MEDIUM and LOW issues from the last review.
-If any exist, ask the user:
-
-> "Codex flagged N MEDIUM/LOW issue(s) that were not fixed:
-> - [list issues]
-> Should I fix these before delivery, or proceed as-is?"
-
-Wait for user response before proceeding.
+There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict is NOT an approval: retry it once, and if it fails again stop and tell the user the changes are UNREVIEWED.
 
 ---
 
@@ -129,8 +117,8 @@ Wait for user response before proceeding.
 
 ### Review Result
 - Implemented by: Claude (active model)
-- Codex review: APPROVED / N issues resolved (N/3 iterations)
-- Remaining MEDIUM/LOW issues: N (skipped by user) / none
+- Codex review: clean after N rounds / N findings fixed, N dropped through discussion
+- Remaining findings: none (the loop only ends on a clean round)
 
 ### Recommended Next Steps
 1. [ ] <test step>

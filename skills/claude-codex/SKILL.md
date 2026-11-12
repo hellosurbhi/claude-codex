@@ -66,7 +66,7 @@ After all tasks complete (either path):
 - Run lint / typecheck / tests if available (minimal related scope)
 - Fix any regressions before proceeding to review
 
-### Phase 3: Codex Review (max 3 iterations)
+### Phase 3: Codex Review (re-review until a round has no accepted findings at any severity; no iteration cap)
 
 **MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
@@ -91,14 +91,15 @@ LOW: <list or 'none'>
 
 Save the returned `THREAD_ID` for follow-up replies.
 
-Classify the verdict:
-- **APPROVED** — no CRITICAL or HIGH → handle any MEDIUM/LOW findings per Step R3, then go to Phase 4
-- **WARNING** — HIGH issues only → critically evaluate (R1.5), fix all accepted HIGHs in one batch, run available tests/lint on the fixes, handle MEDIUM/LOW per Step R3, then go to Phase 4 with **no re-review call**. The HIGHs are fixed and verified; only the paid re-verification round is skipped. (Re-reviewing WARNINGs is what turned 1 review into 3+ xhigh calls per task.)
-- **BLOCKED** — CRITICAL issues → fix all, increment iteration, re-review
+**Failed review**: a Codex call that errors, times out, or exits without a final message (`codex-call.sh` exits non-zero with "UNREVIEWED") is NOT an approval. Retry the same call once. If it fails again, stop and tell the user: "Codex review incomplete. The changes are UNREVIEWED." Never deliver the changes as reviewed.
+
+Classify the verdict. Every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
+- **Any findings at any severity** (BLOCKED, WARNING, or APPROVED with MEDIUM/LOW findings listed) → critically evaluate each one (R1.5), then fix and re-review (R2).
+- **Done** → a round that lists no findings (`none` on every severity line), or whose every finding was dropped through the R1.5 discussion path. Only then go to Phase 4.
 
 **Step R1.5 — Critical Evaluation of Review Findings**
 
-Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
+Before fixing any issues, critically evaluate each finding, at every severity:
 
 1. **Assess correctness**: Is the finding technically accurate? Check the actual code and project conventions.
 2. **Check context**: Does the reviewer have full context, or is it flagging intentional design decisions?
@@ -113,10 +114,10 @@ Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
 
 **If all findings appear correct:** proceed directly to Step R2.
 
-**Step R2 — Fix and Re-review (BLOCKED verdicts only)**
+**Step R2 — Fix and Re-review (every round with accepted findings)**
 
-Address ALL CRITICAL and HIGH issues before re-reviewing:
-- Collect every CRITICAL/HIGH finding from the last review
+Address ALL accepted findings before re-reviewing:
+- Collect every accepted CRITICAL, HIGH, MEDIUM and LOW finding from the last review
 - Fix them all with Edit/Write in one batch
 - Run available tests/lint to verify
 - Re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
@@ -127,20 +128,9 @@ Run `git diff HEAD` again to see the updated changes after fixes, then re-review
 Return ONLY the structured verdict in the same format.
 ```
 
-One review per iteration, not one review per fix. Only BLOCKED verdicts trigger a re-review; a re-review that comes back WARNING follows the WARNING rule above (fix accepted HIGHs, proceed, no further call).
+One review per round, not one review per fix. A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a BLOCKED round.
 
-After 3 iterations still BLOCKED, stop and report remaining issues to user.
-
-**Step R3 — MEDIUM / LOW Issues**
-
-After CRITICAL/HIGH are resolved, collect any remaining MEDIUM and LOW issues from the last review.
-If any exist, ask the user:
-
-> "Codex flagged N MEDIUM/LOW issue(s) that were not fixed:
-> - [list issues]
-> Should I fix these before delivery, or proceed as-is?"
-
-Wait for user response before proceeding.
+There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a round has no accepted findings (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). What ends the loop on preferences and false positives is the R1.5 discussion path, never a round count. A finding that returns after you fixed it is a disagreement: settle it through R1.5 (Codex justifies it and you fix it properly, or Codex concedes). Stop only on the failed-review rule above.
 
 ---
 
@@ -156,8 +146,8 @@ Wait for user response before proceeding.
 
 ### Review Result
 - Implemented by: Claude (active model)
-- Codex review: APPROVED / N issues resolved (N/3 iterations)
-- Remaining MEDIUM/LOW issues: N (skipped by user) / none
+- Codex review: clean after N rounds / N findings fixed, N dropped through discussion
+- Remaining findings: none (the loop only ends on a clean round)
 
 ### Recommended Next Steps
 1. [ ] <test step>

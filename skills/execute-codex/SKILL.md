@@ -79,18 +79,18 @@ After all tasks complete (either path):
 2. Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
    - `git diff HEAD`
    - Original task requirements
-3. **Critical Evaluation**: Before fixing, critically evaluate each CRITICAL/HIGH finding:
+3. **Critical Evaluation**: Before fixing, critically evaluate each finding, at every severity:
    - **Assess correctness**: Is it technically accurate? Check actual code and project conventions.
    - **Check context**: Does the reviewer have full context, or is it flagging intentional design?
    - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
-   - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
-4. After evaluation: CRITICAL findings → fix them together with every accepted HIGH finding using Edit/Write and re-review (max 2 rounds). HIGH-only findings → fix them in one batch with Edit/Write, re-run the self-verification from step 1 (lint / typecheck / tests), then proceed with **no re-review call**. The HIGHs are fixed and verified; only the paid re-verification round is skipped.
-5. **Fail closed at the cap**: if accepted CRITICAL findings remain after the final round, STOP. Report the unresolved CRITICALs to the user and do not deliver; a capped-out review is not an approval.
-6. Go to Phase 3, carrying any remaining MEDIUM/LOW findings into the delivery report (user decides whether to fix)
+   - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count as review rounds.
+4. After evaluation: any accepted finding at any severity (CRITICAL, HIGH, MEDIUM or LOW) → fix every accepted finding in one batch with Edit/Write, re-run the self-verification from step 1 (lint / typecheck / tests), then re-run the code-reviewer from step 2 on the new `git diff HEAD`.
+5. Repeat steps 2 to 4 until a round has no accepted findings. There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict is NOT an approval: retry it once, and if it fails again stop and tell the user the changes are UNREVIEWED.
+6. Go to Phase 3.
 
 ---
 
-### Route B: Large Change — Codex First (max 3 iterations)
+### Route B: Large Change — Codex First (review until a round has no accepted findings; no iteration cap)
 
 **MANDATORY**: When Route B is selected, you MUST NOT use Edit/Write tools for implementation. All implementation MUST go through `codex-call.sh`. Claude's role in Route B is context retrieval, verification, and review — not implementation. The ONLY exception is fixing minor regressions found during self-verification (Step B2) that are clearly caused by Codex output (e.g. a missing import, a typo in a generated file).
 
@@ -134,7 +134,7 @@ Call codex-call.sh with:
 - flag: `--sandbox workspace-write`
 - append to prompt: (`--role ~/.claude/skills/execute-codex/codex-architect-role.md`) "\nBe concise. Output result only, no reasoning process."
 
-Save the THREAD_ID. Run lint/tests scoped to changed files to verify. If failures, call codex-call.sh --resume <THREAD_ID> --sandbox workspace-write with the THREAD_ID and failure output (max 3 retries). Report: files changed, verification result, any unresolved failures.
+Save the THREAD_ID. Run lint/tests scoped to changed files to verify. If failures, call codex-call.sh --resume <THREAD_ID> --sandbox workspace-write with the THREAD_ID and failure output, repeating until the scoped lint/tests pass. Report: files changed, verification result, any unresolved failures.
 ```
 
 3. After each subagent: run `git diff $TASK_SHA` (scoped to this task only) to verify changes, run scoped lint/tests to confirm no regressions
@@ -145,7 +145,7 @@ Save the THREAD_ID. Run lint/tests scoped to changed files to verify. If failure
 
 **Path 3 (direct task description, <3 tasks)** — Direct Codex call
 
-Call `codex-call.sh` (iteration 1) or `codex-call.sh --resume <THREAD_ID>` (iterations 2-3):
+Call `codex-call.sh` (first call) or `codex-call.sh --resume <THREAD_ID>` (every fix round after that):
 - prompt (first call): `"Implement the following task.\n\nTask: {task}\n\nContext:\n{key file contents}"`
 - prompt (retry): `"Fix the following issues found in code review:\n\n{reviewer feedback verbatim}"`
 - flag: `--sandbox workspace-write`
@@ -165,20 +165,21 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 - Original task requirements
 
 Parse reviewer response:
-- No CRITICAL/HIGH issues → approved, go to Phase 3, carrying any MEDIUM/LOW findings into the delivery report (user decides whether to fix)
+- No findings at any severity → approved, go to Phase 3.
+- Any finding at any severity → evaluate as below, fix, and re-review.
 
-**Critical Evaluation** (before fixing): Critically evaluate each CRITICAL/HIGH finding:
+**Critical Evaluation** (before fixing): Critically evaluate each finding, at every severity:
 - **Assess correctness**: Is it technically accurate? Check actual code and project conventions.
 - **Check context**: Does the reviewer have full context, or is it flagging intentional design?
 - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
-- **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
+- **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count as review rounds.
 
-After evaluation (re-review rounds trigger on CRITICAL findings only; HIGH-only rounds apply fixes through the same path-specific mechanisms below and skip only the re-review verdict):
-- Has CRITICAL (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `THREAD_ID` to reply to, so do not call `codex-call.sh --resume <THREAD_ID>`. After fixes, re-run `code-reviewer` (max 3 total iterations).
-- Has CRITICAL (single Codex session path) → call `codex-call.sh --resume <THREAD_ID> --sandbox workspace-write` with accepted reviewer feedback verbatim, increment iteration count (max 3 total iterations). After the fixes, re-run `code-reviewer` before proceeding.
-- HIGH only (3+ task path) → dispatch a Claude subagent per affected task with the accepted feedback verbatim; (single Codex session path) → call `codex-call.sh --resume <THREAD_ID> --sandbox workspace-write` with the accepted feedback, instructing it to apply the fixes and reply with a change summary, no re-review verdict. Route B's no-Edit/Write rule holds either way. Verify with scoped lint/tests, then go to Phase 3, carrying any MEDIUM/LOW findings into the delivery report exactly as the approved branch does.
+After evaluation, every round with accepted findings (CRITICAL, HIGH, MEDIUM or LOW) applies the fixes and re-reviews:
+- 3+ task path → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `THREAD_ID` to reply to, so do not call `codex-call.sh --resume <THREAD_ID>`.
+- Single Codex session path → call `codex-call.sh --resume <THREAD_ID> --sandbox workspace-write` with the accepted reviewer feedback verbatim.
+- Route B's no-Edit/Write rule holds either way. Verify with scoped lint/tests, then re-run `code-reviewer` on the new `git diff HEAD`.
 
-After 3 iterations still finding CRITICALs, stop and report status to user.
+There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict is NOT an approval: retry it once, and if it fails again stop and tell the user the changes are UNREVIEWED.
 
 ---
 
@@ -193,9 +194,9 @@ After 3 iterations still finding CRITICALs, stop and report status to user.
 | path/to/file | Modified | Description |
 
 ### Review Result
-- Route: Small (Claude) / Large (Codex, N/3 iterations)
-- Code review: Passed / N issues resolved
-- Remaining MEDIUM/LOW findings: N (listed above, user decides) / none
+- Route: Small (Claude) / Large (Codex)
+- Code review: clean after N rounds / N findings fixed, N dropped through discussion
+- Remaining findings: none (the loop only ends on a clean round)
 
 ### Recommended Next Steps
 1. [ ] <test step>
