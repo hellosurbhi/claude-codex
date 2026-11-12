@@ -44,7 +44,7 @@ If requirements are ambiguous before launching the planner, ask clarifying quest
 
 Save the returned plan to `.claude/plan/<feature-name>.md`.
 
-### Phase 2: Codex Audit (single pass; re-audit only on BLOCKED, max 3 iterations)
+### Phase 2: Codex Audit (single pass; re-audit on BLOCKED until no CRITICAL remains, no iteration cap)
 
 **MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
@@ -85,12 +85,12 @@ Before addressing any issues, critically evaluate each finding:
 
 **If findings are accepted:** address every accepted issue, revise plan, update `.claude/plan/<feature-name>.md`.
 
-**Call `codex-call.sh --resume <THREAD_ID>`** (iterations 2-3, **BLOCKED verdicts only**):
+**Call `codex-call.sh --resume <THREAD_ID>`** (iteration 2 onward, **BLOCKED verdicts only**):
 - THREAD_ID: {saved THREAD_ID}
 - prompt: "The plan has been revised to address your feedback. Re-read the plan file at `.claude/plan/<feature-name>.md` and audit it again for correctness, completeness, security, and edge cases. Reply APPROVED if solid, or list specific issues to fix."
 - A re-audit that comes back WARNING follows the WARNING rule above: incorporate and proceed, no further call.
 
-After 3 iterations still BLOCKED, stop and ask user for direction.
+There is no iteration cap and no stop to ask the user: keep revising and re-auditing until the verdict is no longer BLOCKED (owner mandate 2026-11-12: "keep going till there are no bugs left"). A CRITICAL that comes back after you addressed it is a disagreement, not a reason to stop: settle it through the discussion path above (Codex either justifies it, and you fix it properly, or concedes). Stop only on the dead-audit rules above.
 
 ### Phase 3: Deliver
 
