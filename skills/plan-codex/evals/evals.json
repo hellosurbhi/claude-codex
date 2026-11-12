@@ -20,15 +20,15 @@
     {
       "id": 2,
       "prompt": "Plan migrating our environment variable configuration from process.env usage scattered across files to a typed config module with validation.",
-      "expected_output": "Claude creates plan; a BLOCKED audit is revised and re-submitted via codex-call.sh --resume until no CRITICALs remain; a WARNING audit is folded into the plan with no further call.",
+      "expected_output": "Claude creates plan; a BLOCKED audit is revised and re-submitted via codex-call.sh --resume until no CRITICALs remain, with no iteration cap; a WARNING audit is folded into the plan with no further call.",
       "files": [],
       "expectations": [
         "Claude saves the plan to .claude/plan/ before calling Codex",
         "Claude calls codex-call.sh with --sandbox read-only (read-only audit)",
         "If Codex returns BLOCKED, Claude revises the plan file before re-auditing; if Codex returns WARNING, Claude folds the findings into the plan and does not re-audit",
-        "Claude uses codex-call.sh --resume <THREAD_ID> (not a new session) for iterations 2-3",
+        "Claude uses codex-call.sh --resume <THREAD_ID> (not a new session) for iteration 2 onward",
         "Claude reuses the saved THREAD_ID for follow-up audit calls",
-        "After 3 iterations still BLOCKED, Claude stops and asks user for direction"
+        "Claude keeps re-auditing while BLOCKED with no iteration cap and never stops to ask the user for direction"
       ]
     },
     {
