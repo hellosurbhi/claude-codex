@@ -99,7 +99,7 @@ Call codex-call.sh with:
 - flag: `--sandbox workspace-write`
 - append to prompt: (`--role ~/.claude/prompts/codex/architect.md`) "\nBe concise. Output result only, no reasoning process."
 
-Save the THREAD_ID. Run lint/tests scoped to changed files to verify. If failures, call codex-call.sh --resume <THREAD_ID> with the THREAD_ID and failure output (max 3 retries). Report: files changed, verification result, any unresolved failures.
+Save the THREAD_ID. Run lint/tests scoped to changed files to verify. If failures, call codex-call.sh --resume <THREAD_ID> --sandbox workspace-write with the THREAD_ID and failure output (max 3 retries). Report: files changed, verification result, any unresolved failures.
 ```
 
 3. After each subagent: run `git diff $TASK_SHA` (scoped to this task only) to verify changes, run scoped lint/tests to confirm no regressions
@@ -130,8 +130,8 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 Parse reviewer response:
 - No CRITICAL/HIGH issues → approved, go to Phase 3, carrying any MEDIUM/LOW findings into the delivery report (user decides whether to fix)
 - Has CRITICAL (3+ task path) → dispatch a Claude subagent per affected task with the reviewer feedback verbatim, covering every CRITICAL and HIGH finding together; there is no shared `THREAD_ID` to reply to, so do not call `codex-call.sh --resume <THREAD_ID>`. After fixes, re-run `code-reviewer` (max 3 total iterations).
-- Has CRITICAL (single Codex session path) → call `codex-call.sh --resume <THREAD_ID>` with reviewer feedback verbatim, covering every CRITICAL and HIGH finding together, increment iteration count (max 3 total iterations). After the fixes, re-run `code-reviewer` before proceeding.
-- HIGH only → apply fixes via the same path-specific mechanism (subagents for the 3+ task path, `codex-call.sh --resume <THREAD_ID>` asking for fixes with no re-review verdict for the single-session path), verify with scoped lint/tests, proceed, carrying any MEDIUM/LOW findings into the delivery report.
+- Has CRITICAL (single Codex session path) → call `codex-call.sh --resume <THREAD_ID> --sandbox workspace-write` with reviewer feedback verbatim, covering every CRITICAL and HIGH finding together, increment iteration count (max 3 total iterations). After the fixes, re-run `code-reviewer` before proceeding.
+- HIGH only → apply fixes via the same path-specific mechanism (subagents for the 3+ task path, `codex-call.sh --resume <THREAD_ID> --sandbox workspace-write` asking for fixes with no re-review verdict for the single-session path), verify with scoped lint/tests, proceed, carrying any MEDIUM/LOW findings into the delivery report.
 
 After 3 iterations still finding CRITICALs, stop and report status to user.
 

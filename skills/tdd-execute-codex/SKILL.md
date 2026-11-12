@@ -240,7 +240,7 @@ You are implementing one task using Codex via codex-call.sh. Follow these steps:
 
 3. Run the task's tests to verify GREEN.
 
-4. If tests fail: call codex-call.sh --resume <THREAD_ID> with the THREAD_ID and failure output. Retry up to 3 times.
+4. If tests fail: call codex-call.sh --resume <THREAD_ID> --sandbox workspace-write with the THREAD_ID and failure output. Retry up to 3 times.
 
 5. Report back: files changed, final test result, any unresolved failures.
 ```
@@ -294,8 +294,8 @@ Parse reviewer response:
 
 After evaluation (re-review rounds trigger on CRITICAL findings only; HIGH-only rounds apply fixes through the same path-specific mechanisms below and skip only the re-review verdict):
 - Has CRITICAL (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `THREAD_ID` to reply to, so do not call `codex-call.sh --resume <THREAD_ID>`. After fixes, re-run `code-reviewer` (max 3 total iterations).
-- Has CRITICAL (single Codex session path) → call `codex-call.sh --resume <THREAD_ID>` with accepted reviewer feedback verbatim, increment iteration (max 3 total iterations). After the fixes, re-run `code-reviewer` before proceeding.
-- HIGH only (3+ task path) → dispatch a Claude subagent per affected task with the accepted feedback verbatim; (single Codex session path) → call `codex-call.sh --resume <THREAD_ID>` with the accepted feedback, instructing it to apply the fixes and reply with a change summary, no re-review verdict. Route B's no-Edit/Write rule holds either way. Verify with the test suite (must stay GREEN), then collect remaining MEDIUM/LOW findings and ask the user, exactly as the no-CRITICAL/HIGH branch does, before proceeding.
+- Has CRITICAL (single Codex session path) → call `codex-call.sh --resume <THREAD_ID> --sandbox workspace-write` with accepted reviewer feedback verbatim, increment iteration (max 3 total iterations). After the fixes, re-run `code-reviewer` before proceeding.
+- HIGH only (3+ task path) → dispatch a Claude subagent per affected task with the accepted feedback verbatim; (single Codex session path) → call `codex-call.sh --resume <THREAD_ID> --sandbox workspace-write` with the accepted feedback, instructing it to apply the fixes and reply with a change summary, no re-review verdict. Route B's no-Edit/Write rule holds either way. Verify with the test suite (must stay GREEN), then collect remaining MEDIUM/LOW findings and ask the user, exactly as the no-CRITICAL/HIGH branch does, before proceeding.
 
 After 3 iterations still finding CRITICALs, stop and report remaining issues to user.
 

@@ -14,6 +14,7 @@
 # Output (stdout): first line `THREAD_ID: <id>`, then Codex's final message.
 # Exit non-zero if Codex fails or returns no message: a dead call is NOT an approval.
 set -euo pipefail
+command -v python3 >/dev/null || { echo "codex-call: python3 is required (it parses the Codex event stream). Treat as UNREVIEWED." >&2; exit 2; }
 sandbox=read-only role="" resume="" dir="$PWD"
 while [[ $# -gt 1 ]]; do
   case "$1" in
@@ -40,13 +41,16 @@ else
 fi
 python3 - "$out" "$rc" <<'PY'
 import json, sys
-tid, msg, done = "", "", False
+tid, msg, done, errs = "", "", False, []
 for line in open(sys.argv[1]):
     try: e = json.loads(line)
     except ValueError: continue
     if e.get("type") == "thread.started": tid = e["thread_id"]
     if e.get("type") == "turn.completed": done = True
-    if e.get("type") == "turn.failed": done = False
+    if e.get("type") == "turn.failed":
+        done = False
+        errs.append((e.get("error") or {}).get("message", ""))
+    if e.get("type") == "error": errs.append(e.get("message", ""))
     it = e.get("item", {})
     if e.get("type") == "item.completed" and it.get("type") == "agent_message": msg = it["text"]
 # WHY require turn.completed AND exit 0: a nonzero exit after turn.completed is still a failed call.
@@ -56,7 +60,8 @@ for line in open(sys.argv[1]):
 if not msg or not done or sys.argv[2] != "0":
     # WHY print the CLI's own non-JSON lines: auth, profile and quota errors arrive
     # there, and the scratch file is deleted on exit, so this is the only copy.
-    diag = [l.rstrip() for l in open(sys.argv[1]) if not l.lstrip().startswith("{")][-20:]
+    # Quota errors (with their reset time) arrive as JSON error events, not plain text.
+    diag = [m for m in errs if m] + [l.rstrip() for l in open(sys.argv[1]) if not l.lstrip().startswith("{")][-20:]
     if diag: print("codex-call: Codex CLI said:\n" + "\n".join(diag), file=sys.stderr)
     sys.exit("codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED.")
 print(f"THREAD_ID: {tid}\n{msg}")

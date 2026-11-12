@@ -60,6 +60,8 @@ Or with your OpenAI API key:
 export OPENAI_API_KEY=your-key-here
 ```
 
+The Codex wrapper (install step 3) also needs `python3` to read the Codex event stream. Check with `python3 --version`.
+
 ### 3. feature-dev plugin
 
 This setup uses the `code-reviewer` agent from [claude-plugins-official](https://github.com/anthropics/claude-plugins-official).
