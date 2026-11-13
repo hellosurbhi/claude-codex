@@ -211,10 +211,7 @@ if [[ $scenario == usage-limit ]]; then
     exit $fail
   fi
   # WHY all of these read the wrapper log: the last spy execution after the quota hit is the final fallback review.
-  if [[ $skill == tdd-execute-codex ]]; then
-    # Its final review is a Claude code-reviewer agent (it cannot log to the wrapper): the agent must be given the implementation and be clean.
-    check "the final code review ran after the Codex usage limit, saw the implementation and was exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --agent "$out/events.jsonl"'
-  elif [[ $FAKE_TARGET == code ]]; then
+  if [[ $FAKE_TARGET == code ]]; then
     check "the last fallback review after the quota hit was for the implementation and exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation'
   else
     check "the last fallback review after the quota hit was exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl"'
