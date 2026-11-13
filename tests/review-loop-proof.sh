@@ -158,14 +158,9 @@ all_markers() {
     fi
   done
 }
-# Each finding round K must appear as a real reviewer call, in order, then a CLEAN call after the last.
-rounds_in_order() {
-  local k=0 line
-  while IFS= read -r line; do
-    if [[ $line == *"round=$((k + 1)) "* ]]; then k=$((k + 1)); fi
-  done < "$FAKE_LOG"
-  [[ $k -eq $FAKE_ROUNDS ]]
-}
+# WHY the scripted-reviewer checks read the wrapper event log (check-scripted.py), not calls.log: a call that died before
+# writing calls.log would leave an earlier CLEAN standing as the last word (r17).
+rounds_in_order() { python3 "$here/check-scripted.py" "$out/wrapper.jsonl" rounds "$FAKE_ROUNDS"; }
 check "claude session exited 0" '[[ $claude_rc -eq 0 ]]'
 check "session produced a report" '[[ -s "$out/session.txt" ]]'
 if [[ $scenario == real ]]; then
@@ -222,20 +217,17 @@ if [[ $scenario == usage-limit ]]; then
 fi
 check "every finding round ($FAKE_ROUNDS) was fixed: all markers present" all_markers
 check "reviewer calls reached finding rounds 1..$FAKE_ROUNDS in order" rounds_in_order
-check "re-reviewed after the last finding round and got a clean round" 'tail -1 "$FAKE_LOG" | grep -q result=CLEAN'
 # WHY bind the clean verdict to the final state: edits made after the last CLEAN review would
 # otherwise ship unreviewed. The hash is computed exactly as the fake computes it.
 final_state="$(cd "$repo" && { cat app.py test*.py .claude/plan/*.md 2>/dev/null || true; } | shasum -a 256 | cut -c1-16)"
-check "the last clean verdict was given for the state the run ended in" 'tail -1 "$FAKE_LOG" | grep -q "result=CLEAN state=$final_state"'
+check "the last execution was a clean reply for the state the run ended in" 'python3 "$here/check-scripted.py" "$out/wrapper.jsonl" final "$final_state"'
 # WHY: the tdd skills audit tests first and that audit consumes every scripted finding, so a run
 # that skipped the implementation review would still end CLEAN; require the last review saw add().
 if [[ $FAKE_TARGET == code ]]; then
-  check "the last clean review happened after add() was implemented" 'tail -1 "$FAKE_LOG" | grep -q "impl=yes"'
+  check "the last clean review happened after add() was implemented" 'python3 "$here/check-scripted.py" "$out/wrapper.jsonl" final "$final_state" --impl'
 fi
 if [[ $scenario == failed || $scenario == malformed ]]; then
-  check "the first $FAKE_FAIL_FIRST calls returned no valid verdict" '[[ $(sed -n "1,${FAKE_FAIL_FIRST}p" "$FAKE_LOG" | grep -cE "result=(DEAD|MALFORMED)") -eq $FAKE_FAIL_FIRST ]]'
-  check "kept going: the next call returned a verdict" 'sed -n "$((FAKE_FAIL_FIRST + 1))p" "$FAKE_LOG" | grep -qvE "result=(DEAD|MALFORMED)"'
-  check "no bad calls after the first verdict" '[[ $(grep -cE "result=(DEAD|MALFORMED)" "$FAKE_LOG") -eq $FAKE_FAIL_FIRST ]]'
+  check "the first $FAKE_FAIL_FIRST calls returned no valid verdict, the next one did, and none after" 'python3 "$here/check-scripted.py" "$out/wrapper.jsonl" failfirst "$FAKE_FAIL_FIRST"'
 fi
 # WHY a phrase match, not any mention of UNREVIEWED: the report may truthfully narrate
 # that early calls "died with UNREVIEWED"; the failure is claiming the work still is.

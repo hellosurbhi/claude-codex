@@ -31,7 +31,9 @@ finish() {
   local src="$snap"; [[ -s "$snap" || -f "$in" ]] || src=/dev/null
   # WHY stderr is err plus the stdout the failure path replays to the caller: the event must hold every stream the
   # caller actually saw (r16).
-  local errall="$err.all"; cat "$err" "$tmp" > "$errall" 2>/dev/null || true; [[ $rc -eq 0 ]] && cp "$err" "$errall"
+  # WHY tmp is added only when the failure path replayed it ($replayed): a failed output write shows the caller just the
+  # shell diagnostic, so logging the undisplayed reviewer text instead would misstate what the caller saw (r17).
+  local errall="$err.all"; cp "$err" "$errall"; [[ $rc -eq 0 || -z "${replayed:-}" ]] || cat "$tmp" >> "$errall"
   TREE_SHA256="$tree" EVSTART="$EVSTART" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$src" "$o" "$errall" -- "${argv[@]+"${argv[@]}"}"
   rm -f "$tmp" "$err" "$err.all" "$snap"
 }
@@ -61,6 +63,6 @@ elif [[ $(grep -cE '^VERDICT:' "$tmp") == 1 && $(grep -cE '^VERDICT: ' "$tmp") =
   if [[ $result == APPROVED ]] && ! [[ $(grep -cE '[^[:space:]]' "$tmp") == 1 ]]; then result=APPROVED_WITH_FINDINGS; fi
 fi
 printf 'reviewer tier=%s bytes=%s has_add=%s impl=%s result=%s\n' "$tier" "$(wc -c < "$in" | tr -d ' ')" "$has_add" "$impl" "$result" >> "$SPY_LOG"
-if [[ $result == FAILED ]]; then cat "$err" "$tmp" >&2; exit 1; fi
-cat "$tmp" > "$outf"
+if [[ $result == FAILED ]]; then replayed=1; cat "$err" "$tmp" >&2; exit 1; fi
+if ! { cat "$tmp" > "$outf"; } 2>>"$err"; then cat "$err" >&2; exit 1; fi
 [[ "$outf" == /dev/stdout ]] || cat "$tmp"

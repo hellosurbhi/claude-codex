@@ -9,6 +9,7 @@ fail=0
 ok()  { echo "PASS: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
 expect() { local want="$1" name="$2"; shift 2; "$@" >/dev/null 2>&1; local rc=$?; if { [[ $want == pass && $rc -eq 0 ]] || [[ $want == fail && $rc -ne 0 ]]; }; then ok "$name"; else bad "$name (rc=$rc, wanted $want)"; fi; }
+gdiff() { local f; for f in "$@"; do git diff --no-index --no-color /dev/null "$f"; done; }
 mkrun() { rm -rf "$tmp/run"; mkdir -p "$tmp/run/repo"; (cd "$tmp/run/repo" && git init -q && printf 'x=1\n' > app.py); export EVLOG="$tmp/run/wrapper.jsonl" FAKE_LOG="$tmp/run/calls.log"; : > "$EVLOG"; : > "$FAKE_LOG"; unset FAKE_LIMIT FAKE_FAIL_FIRST; export FAKE_ROUNDS=0; }
 fake="$here/fake-codex-call.sh"
 line() { # wrapper exit phase stdout   -> appends a hand-built event
@@ -138,7 +139,7 @@ expect fail "a plan edited while it was being reviewed is rejected" python3 "$he
 # the clean review is bound to the exact final .py state (paths, bytes, indentation, other modules, deletions).
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
 printf 'x=1\ndef add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > other.py
-printf '+x=1\n+def add(a, b):\n+    return a + b\n+def sub(a, b):\n+    return a - b\n' > "$tmp/diff.txt"
+gdiff app.py other.py > "$tmp/diff.txt"
 PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 cp "$tmp/run/repo/app.py" "$tmp/app.good"
 expect pass "reviewed final code state is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
@@ -183,7 +184,7 @@ expect pass "a caller-set FAKE_LOG cannot divert the call log" test "$(wc -l < "
 # a partial diff (the add function only) does not cover the whole current implementation, even though the code state matches.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
 printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > other.py
-printf '+def add(a, b):\n+    return a + b\n' > "$tmp/diff.txt"
+gdiff app.py > "$tmp/diff.txt"
 PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect fail "a partial diff that omits another current module is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 # a failed spy run logs the stdout it replays to the caller too.
@@ -191,5 +192,48 @@ mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp
 printf '#!/usr/bin/env bash\necho "partial reply on stdout"\nexit 3\n' > "$tmp/bin2claude"; mkdir -p "$tmp/bin2"; cp "$tmp/bin2claude" "$tmp/bin2/claude"; chmod +x "$tmp/bin2/claude"
 PATH="$tmp/bin2:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "a failed reviewer's stdout is kept in the logged diagnostics" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["exit"]!=0 and "partial reply on stdout" in e["stderr"])' "$here" "$EVLOG")" = "True"
+
+# r17: the reviewed diff must match the remaining change exactly (whitespace, operators, the file set).
+rv() { mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; }
+rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py
+gdiff app.py other.py > "$tmp/diff.txt"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "an exact git diff of every changed module is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py
+gdiff app.py > "$tmp/diff.txt"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+expect fail "a diff omitting a module whose lines duplicate reviewed ones is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+rv; printf 'def add(a, b):\n        return a + b\n' > app.py
+gdiff app.py | sed 's/^+        return/+    return/' > "$tmp/diff.txt"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+expect fail "a diff line with different indentation than the final code is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+rv; printf 'def add(a, b):\n    return a + b\n-x\n' > app.py
+gdiff app.py | sed 's/^+-x$/+x/' > "$tmp/diff.txt"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+expect fail "a source operator dropped from a diff line is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+rv; printf 'def add(a, b):\n    return a + b\n-x\n' > app.py
+gdiff app.py > "$tmp/diff.txt"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "a line that starts with an operator is accepted when it is diffed exactly" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+# a spy whose output file cannot be written logs the shell diagnostic, not reviewer text the caller never saw.
+rv; printf 'plan\n' > "$tmp/plan.md"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/nodir/out.txt" >/dev/null 2>"$tmp/spyerr.txt"
+expect pass "an unwritable output file logs the shell diagnostic" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["exit"]!=0 and "nodir" in e["stderr"] and "VERDICT" not in e["stderr"])' "$here" "$EVLOG")" = "True"
+
+# r17: the scripted scenarios are judged from the wrapper log, not calls.log.
+sc() { python3 "$here/check-scripted.py" "$EVLOG" "$@"; }
+mkrun; cd "$tmp/run/repo"; export FAKE_ROUNDS=1 FAKE_TARGET=code
+bash "$fake" review >/dev/null 2>&1; printf '# review-fix-1\n' >> app.py; bash "$fake" review >/dev/null 2>&1
+st="$({ cat app.py; } | shasum -a 256 | cut -c1-16)"
+expect pass "scripted: a finding round then a clean reply for the final state passes" sh -c "python3 '$here/check-scripted.py' '$EVLOG' rounds 1 && python3 '$here/check-scripted.py' '$EVLOG' final $st"
+expect fail "scripted: a clean reply for another state fails" python3 "$here/check-scripted.py" "$EVLOG" final 0000000000000000
+bash "$fake" --resume never-issued again >/dev/null 2>&1
+expect fail "scripted: a failed resume after the clean call means the last execution is not clean" python3 "$here/check-scripted.py" "$EVLOG" final "$st"
+mkrun; cd "$tmp/run/repo"; export FAKE_ROUNDS=2; bash "$fake" review >/dev/null 2>&1
+expect fail "scripted: a finding round never followed by round 2 fails the rounds check" python3 "$here/check-scripted.py" "$EVLOG" rounds 2
+mkrun; cd "$tmp/run/repo"; export FAKE_ROUNDS=0 FAKE_FAIL_FIRST=2; for i in 1 2 3; do bash "$fake" review >/dev/null 2>&1; done
+expect pass "scripted: two dead calls then a verdict satisfies failfirst 2" python3 "$here/check-scripted.py" "$EVLOG" failfirst 2
+bash "$fake" --resume nope again >/dev/null 2>&1
+expect fail "scripted: a bad call after the first verdict fails failfirst" python3 "$here/check-scripted.py" "$EVLOG" failfirst 2
 
 exit $fail

@@ -4,8 +4,47 @@
 # called for that phase (a tests-only call does not satisfy "implementation"). With --plan-file, the
 # review input is the current non-empty plan file (sha256 equal), so a stale or empty plan fails.
 # WHY only the log: transcripts quote docs and agent text; the wrapper log is what actually ran.
-import hashlib, os, subprocess, sys
+import hashlib, os, subprocess, sys, tempfile
 import wlog
+def changes(lines):
+    # (added, removed) line lists from the hunks of ONE file's diff; only the one-character prefix is removed.
+    add, rem, inh = [], [], False
+    for l in lines:
+        if l.startswith("@@"):
+            inh = True
+        elif inh and l.startswith("+"):
+            add.append(l[1:])
+        elif inh and l.startswith("-"):
+            rem.append(l[1:])
+    return add, rem
+
+def reviewed_changes(lines):
+    # {path: (added, removed)} for every .py file section of a git diff; sections start at a "diff --git" or "--- " header.
+    secs, cur, name = {}, None, None
+    for l in lines:
+        if l.startswith("diff --git "):
+            cur, name = [], None
+            secs[id(cur)] = (None, cur)
+        elif l.startswith("--- ") and (cur is None or not any(x.startswith("@@") for x in cur)):
+            if cur is None:
+                cur = []; secs[id(cur)] = (None, cur)
+            if l[4:] != "/dev/null":
+                secs[id(cur)] = (l[4:].split("\t")[0][2:], cur)
+            cur.append(l)
+        elif l.startswith("+++ ") and cur is not None and not any(x.startswith("@@") for x in cur):
+            if l[4:].strip() != "/dev/null":
+                secs[id(cur)] = (l[4:].split("\t")[0][2:], cur)
+            cur.append(l)
+        elif cur is not None:
+            cur.append(l)
+    out = {}
+    for n, body in secs.values():
+        if n and n.endswith(".py"):
+            a, r = changes(body)
+            pa, pr = out.get(n, ([], []))
+            out[n] = (pa + a, pr + r)
+    return out
+
 args = sys.argv[1:]
 evs = wlog.load(args[0])
 phase = args[args.index("--phase") + 1] if "--phase" in args else None
@@ -35,22 +74,30 @@ if repo is not None:
     final = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "treehash.py"), repo], capture_output=True, text=True).stdout.strip()
     if not final or spies[-1].get("tree_sha256") != final:
         sys.exit(1)
-    # WHY coverage too: the digest pins the code state at review time, but a stale or partial diff would still be
-    # "approved". Every line the run added relative to the first commit must appear in the reviewed input, and every
-    # baseline line the run removed must appear as a deleted line (r16).
-    seen = {l.strip().lstrip("+- ").strip() for l in (spies[-1].get("input_text") or "").splitlines()}
-    removed_seen = {l[1:].strip() for l in (spies[-1].get("input_text") or "").splitlines() if l.startswith("-")}
+    # WHY exact per-file changes: the digest pins the code state at review time, but a stale or partial diff would still be
+    # "approved". The reviewed input must hold, for every changed .py file and for no other, exactly the added and removed
+    # lines (order, indentation and operators intact, only the one-character diff prefix removed) that turn the first
+    # commit's file into the file that remains (r16, r17).
     root = subprocess.run(["git", "-C", repo, "rev-list", "--max-parents=0", "HEAD"], capture_output=True, text=True).stdout.split()
     names = {f for f in os.listdir(repo) if f.endswith(".py")}
     if root:
         names |= {f for f in subprocess.run(["git", "-C", repo, "ls-tree", "--name-only", root[0]], capture_output=True, text=True).stdout.split() if f.endswith(".py")}
+    expected = {}
     for name in sorted(names):
-        base = set()
+        base = b""
         if root:
-            r = subprocess.run(["git", "-C", repo, "show", root[0] + ":" + name], capture_output=True, text=True)
-            base = {l.strip() for l in r.stdout.splitlines() if l.strip()} if r.returncode == 0 else set()
-        p = os.path.join(repo, name)
-        cur = {l.strip() for l in open(p, errors="replace").read().splitlines() if l.strip()} if os.path.isfile(p) else set()
-        if any(l not in seen for l in cur - base) or any(l not in removed_seen for l in base - cur):
-            sys.exit(1)
+            r = subprocess.run(["git", "-C", repo, "show", root[0] + ":" + name], capture_output=True)
+            base = r.stdout if r.returncode == 0 else b""
+        p2 = os.path.join(repo, name)
+        cur = open(p2, "rb").read() if os.path.isfile(p2) else b""
+        if base == cur:
+            continue
+        with tempfile.TemporaryDirectory() as d:
+            a, b = os.path.join(d, "a"), os.path.join(d, "b")
+            open(a, "wb").write(base); open(b, "wb").write(cur)
+            out = subprocess.run(["git", "diff", "--no-index", "--no-color", "--no-ext-diff", "-U0", a, b], capture_output=True, text=True, errors="replace").stdout
+        expected[name] = changes(out.splitlines())
+    got = reviewed_changes((spies[-1].get("input_text") or "").splitlines())
+    if set(got) != set(expected) or any(got[n] != expected[n] for n in expected):
+        sys.exit(1)
 sys.exit(0)

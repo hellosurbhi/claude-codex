@@ -43,7 +43,7 @@ exec >"$o" 2>"$e"
 finish() {
   local rc=$?
   exec 1>&3 2>&4
-  python3 "$here/evlog.py" "$EVLOG" fake "$rc" "$resume" "$tid" "$pf" "$o" "$e" -- "${argv[@]+"${argv[@]}"}"
+  EV_META="${EV_META:-}" python3 "$here/evlog.py" "$EVLOG" fake "$rc" "$resume" "$tid" "$pf" "$o" "$e" -- "${argv[@]+"${argv[@]}"}"
   cat "$o"; cat "$e" >&2; rm -f "$o" "$e" "$pf"
   exit "$rc"
 }
@@ -72,10 +72,12 @@ if (( bad < ${FAKE_FAIL_FIRST:-0} )); then
   read -r -a modes <<< "${FAKE_FAIL_MODES:-dead}"
   mode=${modes[$(( bad % ${#modes[@]} ))]}
   if [[ $mode == dead ]]; then
+    export EV_META="result=DEAD"
     printf 'call=%s resume=%s result=DEAD\n' "$n" "${resume:-new}" >> "$FAKE_LOG"
     echo "codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED." >&2
     exit 1
   fi
+  export EV_META="result=MALFORMED mode=$mode"
   printf 'call=%s resume=%s result=MALFORMED mode=%s\n' "$n" "${resume:-new}" "$mode" >> "$FAKE_LOG"
   case "$mode" in
     empty) ;;
@@ -110,12 +112,16 @@ state="$({ cat "$dir"/app.py "$dir"/test*.py "$dir"/.claude/plan/*.md 2>/dev/nul
 impl=no; python3 "$(dirname "$0")/check-impl.py" "$dir/app.py" && impl=yes
 echo "THREAD_ID: $tid"
 if [[ $next == 0 ]]; then
+  # WHY the same line goes into the event (EV_META): the checks read the wrapper log, so a call that died before
+  # writing calls.log (an unknown-thread resume) cannot leave an earlier CLEAN standing as the last word (r17).
+  export EV_META="$(printf 'result=CLEAN state=%s impl=%s' "$state" "$impl")"
   printf 'call=%s resume=%s result=CLEAN state=%s impl=%s\n' "$n" "${resume:-new}" "$state" "$impl" >> "$FAKE_LOG"
   printf 'VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
   exit 0
 fi
 sev=${sevs[$(( (next - 1) % ${#sevs[@]} ))]}
 case "$sev" in CRITICAL) verdict=BLOCKED ;; HIGH) verdict=WARNING ;; *) verdict=APPROVED ;; esac
+export EV_META="$(printf 'result=%s round=%s state=%s impl=%s' "$sev" "$next" "$state" "$impl")"
 printf 'call=%s resume=%s result=%s round=%s state=%s impl=%s\n' "$n" "${resume:-new}" "$sev" "$next" "$state" "$impl" >> "$FAKE_LOG"
 echo "VERDICT: $verdict"
 for s in CRITICAL HIGH MEDIUM LOW; do
