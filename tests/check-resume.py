@@ -3,6 +3,7 @@
 # thread id an EARLIER non-resume execution created, with exactly one VERDICT line, which is valid.
 import json, re, sys
 from evlib import wrapper_runs, resume_id
+noverdict = "--no-verdict" in sys.argv
 ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 res = {e["id"]: e["text"] for e in ev if e["kind"] == "result"}
 initial, ok = set(), False
@@ -19,6 +20,7 @@ for e in ev:
         initial.update(tids)
         continue
     verds = re.findall(r"^VERDICT:.*$", out, re.M)
-    if rid in initial and tids == [rid] and len(verds) == 1 and re.fullmatch(r"VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)\s*", verds[0]):
+    valid = len(verds) == 0 and bool(out.strip()) if noverdict else (len(verds) == 1 and re.fullmatch(r"VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)\s*", verds[0]))
+    if rid in initial and tids == [rid] and valid:
         ok = True
 sys.exit(0 if ok else 1)

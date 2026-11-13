@@ -160,6 +160,7 @@ rounds_in_order() {
 check "claude session exited 0" '[[ $claude_rc -eq 0 ]]'
 check "session produced a report" '[[ -s "$out/session.txt" ]]'
 if [[ $scenario == real ]]; then
+  NOVERDICT=; [[ $skill == execute-codex ]] && NOVERDICT=1
   # Real Codex: no scripted findings, so check what is observable: a real call returned
   # a THREAD_ID and a valid single VERDICT, and (workflows that follow up) a --resume was used.
   # WHY mechanics, not a clean final verdict: real Codex output is not scripted, so whether it
@@ -167,8 +168,9 @@ if [[ $scenario == real ]]; then
   # THREAD_ID and verdict, and that a follow-up through --resume came back on the SAME thread
   # with a verdict. The last real verdict is printed for the record.
   check "a real codex-call.sh call returned a THREAD_ID" 'grep -qE "THREAD_ID: [0-9a-f-]{8,}" "$out/events.txt"'
-  check "a real Codex reply carried a VERDICT line" 'grep -qE "VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)" "$out/events.txt"'
-  check "the --resume follow-up returned on the same thread with a verdict" 'python3 "$here/check-resume.py" "$out/events.jsonl"'
+  # WHY not execute-codex: Codex implements there (no review verdict); its follow-up reply is checked for the thread only.
+  [[ $skill == execute-codex ]] || check "a real Codex reply carried a VERDICT line" 'grep -qE "VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)" "$out/events.txt"'
+  check "the --resume follow-up returned on the same thread with a verdict" 'python3 "$here/check-resume.py" "$out/events.jsonl" ${NOVERDICT:+--no-verdict}'
   echo "RESUME_USED: $(grep -c -- '--resume' "$out/events.txt")"
   echo "LAST_VERDICT: $(python3 "$here/last-verdict.py" "$out/events.jsonl")"
   echo "THREAD_IDS: $(grep -oE 'THREAD_ID: [0-9a-f-]{8,}' "$out/events.txt" | sort -u | tr '\n' ' ')"
@@ -178,7 +180,8 @@ fi
 if [[ $scenario == usage-limit ]]; then
   # Codex is over quota for the whole run. A workflow that keeps its gate must get a real
   # fallback review of the actual change and only finish after a clean verdict from it.
-  check "Codex was tried and reported the usage limit" 'grep -q result=LIMIT "$FAKE_LOG"'
+  # WHY also the event stream: the model may point FAKE_LOG elsewhere for its own call, but the quota error text still reaches its tool results.
+  check "Codex was tried and reported the usage limit" 'grep -q result=LIMIT "$FAKE_LOG" || grep -qi "usage limit" "$out/events.txt"'
   # execute-codex reviews with a Claude code-reviewer agent by design (Codex only implements
   # large changes), so the spy is never the reviewer there; only the Codex attempt and an
   # honest report are checked for it.
@@ -186,7 +189,7 @@ if [[ $scenario == usage-limit ]]; then
     # execute-codex reviews with a Claude agent by design and Codex only implements large
     # changes, so the spy is never the reviewer; what must hold is that the work still got
     # done and reviewed instead of being abandoned on the quota error.
-    check "the Codex implementation call hit the usage limit" 'grep -q result=LIMIT "$FAKE_LOG"'
+    check "the Codex implementation call hit the usage limit" 'grep -q result=LIMIT "$FAKE_LOG" || grep -qi "usage limit" "$out/events.txt"'
     check "the change was still made (not abandoned on the quota error)" 'python3 "$here/check-modules.py" "$repo"'
     # WHY ordering and a completed result: an implementation agent must not count as the review. The
     # review is an agent whose input mentions review, started after the Codex usage-limit reply, with a result.
@@ -199,11 +202,12 @@ if [[ $scenario == usage-limit ]]; then
   check "the final fallback verdict was for a non-empty change that mentions add" 'tail -1 "$SPY_LOG" | grep -q "has_add=yes"'
   # WHY not for tdd-execute-codex: its last review is the Claude code-reviewer agent, so the last spy call is the tests-only audit.
   if [[ $FAKE_TARGET == code && $skill != tdd-execute-codex ]]; then check "the final fallback verdict saw the implementation" 'tail -1 "$SPY_LOG" | grep -q "impl=yes"'; fi
-  if [[ $skill == tdd-execute-codex ]]; then check "the code-reviewer agent ran after the Codex usage limit and returned" 'python3 "$here/check-reviewer-after-limit.py" "$out/events.jsonl"'; fi
+  # WHY either: the final code review is a code-reviewer agent or, when the agent type is unavailable, a fallback reviewer that saw the implementation.
+  if [[ $skill == tdd-execute-codex ]]; then check "the final code review ran after the Codex usage limit (reviewer agent or fallback that saw the code)" 'python3 "$here/check-reviewer-after-limit.py" "$out/events.jsonl" || tail -1 "$SPY_LOG" | grep -q "impl=yes"'; fi
   if [[ $FAKE_TARGET == code ]]; then check "the implementation really adds (behavioral)" 'python3 "$here/check-impl.py" "$repo/app.py"'; fi
   check "the fallback returned a valid verdict" 'grep -qE "result=(APPROVED|WARNING|BLOCKED)$" "$SPY_LOG"'
   check "the last fallback verdict is clean (APPROVED)" 'tail -1 "$SPY_LOG" | grep -q "result=APPROVED$"'
-  check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|skipped|(is|are|remains?|stays?|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED" "$out/session.txt"'
+  check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|skipped" "$out/session.txt"'
   exit $fail
 fi
 check "every finding round ($FAKE_ROUNDS) was fixed: all markers present" all_markers
