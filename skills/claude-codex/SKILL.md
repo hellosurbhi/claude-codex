@@ -72,7 +72,7 @@ After all tasks complete (either path):
 
 **Step R1 — Run Codex Review via codex-call.sh**
 
-Before the call, run `git add -N .` in your own shell so newly created files appear in `git diff HEAD` (the Codex reviewer is read-only and cannot update the index itself). Call Codex via `codex-call.sh` with:
+Before the call, run `git add -N .` in your own shell first (the reviewer is read-only and cannot update the index, so new files reach the diff only this way). Call Codex via `codex-call.sh` with:
 - append to prompt: `"Be concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
@@ -120,7 +120,7 @@ Address ALL accepted findings before re-reviewing:
 - Collect every accepted CRITICAL, HIGH, MEDIUM and LOW finding from the last review
 - Fix them all with Edit/Write in one batch
 - Run available tests/lint to verify
-- Run `git add -N .` in your own shell again (so any file a fix created is included; the reviewer is read-only), then re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
+- Before re-calling, run `git add -N .` in your own shell first (the reviewer is read-only and cannot update the index, so new files reach the diff only this way); then re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
 Run `git diff HEAD` again to see the updated changes after fixes, then re-review.
@@ -135,6 +135,8 @@ There is no iteration cap and no stop to ask the user after N rounds: round 6, 1
 ---
 
 ### Phase 4: Delivery
+
+End the final report with exactly one machine-readable line, `AUDIT-STATUS: APPROVED reviewer=<name>` when the last review of the final state was clean, or `AUDIT-STATUS: UNREVIEWED reviewer=<name or none>` when it was not; no other line may start with `AUDIT-STATUS:`, and this line is the last non-blank line of the report.
 
 ```markdown
 ## Execution Complete

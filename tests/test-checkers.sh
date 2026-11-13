@@ -236,11 +236,6 @@ expect pass "scripted: two dead calls then a verdict satisfies failfirst 2" pyth
 bash "$fake" --resume nope again >/dev/null 2>&1
 expect fail "scripted: a bad call after the first verdict fails failfirst" python3 "$here/check-scripted.py" "$EVLOG" failfirst 2
 
-# carried finding: a truthful recovery report must not trip the UNREVIEWED check, a final UNREVIEWED status must.
-unrev() { printf '%s\n' "$1" | grep -qiE "$(cat "$here/unreviewed.re")"; }
-expect fail "a recovery report (initial UNREVIEWED, then approved) is not flagged" unrev "Initial review: UNREVIEWED. Retry succeeded. Final review: APPROVED."
-expect pass "a final Status: UNREVIEWED is flagged" unrev "Status: UNREVIEWED"
-expect pass "the changes remain UNREVIEWED is flagged" unrev "The changes remain UNREVIEWED."
 
 # r18: nested modules, start-time order, spy success stderr, shim header.
 rv; mkdir -p pkg; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > pkg/mod.py
@@ -271,8 +266,6 @@ mkrun; cd "$tmp/run/repo"; REAL_CODEX="$tmp/bin/stderrquota" bash "$here/shim/co
 expect pass "a stderr-only quota error is logged once through the wrapper's Codex CLI said header" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print(e["stderr"].count("usage limit")==1 and "Codex CLI said" in e["stderr"])' "$here" "$EVLOG")" = "True"
 expect pass "and it counts as the usage limit" python3 "$here/check-limit-hit.py" "$EVLOG"
 # the final status, not history: an early incomplete audit followed by an approved fallback is not flagged.
-expect fail "Initial audit incomplete due to quota, final fallback APPROVED is not flagged" unrev "Initial Codex audit incomplete due to quota. Final fallback review: APPROVED."
-expect pass "Review incomplete as a final statement is flagged" unrev "Final status: review incomplete. The changes are UNREVIEWED."
 
 # r20: whatever the output path is, the reply reaches the caller exactly once and the event records exactly what was delivered.
 for op in /dev/stdout /dev/fd/1 "$tmp/o.txt"; do
@@ -322,5 +315,17 @@ fake[0]["ts"]=spy[0]["ts_start"]-5; fake[0]["ts_start"]=fake[0]["ts"]-1
 open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in fake+spy)+"\n")
 PY
 expect fail "a stale patch with the same added line at another location is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+
+# r20: the proof asserts on one structured AUDIT-STATUS line only
+st() { printf '%s\n' "$1" > "$tmp/rep.txt"; shift; python3 "$here/audit-status.py" "$tmp/rep.txt" "$@"; }
+expect pass "a report ending in an APPROVED status line is accepted" st $'Initial review: UNREVIEWED. Retry ok.\nAUDIT-STATUS: APPROVED reviewer=codex' --expect APPROVED
+expect fail "prose saying UNREVIEWED with no status line is rejected" st "The changes remain UNREVIEWED."
+expect fail "an UNREVIEWED status is rejected when APPROVED is expected" st $'x\nAUDIT-STATUS: UNREVIEWED reviewer=none' --expect APPROVED
+expect pass "an UNREVIEWED status matches an UNREVIEWED expectation" st $'x\nAUDIT-STATUS: UNREVIEWED reviewer=none' --expect UNREVIEWED
+expect fail "two status lines are rejected" st $'AUDIT-STATUS: UNREVIEWED reviewer=none\nAUDIT-STATUS: APPROVED reviewer=codex'
+expect fail "a status line that is not last is rejected" st $'AUDIT-STATUS: APPROVED reviewer=codex\nThanks'
+expect fail "a malformed status line is rejected" st $'AUDIT-STATUS: DONE reviewer=codex'
+expect pass "a trailing blank line after the status is fine" st $'AUDIT-STATUS: APPROVED reviewer=sonnet\n\n' --expect APPROVED
+expect pass "every skill and command carries identical mirrored instructions" python3 "$here/test-mirrors.py"
 
 exit $fail

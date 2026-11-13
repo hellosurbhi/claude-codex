@@ -65,6 +65,8 @@ There is no iteration cap and no stop to ask the user: keep revising and re-audi
 
 ### Phase 3: Deliver
 
+End the final report with exactly one machine-readable line, `AUDIT-STATUS: APPROVED reviewer=<name>` when the last review of the final state was clean, or `AUDIT-STATUS: UNREVIEWED reviewer=<name or none>` when it was not; no other line may start with `AUDIT-STATUS:`, and this line is the last non-blank line of the report.
+
 Present the final plan and output:
 
 ---

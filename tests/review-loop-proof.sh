@@ -180,7 +180,7 @@ if [[ $scenario == real ]]; then
   echo "LAST_VERDICT: $(python3 "$here/last-verdict.py" "$out/wrapper.jsonl")"
   echo "THREAD_IDS: $(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; print(" ".join(sorted({e["thread_id"] for e in wlog.load(sys.argv[2]) if e["thread_id"]})))' "$here" "$out/wrapper.jsonl")"
   echo "SECONDARY (transcript): resume mentions=$(grep -c -- '--resume' "$out/events.txt")"
-  check "final report does not label the work UNREVIEWED" '! grep -qiE "$(cat "$here/unreviewed.re")" "$out/session.txt"'
+  check "final report ends with one AUDIT-STATUS: APPROVED line" 'python3 "$here/audit-status.py" "$out/session.txt" --expect APPROVED'
   exit $fail
 fi
 if [[ $scenario == usage-limit ]]; then
@@ -201,8 +201,7 @@ if [[ $scenario == usage-limit ]]; then
     # review is an agent whose input mentions review, started after the Codex usage-limit reply, with a result.
     # WHY the log, not an agent: on quota the review must come from a non-implementer fallback reviewer (reviewer.sh -> spy), which logs.
     check "the final clean review after the quota hit came from a fallback reviewer on the implementation phase" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --repo "$repo"'
-    check "final report does not say the review was skipped" '! grep -qiE "\b(review|audit)\b[^.]{0,40}\bskipped\b|\bskipped\b[^.]{0,20}\b(review|audit)\b" "$out/session.txt"'
-    check "final report does not say nothing was written or vetted" '! grep -qiE "no code was written|nothing is vetted|did not fall back|(changes?|work|plan|diff|code|implementation|modules) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
+    check "final report ends with one AUDIT-STATUS: APPROVED line" 'python3 "$here/audit-status.py" "$out/session.txt" --expect APPROVED'
     exit $fail
   fi
   # WHY all of these read the wrapper log: the last spy execution after the quota hit is the final fallback review.
@@ -212,7 +211,7 @@ if [[ $scenario == usage-limit ]]; then
     check "the last fallback review after the quota hit was exactly clean and of the current non-empty plan" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --plan-file "$(ls -t "$repo"/.claude/plan/*.md 2>/dev/null | head -1)"'
   fi
   if [[ $FAKE_TARGET == code ]]; then check "the implementation really adds (behavioral)" 'python3 "$here/check-impl.py" "$repo/app.py"'; fi
-  check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|\b(review|audit)\b[^.]{0,40}\bskipped\b|\bskipped\b[^.]{0,20}\b(review|audit)\b|(changes?|work|plan|diff|code|implementation) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
+  check "final report ends with one AUDIT-STATUS: APPROVED line" 'python3 "$here/audit-status.py" "$out/session.txt" --expect APPROVED'
   exit $fail
 fi
 check "every finding round ($FAKE_ROUNDS) was fixed: all markers present" all_markers
@@ -229,7 +228,5 @@ fi
 if [[ $scenario == failed || $scenario == malformed ]]; then
   check "the first $FAKE_FAIL_FIRST calls returned no valid verdict, the next one did, and none after" 'python3 "$here/check-scripted.py" "$out/wrapper.jsonl" failfirst "$FAKE_FAIL_FIRST"'
 fi
-# WHY a phrase match, not any mention of UNREVIEWED: the report may truthfully narrate
-# that early calls "died with UNREVIEWED"; the failure is claiming the work still is.
-check "final report does not label the work UNREVIEWED" '! grep -qiE "$(cat "$here/unreviewed.re")" "$out/session.txt"'
+check "final report ends with one AUDIT-STATUS: APPROVED line" 'python3 "$here/audit-status.py" "$out/session.txt" --expect APPROVED'
 exit $fail
