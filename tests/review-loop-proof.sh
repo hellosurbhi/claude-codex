@@ -7,7 +7,7 @@
 #                  loaded as project skills) or the literal `installed` (loads the
 #                  user-level skills at ~/.claude/skills, the installed copies)
 #   skill:         claude-codex | plan-codex
-#   scenario:      round6 | high-only | medium-only | low-only | failed
+#   scenario:      round6 | high-only | medium-only | low-only | failed | malformed
 #
 # WHY the appended system prompt: every skill calls the wrapper at the fixed path
 # ~/.claude/config/scripts/codex-call.sh. Pointing a temp HOME at a fake there
@@ -38,7 +38,8 @@ case "$scenario" in
   high-only)   export FAKE_ROUNDS=2 FAKE_SEVERITIES=HIGH ;;
   medium-only) export FAKE_ROUNDS=2 FAKE_SEVERITIES=MEDIUM ;;
   low-only)    export FAKE_ROUNDS=2 FAKE_SEVERITIES=LOW ;;
-  failed)      export FAKE_ROUNDS=1 FAKE_FAIL_FIRST=2 FAKE_SEVERITIES=HIGH ;;
+  failed)      export FAKE_ROUNDS=1 FAKE_FAIL_FIRST=2 FAKE_FAIL_MODES="dead dead" FAKE_SEVERITIES=HIGH ;;
+  malformed)   export FAKE_ROUNDS=1 FAKE_FAIL_FIRST=4 FAKE_FAIL_MODES="empty noverdict dup bad" FAKE_SEVERITIES=HIGH ;;
   *) echo "unknown scenario: $scenario" >&2; exit 2 ;;
 esac
 cd "$repo"
@@ -66,7 +67,7 @@ esac
 seam="TEST HARNESS: for this run the Codex wrapper lives at $fake. Wherever a skill says ~/.claude/config/scripts/codex-call.sh, including its availability check, run $fake with the same arguments instead. Everything else in the skill applies unchanged. You are running unattended: never wait for user input."
 claude -p "$task" --model sonnet --setting-sources "$sources" \
   --permission-mode acceptEdits \
-  --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill Edit(./.claude/plan/**) Write(./.claude/plan/**)" \
+  --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill Edit(./.claude/plan/**) Edit(.claude/plan/**)" \
   --append-system-prompt "$seam" > "$out/session.txt" 2> "$out/session.err" && claude_rc=0 || claude_rc=$?
 echo "== $skill $scenario ($src) -> $out"
 cat "$FAKE_LOG"
@@ -74,7 +75,9 @@ fail=0
 check() { if eval "$2"; then echo "PASS: $1"; else echo "FAIL: $1"; fail=1; fi; }
 all_markers() {
   local k
-  for k in $(seq 1 "$FAKE_ROUNDS"); do grep -rqsw --exclude-dir=.git "review-fix-$k" "$repo" || return 1; done
+  for k in $(seq 1 "$FAKE_ROUNDS"); do
+    grep -Eqs -- "^[[:space:]]*(#|//|<!--).*review-fix-$k([^0-9]|\$)" "$repo/app.py" "$repo"/.claude/plan/*.md || return 1
+  done
 }
 # Each finding round K must appear as a real reviewer call, in order, then a CLEAN call after the last.
 rounds_in_order() {
@@ -89,10 +92,12 @@ check "session produced a report" '[[ -s "$out/session.txt" ]]'
 check "every finding round ($FAKE_ROUNDS) was fixed: all markers present" all_markers
 check "reviewer calls reached finding rounds 1..$FAKE_ROUNDS in order" rounds_in_order
 check "re-reviewed after the last finding round and got a clean round" 'tail -1 "$FAKE_LOG" | grep -q result=CLEAN'
-if [[ $scenario == failed ]]; then
-  check "first two calls died with no verdict" '[[ $(sed -n 1,2p "$FAKE_LOG" | grep -c result=DEAD) -eq 2 ]]'
-  check "kept going after two dead calls (call 3 returned a verdict)" 'sed -n 3p "$FAKE_LOG" | grep -qv result=DEAD'
-  check "no further dead calls after the first verdict" '[[ $(grep -c result=DEAD "$FAKE_LOG") -eq 2 ]]'
+if [[ $scenario == failed || $scenario == malformed ]]; then
+  check "the first $FAKE_FAIL_FIRST calls returned no valid verdict" '[[ $(sed -n "1,${FAKE_FAIL_FIRST}p" "$FAKE_LOG" | grep -cE "result=(DEAD|MALFORMED)") -eq $FAKE_FAIL_FIRST ]]'
+  check "kept going: the next call returned a verdict" 'sed -n "$((FAKE_FAIL_FIRST + 1))p" "$FAKE_LOG" | grep -qvE "result=(DEAD|MALFORMED)"'
+  check "no bad calls after the first verdict" '[[ $(grep -cE "result=(DEAD|MALFORMED)" "$FAKE_LOG") -eq $FAKE_FAIL_FIRST ]]'
 fi
-check "final report does not label the work UNREVIEWED" '! grep -q UNREVIEWED "$out/session.txt"'
+# WHY a phrase match, not any mention of UNREVIEWED: the report may truthfully narrate
+# that early calls "died with UNREVIEWED"; the failure is claiming the work still is.
+check "final report does not label the work UNREVIEWED" '! grep -qiE "(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?UNREVIEWED|review incomplete|audit incomplete" "$out/session.txt"'
 exit $fail
