@@ -8,7 +8,7 @@ Skills are the primary interface. They support eval-based testing via skill-crea
 
 | Skill | Trigger | Description |
 |-------|---------|-------------|
-| `plan-codex` | `/plan-codex <task>` | Claude plans with Opus, Codex audits once for correctness/completeness/security; re-audit only on BLOCKED |
+| `plan-codex` | `/plan-codex <task>` | Claude plans with Opus, Codex audits for correctness, completeness and security, re-auditing until no findings remain |
 | `claude-codex` | `/claude-codex <task or plan>` | Claude implements, Codex reviews with APPROVED/WARNING/BLOCKED verdicts |
 | `execute-codex` | `/execute-codex <task or plan>` | Smart size-based routing: Claude (small) or Codex (large) implements, code-reviewer reviews |
 | `tdd-claude-codex` | `/tdd-claude-codex <task or plan>` | TDD: Claude writes tests, Codex audits tests, Claude implements, Codex reviews implementation |
@@ -21,19 +21,18 @@ Commands (`commands/`) are retained for backward compatibility — they support 
 ```
 /plan-codex <task>
   Claude Opus + Plan agent    → creates structured plan
-  Codex audits the plan       → flags issues (max 3 rounds)
+  Codex audits the plan       → re-audits until a round has no findings
   Plan saved to .claude/plan/<feature>.md
 
 /execute-codex <task or plan file>
   Small change (≤2 files, ≤30 lines) → Claude implements directly
   Large change                        → Codex implements
-  feature-dev code-reviewer agent      → reviews diff (max 3 rounds)
+  feature-dev code-reviewer agent      → re-reviews until a round has no findings
 
 /claude-codex <task or plan file>
   Claude implements (any model)       → Edit/Write + self-verify
   Codex reviews uncommitted changes   → returns structured verdict (APPROVED/WARNING/BLOCKED)
-  Claude fixes findings               → re-review only on BLOCKED (max 3 rounds)
-  MEDIUM/LOW issues                   → user decides before delivery
+  Claude fixes findings               → fix and re-review at any severity until a clean round
 ```
 
 ## Dependencies
@@ -59,6 +58,8 @@ Or with your OpenAI API key:
 ```bash
 export OPENAI_API_KEY=your-key-here
 ```
+
+The Codex wrapper (install step 3) also needs `python3` to read the Codex event stream. Check with `python3 --version`.
 
 ### 3. feature-dev plugin
 
@@ -95,26 +96,35 @@ hide_agent_reasoning = true
 
 Note: this is a top-level key. If your `config.toml` already has `[table]` sections, add it above the first one (TOML keys appended after a table header belong to that table).
 
-### 3. Add Codex as an MCP server
+### 3. Install the Codex wrapper
+
+Codex CLI 0.154.0 removed `codex mcp-server`, so there is no MCP server to add. The skills call `codex exec` through one wrapper script, `scripts/codex-call.sh` in this repo. Every skill calls it at one fixed path, so install it there:
 
 ```bash
-claude mcp add codex -s user -- codex -c model=gpt-5.6-sol -c model_reasoning_effort=xhigh mcp-server
+mkdir -p ~/.claude/config/scripts
+cp scripts/codex-call.sh ~/.claude/config/scripts/codex-call.sh
+chmod +x ~/.claude/config/scripts/codex-call.sh
 ```
 
-Adjust `model` and `model_reasoning_effort` (`low`/`medium`/`high`/`xhigh`) to your preference. Available models depend on your Codex plan, account type and CLI version: on ChatGPT-account auth the bare `gpt-5.6` alias is API-only and gets rejected, use `gpt-5.6-sol`. If Codex calls fail with an `invalid_request_error`, re-run with a model your account supports.
+Without it, each skill's availability check fails: `/plan-codex`, `/claude-codex` and the final review in `/tdd-claude-codex` stop and say Codex is unavailable, while `/execute-codex` and `/tdd-execute-codex` fall back to Claude implementing directly. Both TDD skills skip the Codex test audit.
 
-### 4. Restart Claude Code
+Put the model in a `review` profile at `~/.codex/review.config.toml` (one file per profile in Codex 0.164+):
 
-```
-/exit
-claude
+```toml
+model = "<newest model your plan offers>"
+model_reasoning_effort = "xhigh"
+approval_policy = "never"
 ```
 
-Verify the MCP server is connected:
+Available models depend on your Codex plan, account type and CLI version (`~/.codex/models_cache.json` lists them).
 
+### 4. Verify
+
+```bash
+~/.claude/config/scripts/codex-call.sh "Reply with the single word OK"
 ```
-/mcp
-```
+
+It prints `THREAD_ID: <id>` then `OK`.
 
 ## Usage
 
@@ -140,7 +150,7 @@ Or skip the plan step for a direct task:
 
 Claude routes automatically:
 - **Small change** (≤2 files, ≤30 lines, no new logic) — Claude implements directly, Sonnet reviews
-- **Large change** — Codex implements, Sonnet reviews and feeds back (max 3 rounds)
+- **Large change** — Codex implements, Sonnet reviews and feeds back until a round has no findings
 
 ### Execution (Claude implements, Codex reviews)
 
@@ -154,10 +164,10 @@ Or for a direct task:
 /claude-codex Add input validation to the registration endpoint
 ```
 
-Claude implements using the active model (default: Sonnet; override with `/model opus` for heavier tasks). Codex reviews the uncommitted diff via MCP, returning a structured verdict (APPROVED / WARNING / BLOCKED):
-- **BLOCKED** (CRITICAL issues) — Claude fixes, Codex re-reviews (max 3 rounds)
-- **WARNING** (HIGH issues) — Claude fixes them, verifies with tests/lint, and proceeds; no re-review call
-- **MEDIUM/LOW issues** — surfaced to user; user decides whether to fix before delivery
+Claude implements using the active model (default: Sonnet; override with `/model opus` for heavier tasks). Codex reviews the uncommitted diff via `codex exec`, returning a structured verdict (APPROVED / WARNING / BLOCKED):
+- **Any accepted finding at any severity** (CRITICAL, HIGH, MEDIUM or LOW, under any verdict): Claude fixes it, verifies with tests/lint and Codex re-reviews
+- **Done** only when a round lists no accepted findings; there is no round cap, so round 6 and beyond continue while findings remain
+- **Failed review** (error, timeout, no verdict): never an approval. Claude fixes the cause and retries, or switches to another reviewer, until a verdict arrives. The changes are reported UNREVIEWED only for a named blocker it cannot clear (missing credentials, every reviewer unavailable)
 
 ### Model Override
 
@@ -174,7 +184,7 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
 ~/.claude/
 ├── skills/
 │   ├── codex-mcp/
-│   │   ├── SKILL.md                  # Auto-loaded Codex MCP usage knowledge
+│   │   ├── SKILL.md                  # Auto-loaded Codex usage knowledge
 │   │   └── reference.md              # Detailed patterns and examples
 │   ├── plan-codex/
 │   │   ├── SKILL.md                  # /plan-codex skill
@@ -203,14 +213,21 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
 │   ├── claude-codex.md
 │   ├── tdd-claude-codex.md
 │   └── tdd-execute-codex.md
-└── prompts/
-    └── codex/
-        ├── analyzer.md      # Codex role: plan auditor (source for skill bundles)
-        ├── architect.md     # Codex role: implementer (source for skill bundles)
-        └── reviewer.md      # Codex role: code reviewer
+├── prompts/
+│   └── codex/
+│       ├── analyzer.md      # Codex role: plan auditor (source for skill bundles)
+│       ├── architect.md     # Codex role: implementer (source for skill bundles)
+│       └── reviewer.md      # Codex role: code reviewer
+├── scripts/
+│   └── codex-call.sh        # codex exec wrapper every skill calls (install step 3)
+└── tests/
+    ├── review-loop-proof.sh # runs a real headless Claude session through a skill with a scripted reviewer
+    └── fake-codex-call.sh   # the scripted reviewer: one finding per round, tied to repo state
 ```
 
-The `prompts/codex/` files are injected into `developer-instructions` on each Codex MCP call to shape its behaviour per phase.
+`tests/review-loop-proof.sh <skills-dir|installed> <claude-codex|plan-codex> <round6|high-only|medium-only|low-only|failed|malformed>` proves the loop has no round cap and no severity floor: it passes only when every scripted round is fixed, round 6 is reached in the `round6` scenario, the run ends on a clean re-review, and in the `failed` scenario two dead calls (and in `malformed` an empty, verdict-less, duplicate-verdict and invalid-verdict reply) are followed by more calls until a verdict arrives. The output directory must be empty. Each run is a real Claude session, so it uses API quota.
+
+The `prompts/codex/` files are passed via `--role` on each Codex call to shape its behaviour per phase.
 
 ## Credits
 
@@ -220,6 +237,6 @@ The `prompts/codex/` files are injected into `developer-instructions` on each Co
 ## Notes
 
 - Plans are saved to `.claude/plan/` in your project directory — add to `.gitignore` if you don't want them committed
-- Max 3 iterations on all loops to keep token usage predictable
-- The `codex-mcp` skill auto-loads when Codex MCP tools are relevant, providing Claude with session management patterns and best practices
-- `/claude-codex` uses the Codex MCP server for review — Codex runs `git diff HEAD` itself and returns a structured verdict only, minimising token usage
+- No iteration cap on any review loop: every loop runs until a round has no accepted findings at any severity, and a failed review leaves the work UNREVIEWED
+- The `codex-mcp` skill auto-loads when Codex calls are relevant, providing Claude with session management patterns and best practices
+- `/claude-codex` uses `codex exec` for review — Codex runs `git diff HEAD` itself and returns a structured verdict only, minimising token usage

@@ -25,7 +25,7 @@ Advisory checklist — ensure these tools are available:
 - `Read`, `Glob`, `Grep` — context retrieval
 - `Write`, `Edit` — write tests and implement
 - `Bash` — run tests/lint/git commands
-- `mcp__codex__codex` and `mcp__codex__codex-reply` — Codex test audit and implementation review
+- `Bash` running `~/.claude/config/scripts/codex-call.sh` (wraps `codex exec`; follow-ups use `--resume THREAD_ID`) — Codex test audit and implementation review
 
 ## Core Protocols
 
@@ -33,7 +33,7 @@ Advisory checklist — ensure these tools are available:
 - **Sovereignty**: Claude implements; Codex is the external reviewer — do not skip review
 - **Stop-Loss**: Do not proceed to the next phase until the current phase output is validated
 - **Language**: Use English when calling tools/models; communicate with user in their language
-- **MCP for review**: Always call Codex review via `mcp__codex__codex`. Do NOT use Bash `codex review`
+- **Wrapper for review**: Always call Codex review via `codex-call.sh`. Do NOT use bare `codex review`: it produces verbose output that wastes context.
 - **Context Sanitization**: Never pass `.env`, secrets, tokens, API keys, or credentials to any external agent or MCP. Exclude files matching `.env*`, `*secret*`, `*credential*`, `*.pem`, `*.key`. Redact inline secrets before sending.
 
 ## Execution Workflow
@@ -76,18 +76,18 @@ Apply the returned test files using Write/Edit.
 - If tests pass unexpectedly → tests are wrong; revise and re-verify RED
 - If tests fail for wrong reasons (syntax errors, broken imports unrelated to missing implementation) → fix the test file, re-run
 
-### Phase 3: Codex Test Audit (max 2 iterations)
+### Phase 3: Codex Test Audit (re-audit until a round has no accepted findings at any severity; no iteration cap)
 
-**MANDATORY Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). If the tool is genuinely absent from both locations, **degrade gracefully**: note "Codex unavailable — test audit skipped" and proceed to Phase 4. Do not stop — implementation can continue without the test audit.
+**MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **degrade gracefully**: note "Codex unavailable: test audit skipped, the tests are UNREVIEWED" and proceed to Phase 4. Carry that line into the delivery report; never report a skipped audit as approved. Do not stop; implementation can continue without the test audit. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
 Before implementing, have Codex review the tests for quality, completeness, and edge case coverage.
 
 Run `git add -N .` to mark new test files as intent-to-add.
 
-Read `codex-analyzer-role.md` from this skill directory and inject as `developer-instructions`.
+Pass the installed path `~/.claude/skills/tdd-claude-codex/codex-analyzer-role.md` as `--role` (an absolute path: a bare filename is read relative to the project directory).
 
-**Call `mcp__codex__codex`** (iteration 1):
-- `developer-instructions`: {content of codex-analyzer-role.md} + `"\nBe concise. Return only the structured verdict format. No prose."`
+**Call `codex-call.sh`** (iteration 1):
+- append to prompt: (`--role ~/.claude/skills/tdd-claude-codex/codex-analyzer-role.md`) `"\nBe concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
 ```
@@ -109,31 +109,32 @@ MEDIUM: <list or 'none'>
 LOW: <list or 'none'>
 ```
 
-Save the returned `threadId` (separate from the implementation review threadId).
+Save the returned `THREAD_ID` (separate from the implementation review THREAD_ID).
 
-**Parse response**:
-- **APPROVED** → proceed to Phase 4
-- **WARNING** (no CRITICAL) → critically evaluate findings (see below), fix the accepted ones in the test files, re-verify RED, then proceed with **no further Codex call**
-- **BLOCKED** → critically evaluate findings before fixing (see below), then fix and re-audit
+**Failed audit**: a Codex call that errors, times out, exits without a final message (`codex-call.sh` exits non-zero with "UNREVIEWED") or replies without exactly one valid `VERDICT:` line (APPROVED, WARNING or BLOCKED) is NOT an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (a fresh Codex thread without `--resume`, or for committed changes the CodeRabbit CLI via `REVIEW_BASE_SHA=<base commit> ~/.claude/config/scripts/reviewer.sh R <diff-file> <out-file>`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). When the verdict comes from a fresh Codex thread, its new `THREAD_ID` replaces the saved reviewer `THREAD_ID` only (never an implementation `THREAD_ID`) for every later review `--resume`; the CodeRabbit CLI has no thread and takes no prompt, so each follow-up is a fresh review of the new committed state, and a finding you contest is settled only by a Codex reviewer's explicit concession. Stop and report "test audit incomplete, the tests are UNREVIEWED: <blocker>" only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable for a reason the error text names (a call that merely died, timed out or returned nothing, even several times in a row, is never a blocker: keep retrying and switching reviewers), and name the blocker when you do. Phase 4 starts only after a clean audit, or after that named blocker with the tests labeled UNREVIEWED in the delivery report and in your final message.
+
+**Parse response**: every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
+- **Any findings at any severity** (BLOCKED, WARNING or APPROVED with MEDIUM/LOW findings listed) → critically evaluate each one (see below), fix the accepted ones in the test files, re-verify RED, and re-audit.
+- **Done** → a round that lists no findings, or whose every finding was dropped through the discussion path below. Only then proceed to Phase 4.
 
 **Critical Evaluation of Test Audit Findings**
 
-Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
+Before fixing any issues, critically evaluate each finding, at every severity:
 
 1. **Assess correctness**: Is the finding technically accurate? Check the test code and project test conventions.
 2. **Check context**: Does the reviewer have full context about the testing strategy and requirements?
 3. **Verify applicability**: Does the suggestion improve test quality, or is it a preference / false positive?
 
 **If a finding seems incorrect or questionable:**
-- Do NOT fix it or count it as an iteration. Instead, reply to the reviewer with your technical reasoning.
-- Call `mcp__codex__codex-reply` (reuse threadId) explaining why the finding appears incorrect, with specific test code references.
+- Do NOT fix it yet. Instead, reply to the reviewer with your technical reasoning.
+- Call `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) explaining why the finding appears incorrect, with specific test code references.
 - If the reviewer provides additional justification that is convincing, accept the finding.
-- If the reviewer concedes or cannot justify further, drop the finding.
-- Discussion replies do NOT increment the iteration counter — only fix-and-re-review cycles count.
+- Drop the finding only when the reviewer explicitly concedes it in writing. If it maintains the finding or gives no clear answer, accept it and fix it; your own disagreement never drops a finding.
+- A discussion reply never ends the loop by itself: the loop ends only when a round has no accepted findings.
 
-**If findings are accepted:** Claude fixes all accepted CRITICAL/HIGH issues in the test files and re-verifies RED. Only a BLOCKED verdict re-calls via `mcp__codex__codex-reply` (max 2 iterations); a WARNING proceeds after the fixes with no further call.
+**If findings are accepted:** Claude fixes every accepted finding (CRITICAL, HIGH, MEDIUM or LOW) in the test files, re-verifies RED, and re-calls `codex-call.sh --resume <THREAD_ID>` to re-audit.
 
-After 2 iterations still BLOCKED, stop and ask user for direction.
+There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict (including a nonempty reply with no, several or an invalid `VERDICT:` line) is never an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (a fresh Codex thread without `--resume`, or for committed changes the CodeRabbit CLI via `REVIEW_BASE_SHA=<base commit> ~/.claude/config/scripts/reviewer.sh R <diff-file> <out-file>`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). When the verdict comes from a fresh Codex thread, its new `THREAD_ID` replaces the saved reviewer `THREAD_ID` only (never an implementation `THREAD_ID`) for every later review `--resume`; the CodeRabbit CLI has no thread and takes no prompt, so each follow-up is a fresh review of the new committed state, and a finding you contest is settled only by a Codex reviewer's explicit concession. Stop and report the work as UNREVIEWED only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable for a reason the error text names (a call that merely died, timed out or returned nothing, even several times in a row, is never a blocker: keep retrying and switching reviewers), and name the blocker when you do.
 
 ### Phase 4: Claude Implements (GREEN)
 
@@ -164,16 +165,16 @@ After all tasks complete (either path):
 - If coverage tooling is available: check coverage (target 80%+); add tests if below threshold
 - If coverage tooling is not available: skip and note "coverage not measured" in delivery
 
-### Phase 6: Codex Review (max 3 iterations)
+### Phase 6: Codex Review (re-review until a round has no accepted findings at any severity; no iteration cap)
 
-**MANDATORY Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). Do NOT skip or bypass this phase. If the tool is genuinely absent from both locations, **stop and tell the user**: "Codex MCP is not available for implementation review. This skill requires Codex for the final review. Please add the Codex MCP server or use a different skill." Do not proceed without Codex — the final Codex review is this skill's differentiator from plain TDD.
+**MANDATORY Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, **stop and tell the user**: "Codex CLI or codex-call.sh is not available. This skill requires Codex." Do NOT skip or bypass this phase. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
-**Step R1 — Run Codex Review via MCP**
+**Step R1 — Run Codex Review via codex-call.sh**
 
 Before calling Codex, run `git add -N .` to mark any new untracked files as intent-to-add. This ensures `git diff $START_SHA` shows all created files, not just modifications.
 
-Call `mcp__codex__codex` with:
-- `developer-instructions`: `"Be concise. Return only the structured verdict format. No prose."`
+Call `codex-call.sh` with:
+- append to prompt: `"Be concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
 ```
@@ -189,37 +190,38 @@ MEDIUM: <list or 'none'>
 LOW: <list or 'none'>
 ```
 
-Save the returned `threadId` for follow-up replies.
+Save the returned `THREAD_ID` for follow-up replies.
 
-Classify the verdict:
-- **APPROVED** — no CRITICAL or HIGH → handle any MEDIUM/LOW findings per Step R3, then go to Phase 7
-- **WARNING** — HIGH issues only → critically evaluate (R1.5), fix all accepted HIGHs in one batch, re-run the test suite (all tests must stay GREEN), handle MEDIUM/LOW per Step R3, then go to Phase 7 with **no re-review call**. The HIGHs are fixed and verified; only the paid re-verification round is skipped
-- **BLOCKED** — CRITICAL issues → fix all, increment iteration, re-review
+**Failed review**: a Codex call that errors, times out, exits without a final message (`codex-call.sh` exits non-zero with "UNREVIEWED") or replies without exactly one valid `VERDICT:` line (APPROVED, WARNING or BLOCKED) is NOT an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (a fresh Codex thread without `--resume`, or for committed changes the CodeRabbit CLI via `REVIEW_BASE_SHA=<base commit> ~/.claude/config/scripts/reviewer.sh R <diff-file> <out-file>`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). When the verdict comes from a fresh Codex thread, its new `THREAD_ID` replaces the saved reviewer `THREAD_ID` only (never an implementation `THREAD_ID`) for every later review `--resume`; the CodeRabbit CLI has no thread and takes no prompt, so each follow-up is a fresh review of the new committed state, and a finding you contest is settled only by a Codex reviewer's explicit concession. Stop and tell the user: "Codex review incomplete. The changes are UNREVIEWED: <blocker>." only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable for a reason the error text names (a call that merely died, timed out or returned nothing, even several times in a row, is never a blocker: keep retrying and switching reviewers), and name the blocker when you do. Never deliver the changes as reviewed.
+
+Classify the verdict. Every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
+- **Any findings at any severity** (BLOCKED, WARNING or APPROVED with MEDIUM/LOW findings listed) → critically evaluate each one (R1.5), then fix and re-review (R2).
+- **Done** → a round that lists no findings (`none` on every severity line), or whose every finding was dropped through the R1.5 discussion path. Only then go to Phase 7.
 
 **Step R1.5 — Critical Evaluation of Review Findings**
 
-Before fixing any issues, critically evaluate each CRITICAL/HIGH finding:
+Before fixing any issues, critically evaluate each finding, at every severity:
 
 1. **Assess correctness**: Is the finding technically accurate? Check the actual code and project conventions.
 2. **Check context**: Does the reviewer have full context, or is it flagging intentional design decisions?
 3. **Verify applicability**: Does the suggestion improve correctness/security, or is it a style preference / false positive?
 
 **If a finding seems incorrect or questionable:**
-- Do NOT fix it or count it as an iteration. Instead, reply to the reviewer with your technical reasoning.
-- Call `mcp__codex__codex-reply` (reuse threadId) explaining why the finding appears incorrect, with specific code references.
+- Do NOT fix it yet. Instead, reply to the reviewer with your technical reasoning.
+- Call `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) explaining why the finding appears incorrect, with specific code references.
 - If the reviewer provides additional justification that is convincing, accept the finding and include it in the fix batch.
-- If the reviewer concedes or cannot justify further, drop the finding.
-- Discussion replies do NOT increment the iteration counter — only fix-and-re-review cycles count.
+- Drop the finding only when the reviewer explicitly concedes it in writing. If it maintains the finding or gives no clear answer, accept it and fix it; your own disagreement never drops a finding.
+- A discussion reply never ends the loop by itself: the loop ends only when a round has no accepted findings.
 
 **If all findings appear correct:** proceed directly to Step R2.
 
-**Step R2 — Fix and Re-review (BLOCKED verdicts only)**
+**Step R2 — Fix and Re-review (every round with accepted findings)**
 
-Address ALL accepted CRITICAL and HIGH issues before re-reviewing:
-- Collect every CRITICAL/HIGH finding from the last review
+Address ALL accepted findings before re-reviewing:
+- Collect every accepted CRITICAL, HIGH, MEDIUM and LOW finding from the last review
 - Fix them all with Edit/Write in one batch
-- Run available tests/lint to verify
-- Re-call Codex via `mcp__codex__codex-reply` (reuse threadId) with:
+- Run the test suite (all tests must stay GREEN) and lint to verify
+- Re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
 Run `git diff $START_SHA` again to see the updated changes, then re-review.
@@ -227,19 +229,9 @@ Run `git diff $START_SHA` again to see the updated changes, then re-review.
 Return ONLY the structured verdict in the same format.
 ```
 
-One review per iteration, not one review per fix. Only BLOCKED verdicts trigger a re-review; a re-review that comes back WARNING follows the WARNING rule above (fix accepted HIGHs, proceed, no further call).
-After 3 iterations still BLOCKED, stop and report remaining issues to user.
+One review per round, not one review per fix.
 
-**Step R3 — MEDIUM / LOW Issues**
-
-After CRITICAL/HIGH are resolved, collect any remaining MEDIUM and LOW issues.
-If any exist, ask the user:
-
-> "Codex flagged N MEDIUM/LOW issue(s) that were not fixed:
-> - [list issues]
-> Should I fix these before delivery, or proceed as-is?"
-
-Wait for user response before proceeding.
+There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict (including a nonempty reply with no, several or an invalid `VERDICT:` line) is never an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (a fresh Codex thread without `--resume`, or for committed changes the CodeRabbit CLI via `REVIEW_BASE_SHA=<base commit> ~/.claude/config/scripts/reviewer.sh R <diff-file> <out-file>`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). When the verdict comes from a fresh Codex thread, its new `THREAD_ID` replaces the saved reviewer `THREAD_ID` only (never an implementation `THREAD_ID`) for every later review `--resume`; the CodeRabbit CLI has no thread and takes no prompt, so each follow-up is a fresh review of the new committed state, and a finding you contest is settled only by a Codex reviewer's explicit concession. Stop and report the work as UNREVIEWED only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable for a reason the error text names (a call that merely died, timed out or returned nothing, even several times in a row, is never a blocker: keep retrying and switching reviewers), and name the blocker when you do.
 
 ### Phase 7: Delivery
 
@@ -258,10 +250,10 @@ Wait for user response before proceeding.
 - GREEN phase: All tests passing, no regressions
 
 ### Review Result
-- Codex test audit: APPROVED / N issues resolved (N/2 iterations)
+- Codex test audit: clean after N rounds / UNREVIEWED (audit skipped or failed)
 - Implemented by: Claude (active model)
-- Codex implementation review: APPROVED / N issues resolved (N/3 iterations)
-- Remaining MEDIUM/LOW issues: N (skipped by user) / none
+- Codex implementation review: clean after N rounds / N findings fixed, N dropped through discussion
+- Remaining findings: none (the loop only ends on a clean round)
 
 ### Recommended Next Steps
 1. [ ] Run full test suite

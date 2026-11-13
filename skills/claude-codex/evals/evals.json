@@ -4,16 +4,16 @@
     {
       "id": 1,
       "prompt": "Implement the plan at .claude/plan/jwt-auth.md — it adds JWT authentication with refresh tokens to the Express API.",
-      "expected_output": "Claude reads the plan, implements the changes, calls mcp__codex__codex for review with structured verdict prompt, fixes CRITICAL/HIGH issues, and delivers a summary table.",
+      "expected_output": "Claude reads the plan, implements the changes, calls codex-call.sh for review with structured verdict prompt, fixes accepted findings at every severity until a clean round, and delivers a summary table.",
       "files": [],
       "expectations": [
         "Claude reads the plan file before implementing (Read tool called on .claude/plan/jwt-auth.md)",
         "Claude uses Edit or Write tools to modify production files",
-        "Claude calls mcp__codex__codex (not Bash codex review) for the review phase",
+        "Claude calls codex-call.sh (not `codex review`) for the review phase",
         "The Codex prompt includes 'VERDICT: APPROVED | WARNING | BLOCKED' format",
-        "The Codex call includes developer-instructions parameter with 'Be concise'",
+        "The Codex prompt includes 'Be concise'",
         "Claude outputs a delivery table with File, Operation, and Description columns",
-        "Claude reports the Codex review result (APPROVED or iteration count) in delivery"
+        "Claude reports the Codex review result (clean after N rounds, or UNREVIEWED) in delivery"
       ]
     },
     {
@@ -23,10 +23,9 @@
       "files": [],
       "expectations": [
         "Claude does NOT attempt to read a plan file (uses task description directly)",
-        "Claude calls mcp__codex__codex for review after implementation",
+        "Claude calls codex-call.sh for review after implementation",
         "The Codex prompt includes 'git diff HEAD' instruction",
-        "If Codex returns BLOCKED, Claude fixes all accepted CRITICAL and HIGH issues together before re-reviewing; if Codex returns WARNING, Claude fixes accepted HIGHs, runs tests/lint, and proceeds with no re-review call",
-        "If MEDIUM/LOW issues remain after APPROVED, Claude asks user whether to fix them",
+        "If Codex returns any accepted finding at any severity (BLOCKED, WARNING or MEDIUM/LOW under APPROVED), Claude fixes every accepted finding and re-reviews; there is no WARNING proceed-without-review path",
         "Delivery includes a changes table and review result"
       ]
     },
@@ -40,21 +39,66 @@
         "Claude records git SHA before each subagent dispatch (git rev-parse HEAD)",
         "Claude runs git diff after each subagent to verify changes",
         "Claude runs scoped lint/tests after each subagent completes",
-        "Claude calls mcp__codex__codex for review after all subagents complete",
+        "Claude calls codex-call.sh for review after all subagents complete",
         "Claude does NOT use Bash codex review command"
       ]
     },
     {
       "id": 4,
       "prompt": "Add a health check endpoint to the API server.",
-      "expected_output": "Claude detects that mcp__codex__codex is not available and stops with a clear error message — does NOT proceed without review.",
+      "expected_output": "Claude detects that Codex (codex-call.sh or the CLI) is not available and stops with a clear error message — does NOT proceed without review.",
       "files": [],
       "expectations": [
-        "Claude checks for mcp__codex__codex availability before Phase 3",
-        "Claude stops and tells the user that Codex MCP is not available",
+        "Claude runs the codex-call.sh availability check before Phase 3",
+        "Claude stops and tells the user that Codex CLI or codex-call.sh is not available",
         "Claude mentions that this skill requires Codex for review",
         "Claude does NOT deliver a completion table without Codex review",
         "Claude does NOT fall back to a non-Codex review — it fails closed"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "[claude-codex] Review loop stress case: the reviewer still lists one accepted HIGH finding in rounds 1 through 6 and returns a clean round in round 7.",
+      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7, and delivers only after the clean round.",
+      "files": [],
+      "expectations": [
+        "Claude starts a 6th review round instead of stopping after 3 or 5 rounds",
+        "Claude never asks the user whether to keep going because of the round count",
+        "Delivery reports a clean final round and zero remaining findings"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "[claude-codex] The first review round returns VERDICT: APPROVED with CRITICAL none, HIGH none, MEDIUM none and LOW: one accepted naming issue.",
+      "expected_output": "Claude treats the LOW-only round like any other round with findings: fixes it and re-reviews.",
+      "files": [],
+      "expectations": [
+        "Claude fixes the LOW finding instead of delivering or asking the user",
+        "Claude runs another review round after the fix",
+        "The same handling applies to a round with only HIGH or only MEDIUM findings"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "[claude-codex] The review call times out twice in a row, then a fresh call returns HIGH findings.",
+      "expected_output": "Claude keeps going past both failed calls, fixes the findings from the call that answers and re-reviews until a round is clean. The failed calls are never treated as approval.",
+      "files": [],
+      "expectations": [
+        "Claude reads each error and keeps retrying or switches to another independent reviewer, with no retry count",
+        "After the fresh call returns findings, Claude fixes them and re-reviews until a round is clean",
+        "Claude never treats a failed call as an approval or as a clean round",
+        "Claude does not stop after the second failure or ask the user whether to continue"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "[claude-codex] Every review call fails: codex-call.sh reports Codex is not logged in, and reviewer.sh reports the CodeRabbit CLI is not installed.",
+      "expected_output": "Claude names the blocker it cannot clear itself and labels the work UNREVIEWED.",
+      "files": [],
+      "expectations": [
+        "Claude tries another independent reviewer before giving up",
+        "Claude tells the user the work is UNREVIEWED and names the blocker (missing Codex login, no CodeRabbit CLI)",
+        "Claude does not describe the work as approved or reviewed"
       ]
     }
   ]

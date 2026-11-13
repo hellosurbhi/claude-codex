@@ -12,10 +12,10 @@
         "Claude writes test files BEFORE any production code (RED phase)",
         "Claude runs new tests and verifies they FAIL before implementing",
         "Claude reads tdd-specialist-role.md from the skill directory",
-        "Claude calls mcp__codex__codex for test audit (Phase 3) with test-focused verdict prompt",
+        "Claude calls codex-call.sh for test audit (Phase 3) with test-focused verdict prompt",
         "Claude implements minimal code to make tests pass (GREEN phase)",
-        "Claude calls mcp__codex__codex for implementation review (Phase 6) with 'git diff $START_SHA'",
-        "Phase 6 Codex call is a separate mcp__codex__codex call (not reusing Phase 3 threadId)",
+        "Claude calls codex-call.sh for implementation review (Phase 6) with 'git diff $START_SHA'",
+        "Phase 6 Codex call is a separate codex-call.sh call (not reusing Phase 3 THREAD_ID)",
         "Delivery includes TDD summary with test count, coverage, and RED/GREEN confirmation"
       ]
     },
@@ -53,11 +53,56 @@
       "files": [],
       "expectations": [
         "Claude writes tests first and verifies RED",
-        "Claude checks for mcp__codex__codex at Phase 3 and notes 'Codex unavailable — test audit skipped'",
+        "Claude runs the codex-call.sh availability check at Phase 3 and notes 'Codex unavailable — test audit skipped'",
         "Claude proceeds to implement despite Codex being unavailable at Phase 3 (graceful degradation)",
-        "Claude checks for mcp__codex__codex again at Phase 6",
+        "Claude runs the codex-call.sh availability check again at Phase 6",
         "Claude stops at Phase 6 and tells user Codex is required for final review",
         "Claude does NOT deliver without the Phase 6 Codex review"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "[tdd-claude-codex] Review loop stress case: the reviewer still lists one accepted HIGH finding in rounds 1 through 6 and returns a clean round in round 7.",
+      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7, and delivers only after the clean round.",
+      "files": [],
+      "expectations": [
+        "Claude starts a 6th review round instead of stopping after 3 or 5 rounds",
+        "Claude never asks the user whether to keep going because of the round count",
+        "Delivery reports a clean final round and zero remaining findings"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "[tdd-claude-codex] The first review round returns VERDICT: APPROVED with CRITICAL none, HIGH none, MEDIUM none and LOW: one accepted naming issue.",
+      "expected_output": "Claude treats the LOW-only round like any other round with findings: fixes it and re-reviews.",
+      "files": [],
+      "expectations": [
+        "Claude fixes the LOW finding instead of delivering or asking the user",
+        "Claude runs another review round after the fix",
+        "The same handling applies to a round with only HIGH or only MEDIUM findings"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "[tdd-claude-codex] The review call times out twice in a row, then a fresh call returns HIGH findings.",
+      "expected_output": "Claude keeps going past both failed calls, fixes the findings from the call that answers and re-reviews until a round is clean. The failed calls are never treated as approval.",
+      "files": [],
+      "expectations": [
+        "Claude reads each error and keeps retrying or switches to another independent reviewer, with no retry count",
+        "After the fresh call returns findings, Claude fixes them and re-reviews until a round is clean",
+        "Claude never treats a failed call as an approval or as a clean round",
+        "Claude does not stop after the second failure or ask the user whether to continue"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "[tdd-claude-codex] Every review call fails: codex-call.sh reports Codex is not logged in, and reviewer.sh reports the CodeRabbit CLI is not installed.",
+      "expected_output": "Claude names the blocker it cannot clear itself and labels the work UNREVIEWED.",
+      "files": [],
+      "expectations": [
+        "Claude tries another independent reviewer before giving up",
+        "Claude tells the user the work is UNREVIEWED and names the blocker (missing Codex login, no CodeRabbit CLI)",
+        "Claude does not describe the work as approved or reviewed"
       ]
     }
   ]

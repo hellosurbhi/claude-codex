@@ -8,8 +8,8 @@
       "files": [],
       "expectations": [
         "Claude announces routing decision containing 'Small change' before implementing",
-        "Claude implements with Edit or Write tools (not mcp__codex__codex)",
-        "Claude does NOT call mcp__codex__codex for implementation",
+        "Claude implements with Edit or Write tools (not codex-call.sh)",
+        "Claude does NOT call codex-call.sh for implementation",
         "Claude launches a code-reviewer Task agent (feature-dev:code-reviewer) after implementation",
         "Claude delivers with a table showing Route: Small (Claude)"
       ]
@@ -17,13 +17,13 @@
     {
       "id": 2,
       "prompt": "Add a caching layer with Redis to the user service, session service, and product service — including connection pooling, cache invalidation, and TTL configuration.",
-      "expected_output": "Claude classifies as large change, reads codex-architect-role.md, routes to Codex via MCP, launches code-reviewer after.",
+      "expected_output": "Claude classifies as large change, reads codex-architect-role.md, routes to Codex via codex-call.sh, launches code-reviewer after.",
       "files": [],
       "expectations": [
         "Claude announces routing decision containing 'Large change' before implementing",
         "Claude reads codex-architect-role.md from the skill directory",
-        "Claude calls mcp__codex__codex with sandbox set to 'workspace-write'",
-        "The Codex call includes developer-instructions from codex-architect-role.md",
+        "Claude calls codex-call.sh with --sandbox workspace-write",
+        "The Codex call passes ~/.claude/skills/execute-codex/codex-architect-role.md via --role",
         "Claude launches a code-reviewer Task agent after Codex implementation",
         "Claude delivers with a table showing Route: Large (Codex)"
       ]
@@ -35,7 +35,7 @@
       "files": [],
       "expectations": [
         "Claude classifies this as a large change (4+ files, new logic)",
-        "Claude checks for mcp__codex__codex availability",
+        "Claude runs the codex-call.sh availability check",
         "Claude announces fallback: 'Codex unavailable' and falls back to direct implementation",
         "Claude does NOT stop or tell the user to add Codex — it proceeds with Route A",
         "Claude launches code-reviewer Task agent after implementation",
@@ -50,10 +50,55 @@
       "expectations": [
         "Claude identifies 4+ implementation tasks and dispatches Task subagents",
         "Claude records git SHA before each subagent (git rev-parse HEAD)",
-        "Each subagent gets the mcp__codex__codex tool and codex-architect-role.md instructions",
+        "Each subagent gets codex-call.sh and codex-architect-role.md instructions",
         "Claude runs git diff after each subagent to verify scoped changes",
-        "Claude launches code-reviewer after all subagents complete (not mcp__codex__codex-reply)",
-        "Claude notes that each subagent owns its own Codex threadId"
+        "Claude launches code-reviewer after all subagents complete (not codex-call.sh --resume)",
+        "Claude notes that each subagent owns its own Codex THREAD_ID"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "[execute-codex] Review loop stress case: the reviewer still lists one accepted HIGH finding in rounds 1 through 6 and returns a clean round in round 7.",
+      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7, and delivers only after the clean round.",
+      "files": [],
+      "expectations": [
+        "Claude starts a 6th review round instead of stopping after 3 or 5 rounds",
+        "Claude never asks the user whether to keep going because of the round count",
+        "Delivery reports a clean final round and zero remaining findings"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "[execute-codex] The first review round returns VERDICT: APPROVED with CRITICAL none, HIGH none, MEDIUM none and LOW: one accepted naming issue.",
+      "expected_output": "Claude treats the LOW-only round like any other round with findings: fixes it and re-reviews.",
+      "files": [],
+      "expectations": [
+        "Claude fixes the LOW finding instead of delivering or asking the user",
+        "Claude runs another review round after the fix",
+        "The same handling applies to a round with only HIGH or only MEDIUM findings"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "[execute-codex] The review call times out twice in a row, then a fresh call returns HIGH findings.",
+      "expected_output": "Claude keeps going past both failed calls, fixes the findings from the call that answers and re-reviews until a round is clean. The failed calls are never treated as approval.",
+      "files": [],
+      "expectations": [
+        "Claude reads each error and keeps retrying or switches to another independent reviewer, with no retry count",
+        "After the fresh call returns findings, Claude fixes them and re-reviews until a round is clean",
+        "Claude never treats a failed call as an approval or as a clean round",
+        "Claude does not stop after the second failure or ask the user whether to continue"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "[execute-codex] Every review call fails: codex-call.sh reports Codex is not logged in, and reviewer.sh reports the CodeRabbit CLI is not installed.",
+      "expected_output": "Claude names the blocker it cannot clear itself and labels the work UNREVIEWED.",
+      "files": [],
+      "expectations": [
+        "Claude tries another independent reviewer before giving up",
+        "Claude tells the user the work is UNREVIEWED and names the blocker (missing Codex login, no CodeRabbit CLI)",
+        "Claude does not describe the work as approved or reviewed"
       ]
     }
   ]

@@ -2,7 +2,7 @@
 description: "Claude implements, Codex reviews uncommitted changes"
 argument-hint: "<task description or path/to/plan.md>"
 model: claude-sonnet-4-6
-allowed-tools: ["AskUserQuestion", "Task", "Read", "Glob", "Grep", "Write", "Edit", "Bash", "mcp__codex__codex", "mcp__codex__codex-reply"]
+allowed-tools: ["AskUserQuestion", "Task", "Read", "Glob", "Grep", "Write", "Edit", "Bash"]
 ---
 
 > **Deprecated**: This command has been converted to a skill (`/claude-codex`).
@@ -20,7 +20,7 @@ $ARGUMENTS
 - **Sovereignty**: Claude implements; Codex is the external reviewer — do not skip review
 - **Stop-Loss**: Do not proceed to the next phase until the current phase output is validated
 - **Language**: Use English when calling tools/models; communicate with user in their language
-- **MCP for review**: Always call Codex review via `mcp__codex__codex`. Do NOT use Bash `codex review` — it produces verbose output that wastes tokens
+- **Wrapper for review**: Always call Codex review via `codex-call.sh`. Do NOT use bare `codex review`: it produces verbose output that wastes tokens.
 - **Context Sanitization**: Never pass `.env`, secrets, tokens, API keys, or credentials to any external agent or MCP. Exclude files matching `.env*`, `*secret*`, `*credential*`, `*.pem`, `*.key`. Redact inline secrets before sending.
 
 ---
@@ -56,12 +56,12 @@ After all tasks complete (either path):
 - Run lint / typecheck / tests if available (minimal related scope)
 - Fix any regressions before proceeding to review
 
-### Phase 3: Codex Review (max 3 iterations)
+### Phase 3: Codex Review (re-review until a round has no accepted findings at any severity; no iteration cap)
 
-**Step R1 — Run Codex Review via MCP**
+**Step R1 — Run Codex Review via codex-call.sh**
 
-Call Codex via `mcp__codex__codex` with:
-- `developer-instructions`: `"Be concise. Return only the structured verdict format. No prose."`
+Call Codex via `codex-call.sh` with:
+- append to prompt: `"Be concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
 ```
@@ -77,22 +77,21 @@ MEDIUM: <list or 'none'>
 LOW: <list or 'none'>
 ```
 
-Save the returned `threadId` for follow-up replies.
+Save the returned `THREAD_ID` for follow-up replies.
 
-**Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual code, whether the reviewer had full context for intentional decisions, and whether it improves correctness/security or is a preference/false positive. Contest doubtful findings via `codex-reply` with specific reasoning; discussion replies do not count as iterations. Only findings that survive this gate are "accepted" below.
+**Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual code, whether the reviewer had full context for intentional decisions and whether it improves correctness/security or is a preference/false positive. Contest doubtful findings via `codex-call.sh --resume <THREAD_ID>` with specific reasoning; a finding is dropped only when the reviewer explicitly concedes it in a written reply; a reviewer that maintains it, or a reply with no clear concession, leaves it accepted and it gets fixed, and your own disagreement never drops a finding. Only findings that survive this gate are "accepted" below.
 
-Classify the verdict:
-- **APPROVED** — no CRITICAL or HIGH → handle any MEDIUM/LOW findings per Step R3, then go to Phase 4
-- **WARNING** — HIGH issues only → fix all accepted HIGHs in one batch, run available tests/lint, handle MEDIUM/LOW per Step R3, then go to Phase 4 with no re-review call
-- **BLOCKED** — CRITICAL issues → fix all accepted ones, increment iteration, re-review
+Classify the verdict. Every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
+- **Any accepted finding at any severity** (BLOCKED, WARNING or APPROVED with MEDIUM/LOW findings listed) → fix and re-review (R2).
+- **Done** → a round that lists no findings (`none` on every severity line), or whose every finding was dropped through the evaluation gate. Only then go to Phase 4.
 
-**Step R2 — Fix and Re-review (BLOCKED verdicts only)**
+**Step R2 — Fix and Re-review (every round with accepted findings)**
 
-Address ALL CRITICAL and HIGH issues before re-reviewing:
-- Collect every CRITICAL/HIGH finding from the last review
+Address ALL accepted findings before re-reviewing:
+- Collect every accepted CRITICAL, HIGH, MEDIUM and LOW finding from the last review
 - Fix them all with Edit/Write in one batch
 - Run available tests/lint to verify
-- Re-call Codex via `mcp__codex__codex-reply` (reuse threadId) with:
+- Re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
 Run `git diff HEAD` again to see the updated changes after fixes, then re-review.
@@ -100,20 +99,9 @@ Run `git diff HEAD` again to see the updated changes after fixes, then re-review
 Return ONLY the structured verdict in the same format.
 ```
 
-One review per iteration, not one review per fix. Only BLOCKED verdicts trigger a re-review.
+One review per round, not one review per fix.
 
-After 3 iterations still BLOCKED, stop and report remaining issues to user.
-
-**Step R3 — MEDIUM / LOW Issues**
-
-After CRITICAL/HIGH are resolved, collect any remaining MEDIUM and LOW issues from the last review.
-If any exist, ask the user:
-
-> "Codex flagged N MEDIUM/LOW issue(s) that were not fixed:
-> - [list issues]
-> Should I fix these before delivery, or proceed as-is?"
-
-Wait for user response before proceeding.
+There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict (including a nonempty reply with no, several or an invalid `VERDICT:` line) is never an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (a fresh Codex thread without `--resume`, or for committed changes the CodeRabbit CLI via `REVIEW_BASE_SHA=<base commit> ~/.claude/config/scripts/reviewer.sh R <diff-file> <out-file>`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). When the verdict comes from a fresh Codex thread, its new `THREAD_ID` replaces the saved reviewer `THREAD_ID` only (never an implementation `THREAD_ID`) for every later review `--resume`; the CodeRabbit CLI has no thread and takes no prompt, so each follow-up is a fresh review of the new committed state, and a finding you contest is settled only by a Codex reviewer's explicit concession. Stop and report the work as UNREVIEWED only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable for a reason the error text names (a call that merely died, timed out or returned nothing, even several times in a row, is never a blocker: keep retrying and switching reviewers), and name the blocker when you do.
 
 ---
 
@@ -129,8 +117,8 @@ Wait for user response before proceeding.
 
 ### Review Result
 - Implemented by: Claude (active model)
-- Codex review: APPROVED / N issues resolved (N/3 iterations)
-- Remaining MEDIUM/LOW issues: N (skipped by user) / none
+- Codex review: clean after N rounds / N findings fixed, N dropped through discussion
+- Remaining findings: none (the loop only ends on a clean round)
 
 ### Recommended Next Steps
 1. [ ] <test step>

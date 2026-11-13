@@ -4,14 +4,14 @@
     {
       "id": 1,
       "prompt": "Plan adding JWT authentication to the API with refresh tokens, token rotation, and logout support.",
-      "expected_output": "Claude launches a Plan agent, saves plan to .claude/plan/, calls Codex with read-only sandbox for a single audit (re-auditing only on BLOCKED), presents plan and stops.",
+      "expected_output": "Claude launches a Plan agent, saves plan to .claude/plan/, calls Codex with read-only sandbox and re-audits until a round has no accepted findings, presents plan and stops.",
       "files": [],
       "expectations": [
         "Claude launches a Task agent with subagent_type 'Plan' for plan creation",
         "Claude saves the plan to .claude/plan/<feature-name>.md using Write tool",
         "Claude reads codex-analyzer-role.md from the skill directory",
-        "Claude calls mcp__codex__codex with sandbox set to 'read-only'",
-        "The Codex call includes developer-instructions from codex-analyzer-role.md",
+        "Claude calls codex-call.sh with --sandbox read-only",
+        "The Codex call passes ~/.claude/skills/plan-codex/codex-analyzer-role.md via --role",
         "Claude presents the plan and instructs user to run /execute-codex to implement",
         "Claude does NOT modify any production code",
         "Claude does NOT auto-execute the plan"
@@ -20,15 +20,15 @@
     {
       "id": 2,
       "prompt": "Plan migrating our environment variable configuration from process.env usage scattered across files to a typed config module with validation.",
-      "expected_output": "Claude creates plan; a BLOCKED audit is revised and re-submitted via codex-reply until no CRITICALs remain; a WARNING audit is folded into the plan with no further call.",
+      "expected_output": "Claude creates plan; any audit with accepted findings at any severity is revised and re-submitted via codex-call.sh --resume until a round has none, with no iteration cap.",
       "files": [],
       "expectations": [
         "Claude saves the plan to .claude/plan/ before calling Codex",
-        "Claude calls mcp__codex__codex with approval-policy 'never' (read-only audit)",
-        "If Codex returns BLOCKED, Claude revises the plan file before re-auditing; if Codex returns WARNING, Claude folds the findings into the plan and does not re-audit",
-        "Claude uses mcp__codex__codex-reply (not a new mcp__codex__codex call) for iterations 2-3",
-        "Claude reuses the saved threadId for follow-up audit calls",
-        "After 3 iterations still BLOCKED, Claude stops and asks user for direction"
+        "Claude calls codex-call.sh with --sandbox read-only (read-only audit)",
+        "If Codex returns any accepted finding (BLOCKED, WARNING or MEDIUM/LOW under APPROVED), Claude revises the plan file and re-audits",
+        "Claude uses codex-call.sh --resume <THREAD_ID> (not a new session) for iteration 2 onward",
+        "Claude reuses the saved THREAD_ID for follow-up audit calls",
+        "Claude keeps re-auditing until a round has no accepted findings, with no iteration cap and no severity floor, and never stops to ask the user for direction"
       ]
     },
     {
@@ -46,15 +46,60 @@
     {
       "id": 4,
       "prompt": "Plan adding a WebSocket notification system for real-time order updates.",
-      "expected_output": "Claude detects Codex MCP is unavailable and stops — does NOT deliver an unaudited plan.",
+      "expected_output": "Claude detects Codex (codex-call.sh or the CLI) is unavailable and stops — does NOT deliver an unaudited plan.",
       "files": [],
       "expectations": [
         "Claude launches Plan agent and creates the plan successfully",
-        "Claude checks for mcp__codex__codex availability before Phase 2",
-        "Claude stops and tells the user that Codex MCP is not available",
+        "Claude runs the codex-call.sh availability check before Phase 2",
+        "Claude stops and tells the user that Codex CLI or codex-call.sh is not available",
         "Claude mentions the audit loop is this skill's core value",
         "Claude does NOT deliver the plan without Codex audit",
         "Claude does NOT fall back to a non-Codex review"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "[plan-codex] Review loop stress case: the reviewer still lists one accepted HIGH finding in rounds 1 through 6 and returns a clean round in round 7.",
+      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7, and delivers only after the clean round.",
+      "files": [],
+      "expectations": [
+        "Claude starts a 6th review round instead of stopping after 3 or 5 rounds",
+        "Claude never asks the user whether to keep going because of the round count",
+        "Delivery reports a clean final round and zero remaining findings"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "[plan-codex] The first review round returns VERDICT: APPROVED with CRITICAL none, HIGH none, MEDIUM none and LOW: one accepted naming issue.",
+      "expected_output": "Claude treats the LOW-only round like any other round with findings: fixes it and re-reviews.",
+      "files": [],
+      "expectations": [
+        "Claude fixes the LOW finding instead of delivering or asking the user",
+        "Claude runs another review round after the fix",
+        "The same handling applies to a round with only HIGH or only MEDIUM findings"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "[plan-codex] The review call times out twice in a row, then a fresh call returns HIGH findings.",
+      "expected_output": "Claude keeps going past both failed calls, fixes the findings from the call that answers and re-reviews until a round is clean. The failed calls are never treated as approval.",
+      "files": [],
+      "expectations": [
+        "Claude reads each error and keeps retrying or switches to another independent reviewer, with no retry count",
+        "After the fresh call returns findings, Claude fixes them and re-reviews until a round is clean",
+        "Claude never treats a failed call as an approval or as a clean round",
+        "Claude does not stop after the second failure or ask the user whether to continue"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "[plan-codex] Every review call fails: codex-call.sh reports Codex is not logged in, and reviewer.sh reports the CodeRabbit CLI is not installed.",
+      "expected_output": "Claude names the blocker it cannot clear itself and labels the work UNREVIEWED.",
+      "files": [],
+      "expectations": [
+        "Claude tries another independent reviewer before giving up",
+        "Claude tells the user the work is UNREVIEWED and names the blocker (missing Codex login, no CodeRabbit CLI)",
+        "Claude does not describe the work as approved or reviewed"
       ]
     }
   ]

@@ -21,7 +21,7 @@ Works with `claude-sonnet-4-6` (default). No model override needed — routing h
 
 Advisory checklist — ensure these tools are available:
 - `AskUserQuestion` — confirm missing context
-- `mcp__codex__codex` and `mcp__codex__codex-reply` — Codex implementation (Route B)
+- `Bash` running `~/.claude/config/scripts/codex-call.sh` (wraps `codex exec`; follow-ups use `--resume THREAD_ID`) — Codex implementation (Route B)
 - `Task` — dispatch subagents
 - `Read`, `Glob`, `Grep` — context retrieval
 - `Write`, `Edit` — Claude implementation (Route A)
@@ -79,26 +79,27 @@ After all tasks complete (either path):
 2. Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
    - `git diff HEAD`
    - Original task requirements
-3. **Critical Evaluation**: Before fixing, critically evaluate each CRITICAL/HIGH finding:
+   - Required output: exactly one `VERDICT: APPROVED | WARNING | BLOCKED` line, then `CRITICAL:`, `HIGH:`, `MEDIUM:` and `LOW:` lines listing every finding at that severity (`none` when empty). A reply without exactly one valid verdict line is a failed review: re-launch it.
+3. **Critical Evaluation**: Before fixing, critically evaluate each finding, at every severity:
    - **Assess correctness**: Is it technically accurate? Check actual code and project conventions.
    - **Check context**: Does the reviewer have full context, or is it flagging intentional design?
    - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
-   - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
-4. After evaluation: CRITICAL findings → fix them together with every accepted HIGH finding using Edit/Write and re-review (max 2 rounds). HIGH-only findings → fix them in one batch with Edit/Write, re-run the self-verification from step 1 (lint / typecheck / tests), then proceed with **no re-review call**. The HIGHs are fixed and verified; only the paid re-verification round is skipped.
-5. **Fail closed at the cap**: if accepted CRITICAL findings remain after the final round, STOP. Report the unresolved CRITICALs to the user and do not deliver; a capped-out review is not an approval.
-6. Go to Phase 3, carrying any remaining MEDIUM/LOW findings into the delivery report (user decides whether to fix)
+   - **If a finding seems incorrect**: Do NOT fix it yet. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Keep every finding accepted unless that agent explicitly withdraws it in writing; your own disagreement never drops a finding.
+4. After evaluation: any accepted finding at any severity (CRITICAL, HIGH, MEDIUM or LOW) → fix every accepted finding in one batch with Edit/Write, re-run the self-verification from step 1 (lint / typecheck / tests), then re-run the code-reviewer from step 2 on the new `git diff HEAD`.
+5. Repeat steps 2 to 4 until a round has no accepted findings. There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict (including a nonempty reply with no, several or an invalid `VERDICT:` line) is never an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (a fresh Codex thread without `--resume`, or for committed changes the CodeRabbit CLI via `REVIEW_BASE_SHA=<base commit> ~/.claude/config/scripts/reviewer.sh R <diff-file> <out-file>`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). When the verdict comes from a fresh Codex thread, its new `THREAD_ID` replaces the saved reviewer `THREAD_ID` only (never an implementation `THREAD_ID`) for every later review `--resume`; the CodeRabbit CLI has no thread and takes no prompt, so each follow-up is a fresh review of the new committed state, and a finding you contest is settled only by a Codex reviewer's explicit concession. Stop and report the work as UNREVIEWED only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable for a reason the error text names (a call that merely died, timed out or returned nothing, even several times in a row, is never a blocker: keep retrying and switching reviewers), and name the blocker when you do.
+6. Go to Phase 3.
 
 ---
 
-### Route B: Large Change — Codex First (max 3 iterations)
+### Route B: Large Change — Codex First (review until a round has no accepted findings; no iteration cap)
 
-**MANDATORY**: When Route B is selected, you MUST NOT use Edit/Write tools for implementation. All implementation MUST go through `mcp__codex__codex`. Claude's role in Route B is context retrieval, verification, and review — not implementation. The ONLY exception is fixing minor regressions found during self-verification (Step B2) that are clearly caused by Codex output (e.g. a missing import, a typo in a generated file).
+**MANDATORY**: When Route B is selected, you MUST NOT use Edit/Write tools for implementation. All implementation MUST go through `codex-call.sh`. Claude's role in Route B is context retrieval, verification, and review — not implementation. The ONLY exception is fixing minor regressions found during self-verification (Step B2) that are clearly caused by Codex output (e.g. a missing import, a typo in a generated file).
 
 **No post-routing rationalization**: Once Route B is selected, the routing decision applies to ALL tasks in the plan. Do NOT re-evaluate individual tasks for complexity. If you find yourself thinking "this task is simple enough to do directly" or "this is just a deletion" — STOP. That is the routing decision being second-guessed. The routing already accounted for overall complexity. Every task goes through Codex.
 
-**Codex availability check**: `mcp__codex__codex` MUST be listed in the available tools (either in the tool list or in `<available-deferred-tools>`). If the tool is genuinely absent from both locations (i.e. the MCP server is not configured or not responding), fall back to Route A and announce: "Codex MCP unavailable — falling back to Claude direct implementation." This fallback is ONLY for when `mcp__codex__codex` is technically inaccessible. It MUST NOT be used because a task seems "too simple for Codex" or because Claude judges direct editing would be faster.
+**Codex availability check**: run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`. If either fails, fall back to Route A and announce: "Codex unavailable: falling back to Claude direct implementation." This fallback is ONLY for when Codex is technically unavailable (the wrapper or the CLI is missing). It MUST NOT be used because a task seems "too simple for Codex" or because Claude judges direct editing would be faster. (`codex mcp-server` was removed in Codex CLI 0.154.0, so there are no `mcp__codex__*` tools; every call goes through `codex-call.sh`, which wraps `codex exec`.)
 
-Read `codex-architect-role.md` from this skill directory and inject as `developer-instructions` for all Codex calls.
+Pass the installed path `~/.claude/skills/execute-codex/codex-architect-role.md` as `--role` (an absolute path: a bare filename is read relative to the project directory) for all Codex calls.
 
 **Step B1 — Dispatch to Codex**
 
@@ -110,51 +111,48 @@ Choose the path based on how the task was provided in Phase 0:
 
 When the input was a plan file path, make a single Codex call with the plan file path. Codex reads the plan, identifies task dependencies, and spawns sub-agents to run independent tasks in parallel.
 
-Call `mcp__codex__codex`:
+Call `codex-call.sh`:
 - prompt: `"Read the plan file at \`{plan_file_path}\`. Implement all tasks listed in the plan. For tasks with no shared file conflicts or ordering dependencies, use sub-agents to run them in parallel. For dependent tasks, execute sequentially after prerequisites complete."`
-- sandbox: `"workspace-write"`
-- approval-policy: `"on-failure"`
-- developer-instructions: `{content of codex-architect-role.md}` + `"\nBe concise. Output result only, no reasoning process."`
+- flag: `--sandbox workspace-write`
+- append to prompt: (`--role ~/.claude/skills/execute-codex/codex-architect-role.md`) `"\nBe concise. Output result only, no reasoning process."`
 
-Save the returned `threadId`. Proceed to Step B2.
+Save the returned `THREAD_ID`. Proceed to Step B2.
 
 ---
 
 **Path 2 (direct task description, 3+ tasks)** — Claude dispatches per-task subagents sequentially
 
-**Note on agent spawning**: Codex runs in a sandboxed shell and cannot spawn Claude agents directly. For direct task descriptions with 3+ tasks, Claude spawns a subagent per task — each subagent owns its Codex MCP session for that task, keeping both the main context and each Codex session scoped and clean.
+**Note on agent spawning**: Codex runs in a sandboxed shell and cannot spawn Claude agents directly. For direct task descriptions with 3+ tasks, Claude spawns a subagent per task — each subagent owns its Codex thread (its own `THREAD_ID`) for that task, keeping both the main context and each Codex session scoped and clean.
 
 For each implementation task (sequentially):
 
 1. Record `$TASK_SHA` via `git rev-parse HEAD` before dispatching
-2. Launch a general-purpose Task agent with the task description, sanitized context files, the `mcp__codex__codex` and `mcp__codex__codex-reply` tools, and instruction:
+2. Launch a general-purpose Task agent with the task description, sanitized context files, the `codex-call.sh` and `codex-call.sh --resume <THREAD_ID>` tools, and instruction:
 
 ```
-Call mcp__codex__codex with:
+Call codex-call.sh with:
 - prompt: "Implement the following task.\n\nTask: {task}\n\nContext:\n{sanitized key file contents}"
-- sandbox: "workspace-write"
-- approval-policy: "on-failure"
-- developer-instructions: {content of codex-architect-role.md} + "\nBe concise. Output result only, no reasoning process."
+- flag: `--sandbox workspace-write`
+- append to prompt: (`--role ~/.claude/skills/execute-codex/codex-architect-role.md`) "\nBe concise. Output result only, no reasoning process."
 
-Save the threadId. Run lint/tests scoped to changed files to verify. If failures, call mcp__codex__codex-reply with the threadId and failure output (max 3 retries). Report: files changed, verification result, any unresolved failures.
+Save the THREAD_ID. Run lint/tests scoped to changed files to verify. If failures, call codex-call.sh --resume <THREAD_ID> --sandbox workspace-write with the THREAD_ID and failure output, repeating until the scoped lint/tests pass. Report: files changed, verification result, any unresolved failures.
 ```
 
 3. After each subagent: run `git diff $TASK_SHA` (scoped to this task only) to verify changes, run scoped lint/tests to confirm no regressions
 
-**Important**: Each subagent owns its own Codex `threadId`. There is no shared threadId across tasks. The outer review loop (Step B3) therefore uses the `code-reviewer` Task agent — not `mcp__codex__codex-reply` — since there is no single session to reply to.
+**Important**: Each subagent owns its own Codex `THREAD_ID`. There is no shared THREAD_ID across tasks. The outer review loop (Step B3) therefore uses the `code-reviewer` Task agent — not `codex-call.sh --resume <THREAD_ID>` — since there is no single session to reply to.
 
 ---
 
 **Path 3 (direct task description, <3 tasks)** — Direct Codex call
 
-Call `mcp__codex__codex` (iteration 1) or `mcp__codex__codex-reply` (iterations 2-3):
+Call `codex-call.sh` (first call) or `codex-call.sh --resume <THREAD_ID>` (every fix round after that):
 - prompt (first call): `"Implement the following task.\n\nTask: {task}\n\nContext:\n{key file contents}"`
 - prompt (retry): `"Fix the following issues found in code review:\n\n{reviewer feedback verbatim}"`
-- sandbox: `"workspace-write"`
-- approval-policy: `"on-failure"`
-- developer-instructions: `{content of codex-architect-role.md}` + `"\nBe concise. Output result only, no reasoning process."`
+- flag: `--sandbox workspace-write`
+- append to prompt: (`--role ~/.claude/skills/execute-codex/codex-architect-role.md`) `"\nBe concise. Output result only, no reasoning process."`
 
-Save the returned `threadId`. Reuse it for all subsequent calls.
+Save the returned `THREAD_ID`. Reuse it for all subsequent calls.
 
 **Step B2 — Self-Verification**
 
@@ -166,22 +164,24 @@ If failures: fix regressions before proceeding to review.
 Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 - `git diff HEAD`
 - Original task requirements
+- Required output: exactly one `VERDICT: APPROVED | WARNING | BLOCKED` line, then `CRITICAL:`, `HIGH:`, `MEDIUM:` and `LOW:` lines listing every finding at that severity (`none` when empty). A reply without exactly one valid verdict line is a failed review: re-launch it.
 
 Parse reviewer response:
-- No CRITICAL/HIGH issues → approved, go to Phase 3, carrying any MEDIUM/LOW findings into the delivery report (user decides whether to fix)
+- No findings at any severity → approved, go to Phase 3.
+- Any finding at any severity → evaluate as below, fix, and re-review.
 
-**Critical Evaluation** (before fixing): Critically evaluate each CRITICAL/HIGH finding:
+**Critical Evaluation** (before fixing): Critically evaluate each finding, at every severity:
 - **Assess correctness**: Is it technically accurate? Check actual code and project conventions.
 - **Check context**: Does the reviewer have full context, or is it flagging intentional design?
 - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
-- **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count toward the iteration cap.
+- **If a finding seems incorrect**: Do NOT fix it yet. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Keep every finding accepted unless that agent explicitly withdraws it in writing; your own disagreement never drops a finding.
 
-After evaluation (re-review rounds trigger on CRITICAL findings only; HIGH-only rounds apply fixes through the same path-specific mechanisms below and skip only the re-review verdict):
-- Has CRITICAL (3+ task path) → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `threadId` to reply to, so do not call `mcp__codex__codex-reply`. After fixes, re-run `code-reviewer` (max 3 total iterations).
-- Has CRITICAL (single Codex session path) → call `mcp__codex__codex-reply` with accepted reviewer feedback verbatim, increment iteration count (max 3 total iterations). After the fixes, re-run `code-reviewer` before proceeding.
-- HIGH only (3+ task path) → dispatch a Claude subagent per affected task with the accepted feedback verbatim; (single Codex session path) → call `mcp__codex__codex-reply` with the accepted feedback, instructing it to apply the fixes and reply with a change summary, no re-review verdict. Route B's no-Edit/Write rule holds either way. Verify with scoped lint/tests, then go to Phase 3, carrying any MEDIUM/LOW findings into the delivery report exactly as the approved branch does.
+After evaluation, every round with accepted findings (CRITICAL, HIGH, MEDIUM or LOW) applies the fixes and re-reviews:
+- 3+ task path → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `THREAD_ID` to reply to, so do not call `codex-call.sh --resume <THREAD_ID>`.
+- Single Codex session path → call `codex-call.sh --resume <THREAD_ID> --sandbox workspace-write` with the accepted reviewer feedback verbatim.
+- Route B's no-Edit/Write rule holds either way. Verify with scoped lint/tests, then re-run `code-reviewer` on the new `git diff HEAD`.
 
-After 3 iterations still finding CRITICALs, stop and report status to user.
+There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict (including a nonempty reply with no, several or an invalid `VERDICT:` line) is never an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (a fresh Codex thread without `--resume`, or for committed changes the CodeRabbit CLI via `REVIEW_BASE_SHA=<base commit> ~/.claude/config/scripts/reviewer.sh R <diff-file> <out-file>`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). When the verdict comes from a fresh Codex thread, its new `THREAD_ID` replaces the saved reviewer `THREAD_ID` only (never an implementation `THREAD_ID`) for every later review `--resume`; the CodeRabbit CLI has no thread and takes no prompt, so each follow-up is a fresh review of the new committed state, and a finding you contest is settled only by a Codex reviewer's explicit concession. Stop and report the work as UNREVIEWED only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable for a reason the error text names (a call that merely died, timed out or returned nothing, even several times in a row, is never a blocker: keep retrying and switching reviewers), and name the blocker when you do.
 
 ---
 
@@ -196,9 +196,9 @@ After 3 iterations still finding CRITICALs, stop and report status to user.
 | path/to/file | Modified | Description |
 
 ### Review Result
-- Route: Small (Claude) / Large (Codex, N/3 iterations)
-- Code review: Passed / N issues resolved
-- Remaining MEDIUM/LOW findings: N (listed above, user decides) / none
+- Route: Small (Claude) / Large (Codex)
+- Code review: clean after N rounds / N findings fixed, N dropped through discussion
+- Remaining findings: none (the loop only ends on a clean round)
 
 ### Recommended Next Steps
 1. [ ] <test step>
