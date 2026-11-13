@@ -128,7 +128,7 @@ for l in open(o + "/stream.jsonl"):
                 jl.append({"kind": "agent", "id": c.get("id"), "text": json.dumps(c.get("input", {}))[:4000]})
             if c.get("type") == "tool_result":
                 t = text(c.get("content"))[:20000]
-                ev.append("OUT " + t); jl.append({"kind": "result", "id": c.get("tool_use_id"), "text": t})
+                ev.append("OUT " + t); jl.append({"kind": "result", "id": c.get("tool_use_id"), "text": t, "error": bool(c.get("is_error"))})
 open(o + "/session.txt", "w").write(res)
 open(o + "/events.txt", "w").write("\n".join(ev))
 open(o + "/events.jsonl", "w").write("\n".join(json.dumps(x) for x in jl))
@@ -170,7 +170,7 @@ if [[ $scenario == real ]]; then
   check "a real Codex reply carried a VERDICT line" 'grep -qE "VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)" "$out/events.txt"'
   check "the --resume follow-up returned on the same thread with a verdict" 'python3 "$here/check-resume.py" "$out/events.jsonl"'
   echo "RESUME_USED: $(grep -c -- '--resume' "$out/events.txt")"
-  echo "LAST_VERDICT: $(grep -oE 'VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)' "$out/events.txt" | tail -1)"
+  echo "LAST_VERDICT: $(python3 "$here/last-verdict.py" "$out/events.jsonl")"
   echo "THREAD_IDS: $(grep -oE 'THREAD_ID: [0-9a-f-]{8,}' "$out/events.txt" | sort -u | tr '\n' ' ')"
   check "final report does not label the work UNREVIEWED" '! grep -qiE "(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED|review incomplete|audit incomplete" "$out/session.txt"'
   exit $fail
