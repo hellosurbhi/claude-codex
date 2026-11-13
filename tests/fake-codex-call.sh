@@ -32,6 +32,9 @@ prompt="${1:-}"
 # stderr are captured to files and replayed so the log holds the exact reply the model saw.
 EVLOG="${EVLOG:-$(cd "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || echo "$dir")/.." && pwd)/wrapper.jsonl}"
 [[ -f "$EVLOG" ]] || : > "$EVLOG"
+# WHY the call log is pinned next to the event log, ignoring any FAKE_LOG the caller sets: the checks read it, and a
+# model that exports its own FAKE_LOG (seen in a rep that read this script) would otherwise make real calls vanish from it.
+FAKE_LOG="$(dirname "$EVLOG")/calls.log"; export FAKE_LOG
 EVSTART="$(python3 -c 'import time; print(time.time())')"; export EVSTART
 tid="" ; [[ -n "$resume" ]] && tid="$resume"
 exec 3>&1 4>&2
