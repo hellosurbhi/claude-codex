@@ -1,5 +1,5 @@
 # Shared reader for the wrapper event log (see evlog.py). Checkers import this and nothing else.
-import json, re
+import json, os, re
 
 VERDICT = r"VERDICT: (APPROVED|WARNING|BLOCKED)"  # the only grammar the skills allow (r14)
 SEVS = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
@@ -9,6 +9,15 @@ def load(path):
         return [json.loads(l) for l in open(path) if l.strip()]
     except OSError:
         return []
+
+def is_real(e):
+    """A genuine wrapper run: logged by the shim under the installed codex-call.sh (provenance record), with this run's nonce,
+    the reviewed wrapper hash and the real Codex binary, never the shim. Fails closed when the expectations are unset (r29)."""
+    p = e.get("prov") or {}
+    n, w, c = os.environ.get("EVNONCE"), os.environ.get("WRAPPER_SHA256"), os.environ.get("EXPECT_CODEX")
+    if e.get("wrapper") != "real" or not (n and w and c):
+        return False
+    return p.get("nonce") == n and p.get("wrapper_sha256") == w and p.get("codex") == os.path.realpath(c) and "/shim/" not in (p.get("codex") or "")
 
 def reply_text(ev):
     # WHY both streams for a successful spy: the reviewer reply goes to the caller's chosen output path, so a reply routed

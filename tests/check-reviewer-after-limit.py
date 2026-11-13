@@ -84,7 +84,9 @@ limit_done = non_spy[li]["ts"]
 # WHY by start time: a review that began before the quota reply was not a reaction to it, even if it finished later.
 # WHY the LAST review by START time decides: an older approval that merely finished later must not override a newer
 # review that blocked or failed (r14).
-spies = sorted((e for e in evs if e["wrapper"] == "spy" and e.get("ts_start", e["ts"]) >= limit_done), key=lambda e: e.get("ts_start", e["ts"]))
+# WHY only the production argument vector (tier E/R/S, input, output): `diagnose` or a malformed call is not a review (r29).
+valid_spy = lambda e: len(e["argv"]) >= 3 and e["argv"][0] in ("E", "R", "S") and bool(e["argv"][1]) and bool(e["argv"][2])
+spies = sorted((e for e in evs if e["wrapper"] == "spy" and valid_spy(e) and e.get("ts_start", e["ts"]) >= limit_done), key=lambda e: e.get("ts_start", e["ts"]))
 if not spies or not wlog.is_clean(spies[-1]):
     sys.exit(1)
 if phase is not None and spies[-1]["phase"] != phase:

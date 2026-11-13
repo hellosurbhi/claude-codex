@@ -71,9 +71,20 @@ tid="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["tid"])' "$met
 ok="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["ok"])' "$meta")"
 # WHY 1: codex-call.sh exits 1 for every failed call whatever the CLI exit code was (r15).
 logrc=0; [[ $ok == True ]] || logrc=1
-# WHY provenance: only a call made by codex-call.sh counts as a real wrapper execution; a bare `codex exec` run directly
-# by the model is logged as "direct", which no real-scenario checker accepts as wrapper evidence (r28).
-kind=direct; ps -o command= -p "$PPID" 2>/dev/null | grep -q 'codex-call\.sh' && kind=real
+# WHY provenance from the process table and the file, never from command text (r27 to r29): the parent bash of the installed
+# codex-call.sh holds that script open on fd 255, so lsof names the file really being executed; its sha256 must equal the
+# reviewed installed wrapper (WRAPPER_SHA256) and the run nonce (EVNONCE) must be set. A bare `codex exec`, a prompt that
+# mentions codex-call.sh or an edited copy of the wrapper therefore fails and is logged as "direct", which no checker counts.
+wpath="$(lsof -a -p "$PPID" -d 255 -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+kind=direct; EV_PROV="$(python3 - "$wpath" "$real" <<'PY3'
+import hashlib, json, os, sys
+wp, codex = sys.argv[1], sys.argv[2]
+rp = os.path.realpath(wp) if wp and os.path.isfile(wp) else ""
+sha = hashlib.sha256(open(rp, "rb").read()).hexdigest() if rp else ""
+print(json.dumps({"nonce": os.environ.get("EVNONCE", ""), "wrapper_path": rp, "wrapper_sha256": sha, "wrapper_inode": os.stat(rp).st_ino if rp else None, "codex": os.path.realpath(codex)}))
+PY3
+)"; export EV_PROV
+python3 -c 'import json,os,sys; p=json.loads(os.environ["EV_PROV"]); sys.exit(0 if p["wrapper_sha256"] and p["wrapper_sha256"]==os.environ.get("WRAPPER_SHA256") and p["nonce"] and p["nonce"]==os.environ.get("EVNONCE") else 1)' && kind=real
 python3 "$here/evlog.py" "$EVLOG" "$kind" "$logrc" "$resume" "$tid" "$pf" "$so" "$so.err" -- "${argv[@]}"
 cat "$o"; cat "$e" >&2
 exit "$rc"

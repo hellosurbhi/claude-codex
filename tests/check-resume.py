@@ -10,7 +10,7 @@ evs = wlog.load(sys.argv[1])
 # WHY --real filters BEFORE indexing: the real scenario claims real Codex evidence, so both the issuing call and the resumed
 # call must be real-wrapper events; a fake resume of a real thread id must not pass (r27).
 if "--real" in sys.argv:
-    evs = [e for e in evs if e["wrapper"] == "real"]
+    evs = [e for e in evs if wlog.is_real(e)]
 noverdict = "--no-verdict" in sys.argv
 for i, e in enumerate(evs):
     if not e["resume"] or e["exit"] != 0 or e["wrapper"] not in ("fake", "real"):

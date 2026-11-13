@@ -15,12 +15,17 @@ fake="$here/fake-codex-call.sh"
 # viawrap runs the shim from a script named codex-call.sh, the way the installed wrapper does (shim provenance, r28)
 mkdir -p "$tmp/wrap"; printf '#!/usr/bin/env bash\nbash "%s/shim/codex" "$@"\nrc=$?\nexit $rc\n' "$here" > "$tmp/wrap/codex-call.sh"
 viawrap() { bash "$tmp/wrap/codex-call.sh" "$@"; }
+# provenance expectations (r29): nonce, hash of the reviewed wrapper and the real codex path, as the harness exports them
+export EVNONCE=testnonce WRAPPER_SHA256="$(shasum -a 256 "$tmp/wrap/codex-call.sh" | cut -d' ' -f1)"
+mkdir -p "$tmp/realbin"; export EXPECT_CODEX="$tmp/realbin/codex"
 line() { # wrapper exit phase stdout   -> appends a hand-built event
   python3 - "$EVLOG" "$@" <<'PY'
 import json, sys
 log, wrapper, code, phase, out = sys.argv[1:6]
 n = sum(1 for _ in open(log))
-open(log, "a").write(json.dumps({"seq": n + 1, "wrapper": wrapper, "argv": [], "exit": int(code), "resume": None, "thread_id": None, "phase": phase, "stdout": out.replace("\\n", "\n"), "stderr": "", "ts": n + 1}) + "\n")
+import os
+prov = {"nonce": os.environ["EVNONCE"], "wrapper_sha256": os.environ["WRAPPER_SHA256"], "codex": os.path.realpath(os.environ["EXPECT_CODEX"])} if wrapper == "real" else None
+open(log, "a").write(json.dumps({"seq": n + 1, "wrapper": wrapper, "prov": prov, "argv": ["S", "in", "out"] if wrapper == "spy" else [], "exit": int(code), "resume": None, "thread_id": None, "phase": phase, "stdout": out.replace("\\n", "\n"), "stderr": "", "ts": n + 1}) + "\n")
 PY
 }
 CLEAN='VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
@@ -128,7 +133,7 @@ PY
 expect fail "an older approval that finished later does not override a newer blocked review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 # a failed spy call (missing input) is logged and, being the latest review, defeats an earlier approval.
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; cd "$tmp/run/repo"
-bash "$here/spy-reviewer.sh" S "$tmp/no-such-input" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/no-such-input" "$tmp/o.txt" >/dev/null 2>&1
 expect pass "the failed spy call with a missing input is logged" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2]); print(len(e)==3 and e[-1]["exit"]!=0)' "$here" "$EVLOG")" = "True"
 expect fail "a later failed review means the last review is not clean" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 # an unchanged CRLF plan hashes by raw bytes and matches.
@@ -490,13 +495,35 @@ open(sys.argv[1],"w").write("\n".join(json.dumps(x) for x in rows)+"\n")
 PY2
 expect pass "a real resume of a real thread passes the real-only resume check" python3 "$here/check-resume.py" "$EVLOG" --real
 
-# r28: bare codex exec is not wrapper evidence, a moved function changes the state hash, an echoed argument is not a quota error
+# r28/r29: provenance of real runs comes from the process table, the wrapper hash, the run nonce and the real binary path
+cat > "$tmp/realbin/codex" <<'SH'
+#!/usr/bin/env bash
+echo '{"type":"thread.started","thread_id":"abcdef12-3456"}'
+echo '{"type":"item.completed","item":{"type":"agent_message","text":"VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none"}}'
+echo '{"type":"turn.completed"}'; exit 0
+SH
+chmod +x "$tmp/realbin/codex"
+wrapper_kind() { python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["wrapper"])' "$here" "$EVLOG"; }
 mkrun
-REAL_CODEX="$tmp/bin/stubok" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
-expect pass "a bare codex exec call is logged as direct, not real" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["wrapper"])' "$here" "$EVLOG")" = direct
+REAL_CODEX="$tmp/realbin/codex" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
+expect pass "a bare codex exec call is logged as direct, not real" test "$(wrapper_kind)" = direct
 expect fail "a bare codex exec call does not satisfy the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
-REAL_CODEX="$tmp/bin/stubok" viawrap exec --json "prompt" >/dev/null 2>&1
-expect pass "a call through codex-call.sh is logged as real" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["wrapper"])' "$here" "$EVLOG")" = real
+bash -c "REAL_CODEX='$tmp/realbin/codex' bash '$here/shim/codex' exec --json 'codex-call.sh'; true # codex-call.sh" >/dev/null 2>&1
+expect pass "a bare call whose parent command text mentions codex-call.sh is still direct" test "$(wrapper_kind)" = direct
+REAL_CODEX="$tmp/realbin/codex" viawrap exec --json "prompt" >/dev/null 2>&1
+expect pass "a call made by the reviewed codex-call.sh is logged as real" test "$(wrapper_kind)" = real
+expect pass "that call satisfies the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
+expect pass "that call satisfies the real verdict check" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+mkrun; mkdir -p "$tmp/wrap2"; { cat "$tmp/wrap/codex-call.sh"; echo '# edited copy'; } > "$tmp/wrap2/codex-call.sh"
+REAL_CODEX="$tmp/realbin/codex" bash "$tmp/wrap2/codex-call.sh" exec --json "prompt" >/dev/null 2>&1
+expect pass "an edited copy of the wrapper is logged as direct" test "$(wrapper_kind)" = direct
+mkrun; REAL_CODEX="$tmp/realbin/codex" EVNONCE=other viawrap exec --json "prompt" >/dev/null 2>&1
+expect fail "a run stamped with a different nonce is rejected by the checker" python3 "$here/check-real-basic.py" "$EVLOG" thread
+mkrun; cp "$tmp/realbin/codex" "$tmp/shimcopy"; mkdir -p "$tmp/xs/shim"; cp "$tmp/realbin/codex" "$tmp/xs/shim/codex"
+REAL_CODEX="$tmp/xs/shim/codex" viawrap exec --json "prompt" >/dev/null 2>&1
+expect fail "a run whose codex binary is not the expected real one is rejected" python3 "$here/check-real-basic.py" "$EVLOG" thread
+mkrun; line fake 0 unknown 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
+expect fail "a fake wrapper reply does not satisfy the real verdict check" python3 "$here/check-real-basic.py" "$EVLOG" verdict
 mkdir -p "$tmp/sh1" "$tmp/sh2"; printf 'def add(a, b):\n    return a + b\n' > "$tmp/sh1/app.py"; : > "$tmp/sh1/test_app.py"
 : > "$tmp/sh2/app.py"; printf 'def add(a, b):\n    return a + b\n' > "$tmp/sh2/test_app.py"
 expect pass "moving add() into the test file changes the state hash" test "$(python3 "$here/state-hash.py" "$tmp/sh1")" != "$(python3 "$here/state-hash.py" "$tmp/sh2")"
@@ -504,5 +531,22 @@ mkrun; line fake 1 unknown 'codex-call: Codex CLI said:\nno saved session found 
 expect fail "an echoed argument named usage limit is not a quota error" python3 "$here/check-limit-hit.py" "$EVLOG"
 mkrun; line fake 1 unknown "$LIMIT"
 expect pass "a real quota sentence is a quota error" python3 "$here/check-limit-hit.py" "$EVLOG"
+
+# r29: diagnose is not a review, and the fallback must carry the production argument vector
+mkrun; cd "$tmp/run/repo"; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
+printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py; git diff --no-color HEAD -- app.py > "$tmp/d.diff"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" diagnose "$tmp/d.diff" "$tmp/out.txt" >/dev/null 2>&1; src=$?
+expect pass "the spy refuses the diagnose tier" test "$src" -ne 0
+mkrun; cd "$tmp/run/repo"; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
+printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py
+python3 - "$EVLOG" <<'PY2'
+import json,sys
+rows=[]
+def ev(w,code,argv,ts,out=""): return {"seq":len(rows)+1,"wrapper":w,"prov":None,"argv":argv,"exit":code,"resume":None,"thread_id":None,"phase":"implementation","stdout":out,"stderr":"","input_sha256":"","input_bytes":0,"input_text":"","tree_sha256":None,"meta":{},"ts_start":ts,"ts":ts+1}
+rows.append(ev("fake",1,[],1,"ERROR: You have hit your usage limit.\n"))
+rows.append(ev("spy",0,["diagnose","f"],10,"VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n"))
+open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in rows)+"\n")
+PY2
+expect fail "a diagnose invocation does not pass the fallback check" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 
 exit $fail

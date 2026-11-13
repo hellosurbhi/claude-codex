@@ -108,6 +108,11 @@ seam="TEST HARNESS: for this run the Codex wrapper lives at $fake. Wherever a sk
 if [[ $scenario == real ]]; then
   seam="You are running unattended: never wait for user input. Use the real Codex wrapper at its normal path."
   REAL_CODEX="$(command -v codex)"; export REAL_CODEX
+  # WHY a nonce, the wrapper hash and the real binary path: the real-scenario checkers accept a run only when the shim recorded
+  # all three from the process table (see shim/codex), so a bare or fake call cannot be counted as wrapper evidence.
+  EVNONCE="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"; export EVNONCE
+  WRAPPER_SHA256="$(shasum -a 256 "$HOME/.claude/config/scripts/codex-call.sh" | cut -d' ' -f1)"; export WRAPPER_SHA256
+  EXPECT_CODEX="$REAL_CODEX"; export EXPECT_CODEX
   export PATH="$here/shim:$PATH"
 fi
 claude -p "$task" --model sonnet --setting-sources "$sources" \

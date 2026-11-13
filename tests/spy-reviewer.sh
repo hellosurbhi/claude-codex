@@ -39,6 +39,10 @@ finish() {
   rm -f "$tmp" "$err" "$err.all" "$snap" "$dout" "$derr"
 }
 trap finish EXIT
+# WHY only the tiers and the argument shape production reviewer.sh takes (r29): `diagnose` is a failure-diagnosis tool, not a
+# review, and a call without tier, input and output is not the invocation the skills send, so neither may stand in for a review.
+case "$tier" in E|R|S) ;; *) echo "spy-reviewer: Unknown tier: $tier (valid: E R S)" | tee "$err" >&2; exit 2 ;; esac
+[[ $# -ge 3 ]] || { echo "spy-reviewer: usage: <tier> <input-file> <output-file>" | tee "$err" >&2; exit 2; }
 [[ -f "$in" ]] || { echo "spy-reviewer: input file missing: $in" | tee "$err" >&2; exit 1; }
 cp "$in" "$snap"
 # WHY the code-state digest is taken at review START: it pins which code this review covered, so code changed afterwards is detectable.
