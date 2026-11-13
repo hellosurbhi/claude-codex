@@ -43,13 +43,23 @@ if (( bad < ${FAKE_FAIL_FIRST:-0} )); then
   esac
   exit 0
 fi
+# FAKE_TARGET=code: the marker is a '#' comment line in app.py; FAKE_TARGET=plan: an
+# HTML comment line in the plan file. A heading or sentence that merely mentions
+# the marker does not count.
+marker_present() {
+  if [[ ${FAKE_TARGET:-code} == plan ]]; then
+    grep -Eqs -- "^[[:space:]]*<!--[[:space:]]*review-fix-${1}[[:space:]]*-->[[:space:]]*$" "$2"/.claude/plan/*.md
+  else
+    grep -Eqs -- "^[[:space:]]*#[[:space:]]*review-fix-$1([^0-9].*)?$" "$2/app.py"
+  fi
+}
 rounds=${FAKE_ROUNDS:-6}
 read -r -a sevs <<< "${FAKE_SEVERITIES:-HIGH}"
 next=0
 for ((k = 1; k <= rounds; k++)); do
   # WHY a comment line in the changed file only: a marker quoted in notes, REVIEW.md
   # or the session log must not count as the fix being made.
-  grep -Eqs -- "^[[:space:]]*(#|//|<!--).*review-fix-$k([^0-9]|\$)" "$dir/app.py" "$dir"/.claude/plan/*.md || { next=$k; break; }
+  marker_present "$k" "$dir" || { next=$k; break; }
 done
 echo "THREAD_ID: fake-thread"
 if [[ $next == 0 ]]; then

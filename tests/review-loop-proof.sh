@@ -42,6 +42,7 @@ case "$scenario" in
   malformed)   export FAKE_ROUNDS=1 FAKE_FAIL_FIRST=4 FAKE_FAIL_MODES="empty noverdict dup bad" FAKE_SEVERITIES=HIGH ;;
   *) echo "unknown scenario: $scenario" >&2; exit 2 ;;
 esac
+case "$skill" in plan-codex) export FAKE_TARGET=plan ;; *) export FAKE_TARGET=code ;; esac
 cd "$repo"
 git init -q
 printf 'def greet(name):\n    return "hi " + name\n' > app.py
@@ -76,7 +77,11 @@ check() { if eval "$2"; then echo "PASS: $1"; else echo "FAIL: $1"; fail=1; fi; 
 all_markers() {
   local k
   for k in $(seq 1 "$FAKE_ROUNDS"); do
-    grep -Eqs -- "^[[:space:]]*(#|//|<!--).*review-fix-$k([^0-9]|\$)" "$repo/app.py" "$repo"/.claude/plan/*.md || return 1
+    if [[ $FAKE_TARGET == plan ]]; then
+      grep -Eqs -- "^[[:space:]]*<!--[[:space:]]*review-fix-${k}[[:space:]]*-->[[:space:]]*$" "$repo"/.claude/plan/*.md || return 1
+    else
+      grep -Eqs -- "^[[:space:]]*#[[:space:]]*review-fix-$k([^0-9].*)?$" "$repo/app.py" || return 1
+    fi
   done
 }
 # Each finding round K must appear as a real reviewer call, in order, then a CLEAN call after the last.
@@ -99,5 +104,5 @@ if [[ $scenario == failed || $scenario == malformed ]]; then
 fi
 # WHY a phrase match, not any mention of UNREVIEWED: the report may truthfully narrate
 # that early calls "died with UNREVIEWED"; the failure is claiming the work still is.
-check "final report does not label the work UNREVIEWED" '! grep -qiE "(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?UNREVIEWED|review incomplete|audit incomplete" "$out/session.txt"'
+check "final report does not label the work UNREVIEWED" '! grep -qiE "(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?UNREVIEWED|[:=] *\**UNREVIEWED|review incomplete|audit incomplete" "$out/session.txt"'
 exit $fail

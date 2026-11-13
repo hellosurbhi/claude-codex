@@ -225,7 +225,7 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
     └── fake-codex-call.sh   # the scripted reviewer: one finding per round, tied to repo state
 ```
 
-`tests/review-loop-proof.sh <skills-dir|installed> <claude-codex|plan-codex> <round6|high-only|medium-only|low-only|failed>` proves the loop has no round cap and no severity floor: it passes only when every scripted round is fixed, round 6 is reached in the `round6` scenario, the run ends on a clean re-review, and in the `failed` scenario two calls with no verdict are followed by more calls until a verdict arrives. The output directory must be empty. Each run is a real Claude session, so it uses API quota.
+`tests/review-loop-proof.sh <skills-dir|installed> <claude-codex|plan-codex> <round6|high-only|medium-only|low-only|failed|malformed>` proves the loop has no round cap and no severity floor: it passes only when every scripted round is fixed, round 6 is reached in the `round6` scenario, the run ends on a clean re-review, and in the `failed` scenario two dead calls (and in `malformed` an empty, verdict-less, duplicate-verdict and invalid-verdict reply) are followed by more calls until a verdict arrives. The output directory must be empty. Each run is a real Claude session, so it uses API quota.
 
 The `prompts/codex/` files are passed via `--role` on each Codex call to shape its behaviour per phase.
 
