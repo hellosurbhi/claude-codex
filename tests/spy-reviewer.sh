@@ -12,7 +12,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 argv=("$@")
 EVSTART="$(python3 -c 'import time; print(time.time())')"
-tmp="$(mktemp)"; err="$(mktemp)"; snap="$(mktemp)"; tree=""
+tmp="$(mktemp)"; err="$(mktemp)"; snap="$(mktemp)"; dout="$(mktemp)"; derr="$(mktemp)"; delivered=""; tree=""
 # WHY tolerant of a missing tier: a workflow may call it as `spy <file>` instead of
 # `spy <tier> <file> <out>`; the spy's job is to review what it is handed, not to police usage.
 if [[ -f "${1:-}" ]]; then set -- unknown "$@"; fi
@@ -25,18 +25,18 @@ SPY_LOG="${SPY_LOG:-$(cd "$(git rev-parse --show-toplevel)/.." && pwd)/spy.log}"
 EVLOG="${EVLOG:-$(cd "$(git rev-parse --show-toplevel)/.." && pwd)/wrapper.jsonl}"
 finish() {
   local rc=$?
-  local o="$tmp"; [[ $rc -eq 0 ]] || o=/dev/null
+  # WHY the event holds what the delivery step actually produced ($dout and $derr, captured while delivering): the reply
+  # may go to stdout, to stderr or to a file depending on the output path, and a log built from assumptions can disagree
+  # with what the caller received (r20). Before delivery (a failed run) the streams are the diagnostics replayed to the caller.
+  local o="$dout" errall="$derr"
+  if [[ -z "$delivered" ]]; then
+    o=/dev/null; errall="$err.all"; cp "$err" "$errall"; [[ $rc -eq 0 || -z "${replayed:-}" ]] || cat "$tmp" >> "$errall"
+  fi
   # WHY the SNAPSHOT is logged and hashed, not the live path: the file may change while the reviewer runs, and the
   # event must describe exactly what was reviewed (r14).
   local src="$snap"; [[ -s "$snap" || -f "$in" ]] || src=/dev/null
-  # WHY stderr is err plus the stdout the failure path replays to the caller: the event must hold every stream the
-  # caller actually saw (r16).
-  # WHY tmp is added only when the failure path replayed it ($replayed): a failed output write shows the caller just the
-  # shell diagnostic, so logging the undisplayed reviewer text instead would misstate what the caller saw (r17).
-  # WHY a successful call logs no stderr: it never replays $err to the caller, so logging it would invent output (r18).
-  local errall="$err.all"; : > "$errall"; [[ $rc -eq 0 ]] || cat "$err" >> "$errall"; [[ $rc -eq 0 || -z "${replayed:-}" ]] || cat "$tmp" >> "$errall"
   TREE_SHA256="$tree" EVSTART="$EVSTART" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$src" "$o" "$errall" -- "${argv[@]+"${argv[@]}"}"
-  rm -f "$tmp" "$err" "$err.all" "$snap"
+  rm -f "$tmp" "$err" "$err.all" "$snap" "$dout" "$derr"
 }
 trap finish EXIT
 [[ -f "$in" ]] || { echo "spy-reviewer: input file missing: $in" | tee "$err" >&2; exit 1; }
@@ -65,5 +65,14 @@ elif [[ $(grep -cE '^VERDICT:' "$tmp") == 1 && $(grep -cE '^VERDICT: ' "$tmp") =
 fi
 printf 'reviewer tier=%s bytes=%s has_add=%s impl=%s result=%s\n' "$tier" "$(wc -c < "$in" | tr -d ' ')" "$has_add" "$impl" "$result" >> "$SPY_LOG"
 if [[ $result == FAILED ]]; then replayed=1; cat "$err" "$tmp" >&2; exit 1; fi
-if ! { cat "$tmp" > "$outf"; } 2>>"$err"; then cat "$err" >&2; exit 1; fi
-[[ "$outf" == /dev/stdout ]] || cat "$tmp"
+# WHY the delivery is captured and replayed: the reply must reach the caller exactly once whatever the output path is
+# (/dev/stdout and /dev/fd/1 are the same stream as the plain echo), and the event must log what was delivered.
+deliver() {
+  # WHY no redirect of the shell's own error here: stderr is already the capture file, so a failed open reports its
+  # diagnostic there once, and an output path of /dev/stderr resolves to the same capture file.
+  cat "$tmp" > "$outf" || return 1
+  [[ "$outf" -ef /dev/stdout ]] || cat "$tmp"
+}
+delivered=1
+deliver >"$dout" 2>"$derr" || { cat "$dout"; cat "$derr" >&2; exit 1; }
+cat "$dout"; cat "$derr" >&2

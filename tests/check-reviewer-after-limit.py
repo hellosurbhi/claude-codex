@@ -45,6 +45,16 @@ def reviewed_changes(lines):
             out[n] = (pa + a, pr + r)
     return out
 
+def patch_sections(lines):
+    # The .py file sections of a git diff, each starting at its "diff --git" line, kept whole (headers, hunks, context).
+    secs, cur = [], None
+    for l in lines:
+        if l.startswith("diff --git "):
+            cur = [l]; secs.append(cur)
+        elif cur is not None:
+            cur.append(l)
+    return [sc for sc in secs if sc[0].split(" b/")[-1].endswith(".py")]
+
 args = sys.argv[1:]
 evs = wlog.load(args[0])
 phase = args[args.index("--phase") + 1] if "--phase" in args else None
@@ -104,4 +114,28 @@ if repo is not None:
     got = reviewed_changes((spies[-1].get("input_text") or "").splitlines())
     if set(got) != set(expected) or any(got[n] != expected[n] for n in expected):
         sys.exit(1)
+    # WHY apply the reviewed patch: matching added/removed lines alone accepts a stale patch whose lines sit at other
+    # locations or in other context. Applying the full patch (hunk headers and context included) to the baseline must
+    # reproduce every final .py file exactly (r20).
+    secs = patch_sections((spies[-1].get("input_text") or "").splitlines())
+    with tempfile.TemporaryDirectory() as d:
+        for name in names:
+            base = b""
+            if root:
+                r = subprocess.run(["git", "-C", repo, "show", root[0] + ":" + name], capture_output=True)
+                base = r.stdout if r.returncode == 0 else b""
+            if base or name in got:
+                os.makedirs(os.path.dirname(os.path.join(d, name)) or d, exist_ok=True)
+                if root and subprocess.run(["git", "-C", repo, "cat-file", "-e", root[0] + ":" + name], capture_output=True).returncode == 0:
+                    open(os.path.join(d, name), "wb").write(base)
+        patch = "\n".join(l for sec in secs for l in sec) + "\n"
+        if secs:
+            r = subprocess.run(["git", "apply", "--unsafe-paths", "--directory", "", "-p1", "--whitespace=nowarn", "-"], input=patch.encode(), cwd=d, capture_output=True)
+            if r.returncode != 0:
+                sys.exit(1)
+        for name in names:
+            p2 = os.path.join(repo, name)
+            q = os.path.join(d, name)
+            if os.path.isfile(p2) != os.path.isfile(q) or (os.path.isfile(p2) and open(p2, "rb").read() != open(q, "rb").read()):
+                sys.exit(1)
 sys.exit(0)

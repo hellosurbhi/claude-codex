@@ -274,4 +274,53 @@ expect pass "and it counts as the usage limit" python3 "$here/check-limit-hit.py
 expect fail "Initial audit incomplete due to quota, final fallback APPROVED is not flagged" unrev "Initial Codex audit incomplete due to quota. Final fallback review: APPROVED."
 expect pass "Review incomplete as a final statement is flagged" unrev "Final status: review incomplete. The changes are UNREVIEWED."
 
+# r20: whatever the output path is, the reply reaches the caller exactly once and the event records exactly what was delivered.
+for op in /dev/stdout /dev/fd/1 "$tmp/o.txt"; do
+  mkrun; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
+  got="$(PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$op" 2>/dev/null)"
+  expect pass "spy delivers the reply once on stdout for output path $op" test "$(printf '%s\n' "$got" | grep -c '^VERDICT')" = 1
+  expect pass "the event stdout equals what the caller received for $op" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stdout"].strip()==sys.argv[3].strip())' "$here" "$EVLOG" "$got")" = "True"
+done
+mkrun; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" /dev/stderr >/dev/null 2>"$tmp/e.txt"
+expect pass "a reply sent to /dev/stderr is logged as stderr, once" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stderr"].count("VERDICT")==1 and e["stderr"].strip()==open(sys.argv[3]).read().strip())' "$here" "$EVLOG" "$tmp/e.txt")" = "True"
+
+# r20: the reviewed patch must reproduce the final files from the baseline (hunk locations and context included).
+commitbase() { (cd "$tmp/run/repo" && git add -A >/dev/null 2>&1 && git update-ref HEAD "$(echo base | git commit-tree "$(git write-tree)")"); }
+mkrun; cd "$tmp/run/repo"; printf 'k\nk\nk\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
+printf 'k\nNEW\nk\nk\ndef add(a, b):\n    return a + b\n' > app.py
+git diff --no-color HEAD -- app.py > "$tmp/good.diff"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/good.diff" "$tmp/out.txt" >/dev/null 2>&1; : > "$tmp/x"
+line fake 1 unknown "$LIMIT" ; python3 - "$EVLOG" <<'PY'
+import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
+fake[0]["ts"]=spy[0]["ts_start"]-5; fake[0]["ts_start"]=fake[0]["ts"]-1
+open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in fake+spy)+"\n")
+PY
+expect pass "a reviewed patch that reproduces the final file is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+# same added line, wrong location: the patch inserts NEW after the second k
+sed -e 's/^@@.*/@@ -1,4 +1,5 @@/' "$tmp/good.diff" > /dev/null
+mkrun; cd "$tmp/run/repo"; printf 'k\nk\nk\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
+printf 'k\nNEW\nk\nk\ndef add(a, b):\n    return a + b\n' > app.py
+cat > "$tmp/stale.diff" <<'D'
+diff --git a/app.py b/app.py
+--- a/app.py
++++ b/app.py
+@@ -1,5 +1,6 @@
+ k
+ k
++NEW
+ k
+ def add(a, b):
+     return a + b
+D
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/stale.diff" "$tmp/out.txt" >/dev/null 2>&1
+line fake 1 unknown "$LIMIT"; python3 - "$EVLOG" <<'PY'
+import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
+fake[0]["ts"]=spy[0]["ts_start"]-5; fake[0]["ts_start"]=fake[0]["ts"]-1
+open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in fake+spy)+"\n")
+PY
+expect fail "a stale patch with the same added line at another location is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+
 exit $fail
