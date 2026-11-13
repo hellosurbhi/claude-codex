@@ -92,6 +92,10 @@ if not spies or not wlog.is_clean(spies[-1]):
 if phase is not None and spies[-1]["phase"] != phase:
     sys.exit(1)
 if plan is not None:
+    # WHY tier S only (r37): production tier R reviews committed repository state (REVIEW_BASE_SHA), not a plan file; a plan fallback is
+    # a fresh Codex thread (not a spy) or reviewer.sh S, so an R spy review does not validate a plan.
+    if spies[-1]["argv"][0] != "S":
+        sys.exit(1)
     if not os.path.isfile(plan) or os.path.getsize(plan) == 0:
         sys.exit(1)
     if hashlib.sha256(open(plan, "rb").read()).hexdigest() != spies[-1].get("input_sha256"):

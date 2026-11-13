@@ -140,6 +140,16 @@ expect fail "a later failed review means the last review is not clean" python3 "
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan line\r\nsecond\r\n' > "$tmp/plan.md"
 PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "an unchanged CRLF plan matches the reviewed digest" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+# r37: a tier R review is of committed repository state, so it never validates a plan file
+python3 - "$EVLOG" "$tmp/evR.jsonl" <<'PYR'
+import json, sys
+out = open(sys.argv[2], "w")
+for l in open(sys.argv[1]):
+    e = json.loads(l)
+    if e["wrapper"] == "spy": e["argv"][0] = "R"
+    out.write(json.dumps(e) + "\n")
+PYR
+expect fail "a tier R spy review does not validate the plan file" python3 "$here/check-reviewer-after-limit.py" "$tmp/evR.jsonl" --plan-file "$tmp/plan.md"
 # the event describes the snapshot, so a plan edited DURING the review no longer matches.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan v1\n' > "$tmp/plan.md"
 EDIT_DURING="$tmp/plan.md" PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
@@ -588,7 +598,7 @@ expect pass "deleting an imported helper module changes the state hash" test "$b
 mkrun; cd "$tmp/run/repo"
 spyrun "$tmp/no-such-dir/o.txt" >/dev/null 2>&1; rc=$?
 expect pass "an unwritable output path fails the spy" test "$rc" != 0
-expect pass "and the event stderr holds the open failure once" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stderr"].count("no-such-dir"))' "$here" "$EVLOG")" = 1
+expect pass "and the event stderr holds the open failure once" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stderr"].count("cannot write output"))' "$here" "$EVLOG")" = 1
 expect pass "and the event logs no reply" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print(len(es)==1 and "VERDICT" not in wlog.reply_text(es[-1]))' "$here" "$EVLOG")" = True
 
 # r36: a quota reply from a bare direct codex call does not anchor the after-limit ordering, and a missing clause in a command is caught
@@ -603,5 +613,22 @@ assert n >= 1
 open(p,"w").write(s.replace("(a call that merely died", "(a Codex usage limit is always a blocker; a call that merely died"))
 PY2
 expect fail "a command whose quota clause no longer matches is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
+
+# r37: a named FIFO destination is opened once, so the reader does not see an early EOF and the spy does not block
+mkrun; cd "$tmp/run/repo"; rm -f "$tmp/ff"; mkfifo "$tmp/ff"
+( cat "$tmp/ff" > "$tmp/ff.got" ) & rpid=$!
+python3 - "$here/spy-reviewer.sh" "$tmp/bin" "$tmp/run/spy.log" "$tmp/plan.md" "$tmp/ff" <<'PYF'
+import os, subprocess, sys
+spy, b, log, plan, ff = sys.argv[1:6]
+env = dict(os.environ, PATH=b + ":" + os.environ["PATH"], SPY_LOG=log)
+try:
+    r = subprocess.run(["bash", spy, "S", plan, ff], env=env, timeout=240, capture_output=True)
+    sys.exit(r.returncode)
+except subprocess.TimeoutExpired:
+    sys.exit(99)
+PYF
+frc=$?; kill "$rpid" 2>/dev/null; wait "$rpid" 2>/dev/null
+expect pass "the spy completes against a named FIFO reader" test "$frc" = 0
+expect pass "and the reader got the reply once" test "$(grep -c '^VERDICT' "$tmp/ff.got")" = 1
 
 exit $fail

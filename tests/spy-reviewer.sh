@@ -76,10 +76,21 @@ if [[ $result == FAILED ]]; then replayed=1; cat "$err" "$tmp" >&2; exit 1; fi
 # file redirects the spy's stdout itself. What the event log records is the reply written, which is the same single copy.
 delivered=1
 # WHY the event copy is made only after the write succeeds (r34): a failed write delivered nothing, so the log must not show an approval.
-# WHY an append-open probe with stderr captured, then the real write with stderr untouched (r35): bash reports a failed open of "$outf"
-# to the stderr in effect at that moment, so the diagnostic only reaches the event log if stderr is captured first; but capturing
-# stderr around the real write would make an output path of /dev/stderr resolve to the capture. The probe opens in append mode with
-# nothing written, so it cannot change the file, and a failure there is replayed once to the caller.
-if ! : 2>>"$derr" >> "$outf"; then cat "$derr" >&2; exit 1; fi
-cat "$tmp" > "$outf" 2>>"$derr" || { cat "$derr" >&2; exit 1; }
+# WHY one python open-and-write, not a shell redirect (r35, r37): the shell gives no way to capture the diagnostic of a failed open of
+# "$outf" without redirecting stderr, which would make an output path of /dev/stderr resolve to the capture; and a probe open followed
+# by the real open is two open/close sessions, so a named FIFO reader can see EOF from the empty first session and exit before the
+# real write, blocking the spy. Python opens the destination exactly once with stderr untouched, writes the reply, and on failure
+# prints the diagnostic to the caller's stderr and appends the same text to the captured stderr for the event log.
+python3 -I -c '
+import sys
+out, reply, errlog = sys.argv[1:4]
+try:
+    with open(out, "wb") as f:
+        f.write(open(reply, "rb").read())
+except OSError as e:
+    msg = "spy-reviewer: cannot write output %s: %s\n" % (out, e)
+    sys.stderr.write(msg); sys.stderr.flush()
+    open(errlog, "a").write(msg)
+    sys.exit(1)
+' "$outf" "$tmp" "$derr" || exit 1
 cp "$tmp" "$dout"
