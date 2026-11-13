@@ -404,4 +404,35 @@ PY
 expect pass "a clean spy review delivered through /dev/stderr counts as clean" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 expect fail "a report whose last non-blank line is a closing fence after the status is rejected" st $'```\nAUDIT-STATUS: APPROVED reviewer=codex\n```'
 
+# r24: structural phase, no-stop clause mirrored, shim subcommand parsing, git add -N never adds every untracked file
+mkrun; cd "$tmp/run/repo"
+printf 'add = lambda a, b: a + b\n' > "$tmp/lam.py"; git diff --no-index --no-color /dev/null "$tmp/lam.py" > "$tmp/lam.diff"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/lam.diff" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "a lambda implementation is phase implementation" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = implementation
+mkdir -p "$tmp/tt"; printf 'def test_x():\n    def helper(a, b):\n        return a + b\n    assert helper(1, 2) == 3\n' > "$tmp/tt/test_app.py"; git diff --no-index --no-color /dev/null "$tmp/tt/test_app.py" > "$tmp/tt.diff"
+mkrun; cd "$tmp/run/repo"; PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/tt.diff" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "a tests-only diff containing return a + b is phase tests" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = tests
+cat > "$tmp/bin/stubok" <<'SH'
+#!/usr/bin/env bash
+echo '{"type":"thread.started","thread_id":"T-real"}'
+echo '{"type":"item.completed","item":{"type":"agent_message","text":"VERDICT: APPROVED"}}'
+echo '{"type":"turn.completed"}'; exit 0
+SH
+chmod +x "$tmp/bin/stubok"
+mkrun; cd "$tmp/run/repo"
+REAL_CODEX="$tmp/bin/stubok" bash "$here/shim/codex" exec -p review --sandbox read-only --cd "$tmp/run/repo" --json --skip-git-repo-check "resume" >/dev/null 2>&1
+expect pass "a new call whose prompt is the word resume is not logged as a resume" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["resume"])' "$here" "$EVLOG")" = "None"
+REAL_CODEX="$tmp/bin/stubok" bash "$here/shim/codex" exec -p review --sandbox read-only --cd "$tmp/run/repo" resume --json --skip-git-repo-check T-real "again" >/dev/null 2>&1
+expect pass "a real resume is logged with its thread id" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["resume"])' "$here" "$EVLOG")" = "T-real"
+rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+python3 - "$tmp/mir/commands/tdd-execute-codex.md" <<'PY'
+import sys; p=sys.argv[1]; s=open(p).read()
+a="Never conclude the reviewer is stuck"; assert a in s
+open(p,"w").write(s.replace(a,"Always conclude the reviewer is stuck",1))
+PY
+expect fail "a reversed no-stop clause in one command copy is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
+rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+sed -i '' 's/`git add -N <each file this task created>`/`git add -N .`/' "$tmp/mir/skills/claude-codex/SKILL.md"
+expect fail "a git add -N . instruction in a skill is rejected" python3 "$here/test-mirrors.py" "$tmp/mir"
+
 exit $fail

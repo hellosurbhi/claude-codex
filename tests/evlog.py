@@ -10,11 +10,20 @@
 # documentation never reach the wrapper, so they never log.
 import fcntl, hashlib, json, os, re, sys, time
 
+def _is_test_path(path):
+    base = os.path.basename(path)
+    return bool(re.match(r"test_|tests?\.py$", base) or base.endswith("_test.py") or "/tests/" in "/" + path or "/test/" in "/" + path)
+
 def phase_of(text):
     # Phase comes from what the wrapper actually received: a diff or plan file for the reviewer
-    # spy, the prompt for the Codex wrappers. Implementation wins over tests: a diff holding
-    # both the tests and `def add` is the implementation phase.
-    if re.search(r"def\s+add\s*\(|return\s*\(?\s*\w+\s*\+\s*\w+", text):
+    # spy, the prompt for the Codex wrappers.
+    # WHY the changed paths decide for a diff, not code text: a diff that touches a non-test .py file is the implementation
+    # phase however the function is written (`def add (a, b)`, a lambda, ...), and a diff of test files only is the tests
+    # phase even when a test body contains `return a + b` (r24).
+    paths = re.findall(r"^diff --git a/(\S+\.py) b/", text, re.M)
+    if paths:
+        return "implementation" if any(not _is_test_path(x) for x in paths) else "tests"
+    if re.search(r"def\s+add\s*\(", text):
         return "implementation"
     if re.search(r"\.claude/plan|<!--\s*review-fix|^#{1,3} .*\bplan\b", text, re.I | re.M) and not re.search(r"^diff --git|^\+\+\+ ", text, re.M):
         return "plan"

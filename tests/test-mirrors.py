@@ -17,7 +17,7 @@ def prose(path):
         if not fence:
             out.append((i, l))
     return out
-CLAUSE = "`git add -N .` in your own shell first (the reviewer is read-only and cannot update the index, so new files reach the diff only this way)"
+CLAUSE = "`git add -N <each file this task created>` in your own shell first (never `.`, so credentials, keys and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way)"
 # a line that (re)calls a reviewer on a diff or on test files must carry the clause itself
 CALL = re.compile(r"^\s*(- )?(Run `git diff|Re-call Codex via|Call Codex via)|re-calls? `codex-call\.sh --resume|re-run (the )?`?code-reviewer`?|re-audits? via", re.I)
 # (regex, workflows that must contain it); every snippet must also appear equally often in a skill and its command
@@ -27,11 +27,15 @@ SNIPPETS = [
     (r"reviewer\.sh S <(?:diff|plan)-file> <out-file>", NAMES),
     (r"REVIEW_BASE_SHA=<base commit> ~/\.claude/config/scripts/reviewer\.sh R", DIFF_NAMES),
     (r"End the final report with exactly one machine-readable line, `AUDIT-STATUS: APPROVED reviewer=<name>`", NAMES),
+    (r"Never conclude the reviewer is stuck, never report that no clean round was reached", []),
+    (r"There is no iteration cap and no stop to ask the user after N rounds", []),
 ]
 bad = []
 for n in DIFF_NAMES:
     for f in files(n):
         for i, l in prose(f):
+            if "git add -N ." in l or "git add -N`" in l and "<each file" not in l:
+                bad.append("%s:%d adds every untracked file (git add -N .); name the task's own files" % (os.path.relpath(f, root), i))
             if "git add -N" in l and CLAUSE not in l:
                 bad.append("%s:%d git add -N line lacks the canonical clause" % (os.path.relpath(f, root), i))
             if CALL.search(l) and "git add -N" not in l and "codex-call.sh --resume <THREAD_ID> --sandbox" not in l and "no shared" not in l:
@@ -48,6 +52,8 @@ CLAUSES = [
     r"\(the active reviewer is the Codex thread or.{0,400}?no Codex thread is required\)",
     r"\(a fresh Codex thread without `--resume`.{0,900}?on the current head\)",
     r"End the final report with exactly one machine-readable line.{0,400}?last non-blank line of the report\.",
+    r"Never conclude the reviewer is stuck, never report that no clean round was reached, and never hand the user a keep-going-or-drop-it decision; a doubt about a finding goes through",
+    r"There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity",
 ]
 for rx in CLAUSES:
     seen = {}

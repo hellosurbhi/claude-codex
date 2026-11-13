@@ -39,7 +39,20 @@ for line in raw:
     if ev.get("type") == "error": errs.append(str(ev.get("message", ev)))
     it = ev.get("item", {})
     if ev.get("type") == "item.completed" and it.get("type") == "agent_message": msg = it.get("text", "")
-resume = argv[-2] if "resume" in argv else ""
+# WHY parse the subcommand: only the first non-option token after `exec` (skipping option values) is the subcommand, so a
+# new call whose PROMPT is the word "resume" is not a resume (r24).
+VALOPT = {"-p", "--profile", "-s", "--sandbox", "-C", "--cd", "-m", "--model", "-c", "--config", "--color", "-i", "--image", "--output-schema", "-o", "--output-last-message"}
+def subcommand_and_id(args):
+    i = 1
+    while i < len(args) and args[i].startswith("-"):
+        i += 2 if args[i] in VALOPT else 1
+    if i >= len(args) or args[i] != "resume":
+        return ""
+    i += 1
+    while i < len(args) and args[i].startswith("-"):
+        i += 2 if args[i] in VALOPT else 1
+    return args[i] if i < len(args) else ""
+resume = subcommand_and_id(argv)
 open(pf, "w").write(argv[-1] if argv else "")
 ok = done and bool(msg) and rc == "0"
 open(so, "w").write(("THREAD_ID: %s\n%s\n" % (tid, msg)) if ok else "")
