@@ -180,7 +180,7 @@ if [[ $scenario == real ]]; then
   echo "LAST_VERDICT: $(python3 "$here/last-verdict.py" "$out/wrapper.jsonl")"
   echo "THREAD_IDS: $(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; print(" ".join(sorted({e["thread_id"] for e in wlog.load(sys.argv[2]) if e["thread_id"]})))' "$here" "$out/wrapper.jsonl")"
   echo "SECONDARY (transcript): resume mentions=$(grep -c -- '--resume' "$out/events.txt")"
-  check "final report does not label the work UNREVIEWED" '! grep -qiE "(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED|review incomplete|audit incomplete" "$out/session.txt"'
+  check "final report does not label the work UNREVIEWED" '! grep -qiE "$(cat "$here/unreviewed.re")" "$out/session.txt"'
   exit $fail
 fi
 if [[ $scenario == usage-limit ]]; then
@@ -231,5 +231,5 @@ if [[ $scenario == failed || $scenario == malformed ]]; then
 fi
 # WHY a phrase match, not any mention of UNREVIEWED: the report may truthfully narrate
 # that early calls "died with UNREVIEWED"; the failure is claiming the work still is.
-check "final report does not label the work UNREVIEWED" '! grep -qiE "(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED|review incomplete|audit incomplete" "$out/session.txt"'
+check "final report does not label the work UNREVIEWED" '! grep -qiE "$(cat "$here/unreviewed.re")" "$out/session.txt"'
 exit $fail

@@ -79,9 +79,13 @@ if repo is not None:
     # lines (order, indentation and operators intact, only the one-character diff prefix removed) that turn the first
     # commit's file into the file that remains (r16, r17).
     root = subprocess.run(["git", "-C", repo, "rev-list", "--max-parents=0", "HEAD"], capture_output=True, text=True).stdout.split()
-    names = {f for f in os.listdir(repo) if f.endswith(".py")}
+    # WHY recursive, with the tree digest's exclusions: a nested module must be covered like a root one (r18).
+    names = set()
+    for dp, dn, fn in os.walk(repo):
+        dn[:] = [d for d in dn if d not in (".git", ".claude", "__pycache__", ".pytest_cache", "node_modules")]
+        names |= {os.path.relpath(os.path.join(dp, f), repo) for f in fn if f.endswith(".py")}
     if root:
-        names |= {f for f in subprocess.run(["git", "-C", repo, "ls-tree", "--name-only", root[0]], capture_output=True, text=True).stdout.split() if f.endswith(".py")}
+        names |= {f for f in subprocess.run(["git", "-C", repo, "ls-tree", "-r", "--name-only", root[0]], capture_output=True, text=True).stdout.splitlines() if f.endswith(".py")}
     expected = {}
     for name in sorted(names):
         base = b""

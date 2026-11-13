@@ -3,7 +3,8 @@
 # writes calls.log, such as a resume of an unknown thread, must not leave an earlier CLEAN standing; r17).
 import sys
 import wlog
-evs = [e for e in wlog.load(sys.argv[1]) if e["wrapper"] == "fake"]
+# WHY ordered by START time: a slow older call that finishes after a newer one must not become "the last word" (r18).
+evs = sorted((e for e in wlog.load(sys.argv[1]) if e["wrapper"] == "fake"), key=lambda e: e.get("ts_start", e["ts"]))
 mode = sys.argv[2]
 if mode == "rounds":
     # finding rounds 1..N each appeared as a real reply, in order, as the subsequence of the reviewer's replies

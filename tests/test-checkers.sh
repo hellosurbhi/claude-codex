@@ -236,4 +236,33 @@ expect pass "scripted: two dead calls then a verdict satisfies failfirst 2" pyth
 bash "$fake" --resume nope again >/dev/null 2>&1
 expect fail "scripted: a bad call after the first verdict fails failfirst" python3 "$here/check-scripted.py" "$EVLOG" failfirst 2
 
+# carried finding: a truthful recovery report must not trip the UNREVIEWED check, a final UNREVIEWED status must.
+unrev() { printf '%s\n' "$1" | grep -qiE "$(cat "$here/unreviewed.re")"; }
+expect fail "a recovery report (initial UNREVIEWED, then approved) is not flagged" unrev "Initial review: UNREVIEWED. Retry succeeded. Final review: APPROVED."
+expect pass "a final Status: UNREVIEWED is flagged" unrev "Status: UNREVIEWED"
+expect pass "the changes remain UNREVIEWED is flagged" unrev "The changes remain UNREVIEWED."
+
+# r18: nested modules, start-time order, spy success stderr, shim header.
+rv; mkdir -p pkg; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > pkg/mod.py
+gdiff app.py > "$tmp/diff.txt"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+expect fail "a diff omitting a nested module is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+gdiff app.py pkg/mod.py > "$tmp/diff.txt"; : > "$EVLOG"; line fake 1 unknown "$LIMIT"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "a complete diff including a nested module is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+mkrun; python3 - "$EVLOG" <<'PY'
+import json, sys
+ev = lambda seq, st, ts, out, meta: {"seq": seq, "wrapper": "fake", "argv": [], "exit": 0, "resume": None, "thread_id": "t", "phase": "unknown", "stdout": out, "stderr": "", "ts_start": st, "ts": ts, "meta": meta}
+clean = "THREAD_ID: t\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n"
+rows = [ev(1, 20, 21, "THREAD_ID: t\nVERDICT: WARNING\n", {"result": "HIGH", "round": "1", "state": "s", "impl": "yes"}), ev(2, 5, 30, clean, {"result": "CLEAN", "state": "s", "impl": "yes"})]
+open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+expect fail "an older clean call that finished later is not the last execution" python3 "$here/check-scripted.py" "$EVLOG" final s
+mkrun; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"; printf '#!/usr/bin/env bash\necho "noise" >&2\necho "VERDICT: APPROVED"\n' > "$tmp/bin2/claude"
+PATH="$tmp/bin2:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "a successful spy call logs no stderr it never replayed" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["exit"]==0 and e["stderr"]=="")' "$here" "$EVLOG")" = "True"
+mkrun; cd "$tmp/run/repo"; printf '#!/usr/bin/env bash\nexit 1\n' > "$tmp/bin/stubfail"; chmod +x "$tmp/bin/stubfail"
+REAL_CODEX="$tmp/bin/stubfail" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
+expect pass "a silent Codex failure logs only the terminal message, no invented header" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print("Codex CLI said" not in e["stderr"] and "Treat as UNREVIEWED" in e["stderr"])' "$here" "$EVLOG")" = "True"
+
 exit $fail

@@ -77,7 +77,7 @@ Call Codex via `codex-call.sh` with:
 - `prompt`:
 
 ```
-Run `git diff HEAD` to see all uncommitted changes, then review them.
+Run `git add -N .` (so newly created files are included), then `git diff HEAD` to see all uncommitted changes, then review them.
 
 Return ONLY a structured verdict in this exact format — no explanations, no prose:
 
@@ -123,7 +123,7 @@ Address ALL accepted findings before re-reviewing:
 - Re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
-Run `git diff HEAD` again to see the updated changes after fixes, then re-review.
+Run `git add -N .` and then `git diff HEAD` again to see the updated changes after fixes, including any file a fix created, then re-review.
 
 Return ONLY the structured verdict in the same format.
 ```

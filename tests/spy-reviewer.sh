@@ -33,7 +33,8 @@ finish() {
   # caller actually saw (r16).
   # WHY tmp is added only when the failure path replayed it ($replayed): a failed output write shows the caller just the
   # shell diagnostic, so logging the undisplayed reviewer text instead would misstate what the caller saw (r17).
-  local errall="$err.all"; cp "$err" "$errall"; [[ $rc -eq 0 || -z "${replayed:-}" ]] || cat "$tmp" >> "$errall"
+  # WHY a successful call logs no stderr: it never replays $err to the caller, so logging it would invent output (r18).
+  local errall="$err.all"; : > "$errall"; [[ $rc -eq 0 ]] || cat "$err" >> "$errall"; [[ $rc -eq 0 || -z "${replayed:-}" ]] || cat "$tmp" >> "$errall"
   TREE_SHA256="$tree" EVSTART="$EVSTART" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$src" "$o" "$errall" -- "${argv[@]+"${argv[@]}"}"
   rm -f "$tmp" "$err" "$err.all" "$snap"
 }

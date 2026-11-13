@@ -43,7 +43,9 @@ ok = done and bool(msg) and rc == "0"
 open(so, "w").write(("THREAD_ID: %s\n%s\n" % (tid, msg)) if ok else "")
 diag = ""
 if not ok:
-    diag = "codex-call: Codex CLI said:\n" + "\n".join(errs + [l.rstrip() for l in raw if not l.lstrip().startswith("{")][-20:]) + "\n"
+    # WHY the header only when there is something to say: the real wrapper prints just its terminal message when Codex said nothing (r18).
+    said = errs + [l.rstrip() for l in raw if not l.lstrip().startswith("{")][-20:]
+    diag = ("codex-call: Codex CLI said:\n" + "\n".join(said) + "\n") if said else ""
     diag += open(errf, errors="replace").read()
     diag += "codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED.\n"
 open(so + ".err", "w").write(diag)
