@@ -71,6 +71,14 @@ for rx in CLAUSES:
         for f in files(n):
             for m in re.findall(rx, open(f, encoding="utf-8").read(), re.S):
                 seen.setdefault(re.sub(r"\s+", " ", m), []).append(os.path.relpath(f, root))
+    # WHY per workflow: a command whose clause was rewritten matches zero times while its skill still matches, which the
+    # cross-copy text comparison alone cannot see (r36); a skill and its command must hold the same number of occurrences.
+    # (the last two clauses legitimately differ in count per workflow and have their own per-occurrence rules above)
+    for n in NAMES if rx in CLAUSES[:4] else []:
+        sk, cm = files(n)
+        a, b = len(re.findall(rx, open(sk, encoding="utf-8").read(), re.S)), len(re.findall(rx, open(cm, encoding="utf-8").read(), re.S))
+        if a != b:
+            bad.append("%s: clause %r appears %d times in the skill and %d in the command" % (n, rx[:40], a, b))
     if len(seen) > 1:
         bad.append("clause %r differs between copies: %s" % (rx[:40], " | ".join("%d copies like %r" % (len(v), k[:60]) for k, v in seen.items())))
     if not seen:

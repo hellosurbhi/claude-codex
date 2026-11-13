@@ -176,8 +176,8 @@ echo '{"type":"turn.completed"}'; exit 0
 SH
 chmod +x "$tmp/bin/stubcodex"
 mkrun; cd "$tmp/run/repo"
-STUB_MODE=quota REAL_CODEX="$tmp/bin/stubcodex" viawrap exec --json "prompt" >/dev/null 2>&1
-expect pass "the shim logs a turn.failed quota error as a failed call with the diagnostics" python3 "$here/check-limit-hit.py" "$EVLOG"
+STUB_MODE=quota REAL_CODEX="$tmp/bin/stubcodex" EXPECT_CODEX="$tmp/bin/stubcodex" viawrap exec --json "prompt" >/dev/null 2>&1
+expect pass "the shim logs a turn.failed quota error as a failed call with the diagnostics" env EXPECT_CODEX="$tmp/bin/stubcodex" python3 "$here/check-limit-hit.py" "$EVLOG"
 expect pass "the failed call is normalized to exit 1 and carries the wrapper's terminal message" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print(e["exit"]==1 and "Treat as UNREVIEWED" in e["stderr"])' "$here" "$EVLOG")" = "True"
 mkrun; cd "$tmp/run/repo"
 REAL_CODEX="$tmp/bin/stubcodex" viawrap exec --json resume T-asked "prompt" >/dev/null 2>&1
@@ -270,9 +270,9 @@ expect pass "a silent Codex failure logs only the terminal message, no invented 
 
 # r19: a quota error printed only on stderr is parsed from the merged stream like the wrapper does, once.
 printf '#!/usr/bin/env bash\necho "ERROR: You have hit your usage limit." >&2\nexit 1\n' > "$tmp/bin/stderrquota"; chmod +x "$tmp/bin/stderrquota"
-mkrun; cd "$tmp/run/repo"; REAL_CODEX="$tmp/bin/stderrquota" viawrap exec --json "prompt" >/dev/null 2>&1
+mkrun; cd "$tmp/run/repo"; REAL_CODEX="$tmp/bin/stderrquota" EXPECT_CODEX="$tmp/bin/stderrquota" viawrap exec --json "prompt" >/dev/null 2>&1
 expect pass "a stderr-only quota error is logged once through the wrapper's Codex CLI said header" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print(e["stderr"].count("usage limit")==1 and "Codex CLI said" in e["stderr"])' "$here" "$EVLOG")" = "True"
-expect pass "and it counts as the usage limit" python3 "$here/check-limit-hit.py" "$EVLOG"
+expect pass "and it counts as the usage limit" env EXPECT_CODEX="$tmp/bin/stderrquota" python3 "$here/check-limit-hit.py" "$EVLOG"
 # the final status, not history: an early incomplete audit followed by an approved fallback is not flagged.
 
 # r20 to r33: the spy matches reviewer.sh's output contract (reviewer.sh:3,9,398): the reply is written to the output path once and
@@ -590,5 +590,18 @@ spyrun "$tmp/no-such-dir/o.txt" >/dev/null 2>&1; rc=$?
 expect pass "an unwritable output path fails the spy" test "$rc" != 0
 expect pass "and the event stderr holds the open failure once" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stderr"].count("no-such-dir"))' "$here" "$EVLOG")" = 1
 expect pass "and the event logs no reply" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print(len(es)==1 and "VERDICT" not in wlog.reply_text(es[-1]))' "$here" "$EVLOG")" = True
+
+# r36: a quota reply from a bare direct codex call does not anchor the after-limit ordering, and a missing clause in a command is caught
+mkrun; line direct 1 unknown "$LIMIT"; line spy 0 implementation "$CLEAN"
+expect fail "a direct (non-wrapper) quota event is not a usage limit anchor" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+expect fail "and check-limit-hit does not count it" python3 "$here/check-limit-hit.py" "$EVLOG"
+rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+python3 - "$tmp/mir/commands/tdd-execute-codex.md" <<'PY2'
+import re, sys; p=sys.argv[1]; s=open(p).read()
+n = len(re.findall(r"\(a call that merely died", s))
+assert n >= 1
+open(p,"w").write(s.replace("(a call that merely died", "(a Codex usage limit is always a blocker; a call that merely died"))
+PY2
+expect fail "a command whose quota clause no longer matches is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
 
 exit $fail

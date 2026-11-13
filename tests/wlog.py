@@ -61,7 +61,9 @@ def issued_before(evs, i):
 def limit_index(evs):
     """Index of the first execution that failed with the usage limit, else None."""
     # WHY the quota sentence at line start: a diagnostic that merely echoes an argument (a thread named "usage limit") is not a quota error (r28).
+    # WHY only fake wrappers and real-wrapper executions (r36): a quota reply from a bare `direct` codex call is not the skill's wrapper
+    # call, so it must not anchor the "reviewer ran after the limit" ordering.
     for i, e in enumerate(evs):
-        if e["exit"] != 0 and re.search(r"^\s*(ERROR:\s*)?You(\'ve| have|\u2019ve) hit your usage limit", e["stdout"] + e["stderr"], re.I | re.M):
+        if (e["wrapper"] == "fake" or is_real(e)) and e["exit"] != 0 and re.search(r"^\s*(ERROR:\s*)?You(\'ve| have|\u2019ve) hit your usage limit", e["stdout"] + e["stderr"], re.I | re.M):
             return i
     return None
