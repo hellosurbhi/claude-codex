@@ -71,34 +71,30 @@ printf 'reviewer tier=%s bytes=%s has_add=%s impl=%s result=%s\n' "$tier" "$(wc 
 if [[ $result == FAILED ]]; then replayed=1; cat "$err" "$tmp" >&2; exit 1; fi
 # WHY the delivery is captured and replayed: the reply must reach the caller exactly once whatever the output path is
 # (/dev/stdout and /dev/fd/1 are the same stream as the plain echo), and the event must log what was delivered.
-# WHY the alias is resolved against the ORIGINAL streams, before the capture redirects (r31): once stdout and stderr point at the
+# WHY the alias is resolved against the ORIGINAL streams, before the capture redirects (r31, r32): once stdout and stderr point at the
 # capture files, /dev/stdout resolves to the capture but /dev/fd/3 (a dup of the caller's real stdout) bypasses it, so the reply
-# was written to the caller directly and then echoed again. Comparing the output path with fd 1 and fd 2 by device and inode, from
-# a process that inherits those streams unchanged, tells which stream the reply reaches, and each case delivers exactly once.
-exec 5>&1 6>&2  # WHY dups: inside $(...) fd 1 is the substitution pipe, so the caller's real streams are carried on 5 and 6
-alias="$(python3 -I - "$outf" <<'PY4'
-import os, sys
+# was written to the caller directly and then echoed again. The probe runs with fds 0 to 2 and every caller descriptor exactly as
+# received (no command substitution and no scratch descriptors, so a caller's own /dev/fd/5 or /dev/fd/6 is never overwritten),
+# compares the output path with fd 1 and fd 2 by device and inode and writes the answer to a file.
+aliasf="$(mktemp)"
+python3 -I - "$outf" "$aliasf" <<'PY4'
+import os, re, sys
+res = "other"
 try:
-    # WHY by name first: /dev/stdout and /dev/fd/1 resolve to THIS process's fd 1, the substitution pipe, not the caller's stream.
     rp = os.path.realpath(sys.argv[1])
-    if rp in ("/dev/fd/1", "/dev/stdout"):
-        print("stdout"); raise SystemExit
-    if rp in ("/dev/fd/2", "/dev/stderr"):
-        print("stderr"); raise SystemExit
-    # WHY fstat on the numbered descriptor: os.stat("/dev/fd/N") describes the devfs node, not the pipe or file behind fd N.
-    import re
     m = re.fullmatch(r"/dev/fd/(\d+)", rp)
+    # WHY fstat on the numbered descriptor: os.stat("/dev/fd/N") describes the devfs node, not the pipe or file behind fd N.
     t = os.fstat(int(m.group(1))) if m else os.stat(sys.argv[1])
-    for name, fd in (("stdout", 5), ("stderr", 6)):
+    for name, fd in (("stdout", 1), ("stderr", 2)):
         f = os.fstat(fd)
         if (t.st_dev, t.st_ino) == (f.st_dev, f.st_ino) and t.st_ino != 0:
-            print(name); break
-    else:
-        print("other")
+            res = name
+            break
 except OSError:
-    print("other")
+    pass
+open(sys.argv[2], "w").write(res)
 PY4
-)"
+alias="$(cat "$aliasf")"; rm -f "$aliasf"
 deliver() {
   # WHY no redirect of the shell's own error here: stderr is already the capture file, so a failed open reports its
   # diagnostic there once.

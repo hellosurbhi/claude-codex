@@ -563,4 +563,11 @@ mkrun; cd "$tmp/run/repo"
 got3="$(PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" /dev/fd/3 3>&1 2>/dev/null)"
 expect pass "an output path that is a dup of the caller's stdout delivers the reply exactly once" test "$(printf '%s\n' "$got3" | grep -c '^VERDICT')" = 1
 
+# r32: the caller's own /dev/fd/5 and /dev/fd/6 output descriptors are never overwritten by the spy
+for n in 5 6; do
+  mkrun; cd "$tmp/run/repo"; rm -f "$tmp/fd$n.txt"
+  eval "PATH=\"$tmp/bin:\$PATH\" SPY_LOG=\"$tmp/run/spy.log\" bash \"$here/spy-reviewer.sh\" S \"$tmp/plan.md\" /dev/fd/$n $n>\"$tmp/fd$n.txt\" >/dev/null 2>/dev/null"
+  expect pass "a reply to the caller's /dev/fd/$n lands in the file behind that descriptor" grep -q '^VERDICT' "$tmp/fd$n.txt"
+done
+
 exit $fail
