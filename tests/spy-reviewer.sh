@@ -29,8 +29,11 @@ finish() {
   # WHY the SNAPSHOT is logged and hashed, not the live path: the file may change while the reviewer runs, and the
   # event must describe exactly what was reviewed (r14).
   local src="$snap"; [[ -s "$snap" || -f "$in" ]] || src=/dev/null
-  TREE_SHA256="$tree" EVSTART="$EVSTART" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$src" "$o" "$err" -- "${argv[@]+"${argv[@]}"}"
-  rm -f "$tmp" "$err" "$snap"
+  # WHY stderr is err plus the stdout the failure path replays to the caller: the event must hold every stream the
+  # caller actually saw (r16).
+  local errall="$err.all"; cat "$err" "$tmp" > "$errall" 2>/dev/null || true; [[ $rc -eq 0 ]] && cp "$err" "$errall"
+  TREE_SHA256="$tree" EVSTART="$EVSTART" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$src" "$o" "$errall" -- "${argv[@]+"${argv[@]}"}"
+  rm -f "$tmp" "$err" "$err.all" "$snap"
 }
 trap finish EXIT
 [[ -f "$in" ]] || { echo "spy-reviewer: input file missing: $in" | tee "$err" >&2; exit 1; }

@@ -138,7 +138,7 @@ expect fail "a plan edited while it was being reviewed is rejected" python3 "$he
 # the clean review is bound to the exact final .py state (paths, bytes, indentation, other modules, deletions).
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
 printf 'x=1\ndef add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > other.py
-printf '+def add(a, b):\n+    return a + b\n' > "$tmp/diff.txt"
+printf '+x=1\n+def add(a, b):\n+    return a + b\n+def sub(a, b):\n+    return a - b\n' > "$tmp/diff.txt"
 PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 cp "$tmp/run/repo/app.py" "$tmp/app.good"
 expect pass "reviewed final code state is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
@@ -178,5 +178,18 @@ expect pass "a completed turn with no agent message is logged as failed, with no
 # the call log stays beside the event log even when the caller points FAKE_LOG elsewhere.
 mkrun; cd "$tmp/run/repo"; FAKE_LOG="$tmp/elsewhere.log" bash "$fake" "review" >/dev/null 2>&1
 expect pass "a caller-set FAKE_LOG cannot divert the call log" test "$(wc -l < "$tmp/run/calls.log" | tr -d ' ')" = "1"
+
+
+# a partial diff (the add function only) does not cover the whole current implementation, even though the code state matches.
+mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
+printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > other.py
+printf '+def add(a, b):\n+    return a + b\n' > "$tmp/diff.txt"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+expect fail "a partial diff that omits another current module is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+# a failed spy run logs the stdout it replays to the caller too.
+mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
+printf '#!/usr/bin/env bash\necho "partial reply on stdout"\nexit 3\n' > "$tmp/bin2claude"; mkdir -p "$tmp/bin2"; cp "$tmp/bin2claude" "$tmp/bin2/claude"; chmod +x "$tmp/bin2/claude"
+PATH="$tmp/bin2:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "a failed reviewer's stdout is kept in the logged diagnostics" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["exit"]!=0 and "partial reply on stdout" in e["stderr"])' "$here" "$EVLOG")" = "True"
 
 exit $fail

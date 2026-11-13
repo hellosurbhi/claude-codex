@@ -35,4 +35,22 @@ if repo is not None:
     final = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "treehash.py"), repo], capture_output=True, text=True).stdout.strip()
     if not final or spies[-1].get("tree_sha256") != final:
         sys.exit(1)
+    # WHY coverage too: the digest pins the code state at review time, but a stale or partial diff would still be
+    # "approved". Every line the run added relative to the first commit must appear in the reviewed input, and every
+    # baseline line the run removed must appear as a deleted line (r16).
+    seen = {l.strip().lstrip("+- ").strip() for l in (spies[-1].get("input_text") or "").splitlines()}
+    removed_seen = {l[1:].strip() for l in (spies[-1].get("input_text") or "").splitlines() if l.startswith("-")}
+    root = subprocess.run(["git", "-C", repo, "rev-list", "--max-parents=0", "HEAD"], capture_output=True, text=True).stdout.split()
+    names = {f for f in os.listdir(repo) if f.endswith(".py")}
+    if root:
+        names |= {f for f in subprocess.run(["git", "-C", repo, "ls-tree", "--name-only", root[0]], capture_output=True, text=True).stdout.split() if f.endswith(".py")}
+    for name in sorted(names):
+        base = set()
+        if root:
+            r = subprocess.run(["git", "-C", repo, "show", root[0] + ":" + name], capture_output=True, text=True)
+            base = {l.strip() for l in r.stdout.splitlines() if l.strip()} if r.returncode == 0 else set()
+        p = os.path.join(repo, name)
+        cur = {l.strip() for l in open(p, errors="replace").read().splitlines() if l.strip()} if os.path.isfile(p) else set()
+        if any(l not in seen for l in cur - base) or any(l not in removed_seen for l in base - cur):
+            sys.exit(1)
 sys.exit(0)

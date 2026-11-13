@@ -143,7 +143,7 @@ After all tasks complete (either path):
 4. If coverage tooling available: check coverage (80%+)
 5. Exception — if tests are fundamentally wrong: revise with justification, re-verify RED, re-implement
 6. Run `git add -N .` to mark any new untracked files as intent-to-add (ensures `git diff $START_SHA` includes new files)
-7. Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
+7. If Codex hit its usage limit in this run (see the usage-limit paragraph under the Codex availability check), this step and the dispute handling after it are REPLACED by that paragraph's fallback chain: the code-reviewer agent is Claude reviewing its own code and never counts as the review then. Otherwise launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
    - `git diff $START_SHA` output
    - Original task requirements
    - Required output: exactly one `VERDICT: APPROVED | WARNING | BLOCKED` line, then `CRITICAL:`, `HIGH:`, `MEDIUM:` and `LOW:` lines listing every finding at that severity (`none` when empty). A reply without exactly one valid verdict line is a failed review: re-launch it.
