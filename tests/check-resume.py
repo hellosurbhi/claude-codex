@@ -15,7 +15,8 @@ for i, e in enumerate(evs):
     if tids != [e["resume"]] or e["resume"] not in wlog.issued_before(evs, i):
         continue
     if noverdict:
-        if not wlog.verdict_lines(e) and wlog.verdict_block(e):
+        # WHY optional, not forbidden: a follow-up reply may carry one valid verdict or none, but never an invalid or repeated one.
+        if (not wlog.verdict_lines(e) and wlog.verdict_block(e)) or wlog.valid_verdict(e):
             sys.exit(0)
     elif wlog.valid_verdict(e):
         sys.exit(0)

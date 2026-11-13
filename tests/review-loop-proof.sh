@@ -214,7 +214,7 @@ if [[ $scenario == usage-limit ]]; then
   if [[ $FAKE_TARGET == code ]]; then
     check "the last fallback review after the quota hit was for the implementation and exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation'
   else
-    check "the last fallback review after the quota hit was exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl"'
+    check "the last fallback review after the quota hit was exactly clean and of the current non-empty plan" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --plan-file "$(ls -t "$repo"/.claude/plan/*.md 2>/dev/null | head -1)"'
   fi
   if [[ $FAKE_TARGET == code ]]; then check "the implementation really adds (behavioral)" 'python3 "$here/check-impl.py" "$repo/app.py"'; fi
   check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|\b(review|audit)\b[^.]{0,40}\bskipped\b|\bskipped\b[^.]{0,20}\b(review|audit)\b|(changes?|work|plan|diff|code|implementation) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'

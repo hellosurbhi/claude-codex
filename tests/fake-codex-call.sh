@@ -32,7 +32,7 @@ prompt="${1:-}"
 # stderr are captured to files and replayed so the log holds the exact reply the model saw.
 EVLOG="${EVLOG:-$(cd "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || echo "$dir")/.." && pwd)/wrapper.jsonl}"
 [[ -f "$EVLOG" ]] || : > "$EVLOG"
-seq=$(( $(wc -l < "$EVLOG") + 1 ))
+EVSTART="$(python3 -c 'import time; print(time.time())')"; export EVSTART
 tid="" ; [[ -n "$resume" ]] && tid="$resume"
 exec 3>&1 4>&2
 o="$(mktemp)"; e="$(mktemp)"; pf="$(mktemp)"; printf '%s' "$prompt" > "$pf"
@@ -52,7 +52,8 @@ if [[ -n "$resume" ]] && ! python3 -c 'import sys; sys.path.insert(0, sys.argv[1
   echo "ERROR: no rollout found for thread id $resume" >&2
   exit 1
 fi
-[[ -z "$resume" ]] && tid="fake-thread-$seq"
+# WHY a random suffix, not the sequence number: concurrent calls must never share a thread id (r12).
+[[ -z "$resume" ]] && tid="fake-thread-$(python3 -c 'import uuid; print(uuid.uuid4().hex[:12])')"
 # FAKE_LIMIT=1: every call fails the way Codex does when the account is over quota,
 # naming its reset time (the wrapper passes this text through on a dead call).
 if [[ -n "${FAKE_LIMIT:-}" ]]; then

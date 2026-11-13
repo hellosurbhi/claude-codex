@@ -23,7 +23,12 @@ def valid_verdict(ev):
 
 def verdict_block(ev):
     """The reply minus the THREAD_ID line, as non-blank lines."""
-    return [l.rstrip() for l in ev["stdout"].splitlines() if l.strip() and not l.startswith("THREAD_ID:")]
+    lines = [l.rstrip() for l in ev["stdout"].splitlines() if l.strip()]
+    # WHY only a LEADING transport line, and only for the Codex wrappers: codex-call.sh prints `THREAD_ID: <id>` first; a
+    # reviewer (spy) reply has no such line, so any THREAD_ID text inside it is extra text and must break "clean" (r12).
+    if ev["wrapper"] in ("fake", "real") and lines and lines[0].startswith("THREAD_ID: "):
+        lines = lines[1:]
+    return lines
 
 def is_clean(ev):
     """Clean means the block is EXACTLY the clean lines and nothing else."""
@@ -31,7 +36,10 @@ def is_clean(ev):
 
 def issued_before(evs, i):
     """Thread ids the wrapper itself issued (new, non-resume, successful calls) before event i."""
-    return {e["thread_id"] for e in evs[:i] if not e["resume"] and e["exit"] == 0 and e["thread_id"]}
+    # WHY the earlier reply must itself print the id: a call that exited 0 with an empty or malformed reply never
+    # returned a thread id, so it cannot seed a resume (r12).
+    return {e["thread_id"] for e in evs[:i]
+            if not e["resume"] and e["exit"] == 0 and e["thread_id"] and re.search(r"^THREAD_ID: " + re.escape(e["thread_id"]) + r"\s*$", e["stdout"], re.M)}
 
 def limit_index(evs):
     """Index of the first execution that failed with the usage limit, else None."""

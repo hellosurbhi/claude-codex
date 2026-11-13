@@ -1,44 +1,29 @@
-# Usage: check-reviewer-after-limit.py <wrapper.jsonl> [--phase implementation] [--agent <events.jsonl>]
-# Exit 0 when, AFTER the Codex wrapper reported the usage limit, the last fallback review was a
-# clean one for the right phase.
-#   Default: the last spy-reviewer execution after the limit exited 0, returned a block that is
-#   EXACTLY the five clean lines (no extra finding text), and, with --phase, was called for that
-#   phase (a tests-only call does not satisfy "implementation").
-#   --agent: for workflows whose final review is a Claude code-reviewer Task agent (it cannot log
-#   to the wrapper). The log still proves the quota hit; the LAST review agent started after the
-#   quota reply must have been given the implementation and returned exactly the five clean lines.
-import json, re, sys
+# Usage: check-reviewer-after-limit.py <wrapper.jsonl> [--phase implementation] [--plan-file <path>]
+# Exit 0 when a fallback reviewer (spy) was STARTED after the Codex wrapper reported the usage limit,
+# and the last such review exited 0 with EXACTLY the five clean lines. With --phase, that review was
+# called for that phase (a tests-only call does not satisfy "implementation"). With --plan-file, the
+# review input is the current non-empty plan file (sha256 equal), so a stale or empty plan fails.
+# WHY only the log: transcripts quote docs and agent text; the wrapper log is what actually ran.
+import hashlib, os, sys
 import wlog
 args = sys.argv[1:]
 evs = wlog.load(args[0])
 phase = args[args.index("--phase") + 1] if "--phase" in args else None
-li = wlog.limit_index([e for e in evs if e["wrapper"] != "spy"])
+plan = args[args.index("--plan-file") + 1] if "--plan-file" in args else None
+non_spy = [e for e in evs if e["wrapper"] != "spy"]
+li = wlog.limit_index(non_spy)
 if li is None:
     sys.exit(1)
-if "--agent" not in args:
-    spies = [e for e in evs if e["wrapper"] == "spy"]
-    # WHY after the limit by sequence: the shared log orders every execution, so a spy run that
-    # happened before the quota hit cannot count.
-    limit_seq = [e for e in evs if e["wrapper"] != "spy"][li]["seq"]
-    spies = [e for e in spies if e["seq"] > limit_seq]
-    sys.exit(0 if spies and wlog.is_clean(spies[-1]) and (phase is None or spies[-1]["phase"] == phase) else 1)
-tr = [json.loads(l) for l in open(args[args.index("--agent") + 1]) if l.strip()]
-# Position of the first tool RESULT (never a command) that carries the quota error.
-cut = next((i for i, e in enumerate(tr) if e["kind"] == "result" and re.search(r"usage limit", e["text"], re.I)), None)
-if cut is None:
+limit_done = non_spy[li]["ts"]
+# WHY by start time: a review that began before the quota reply was not a reaction to it, even if it finished later.
+spies = sorted((e for e in evs if e["wrapper"] == "spy" and e.get("ts_start", e["ts"]) >= limit_done), key=lambda e: e["ts"])
+if not spies or not wlog.is_clean(spies[-1]):
     sys.exit(1)
-last_ok = None
-for i, e in enumerate(tr):
-    if i <= cut or e["kind"] != "agent":
-        continue
-    try:
-        inp = json.loads(e["text"])
-    except ValueError:
-        continue
-    if "review" not in str(inp.get("subagent_type", "")).lower():
-        continue
-    gets_impl = re.search(r"app\.py|def add|implementation", json.dumps(inp), re.I) is not None
-    res = next((r for r in tr[i + 1:] if r["kind"] == "result" and r["id"] == e["id"] and not r.get("error")), None)
-    lines = [l.strip() for l in (res["text"].splitlines() if res else []) if l.strip()]
-    last_ok = gets_impl and lines == ["VERDICT: APPROVED"] + [s + ": none" for s in wlog.SEVS]
-sys.exit(0 if last_ok else 1)
+if phase is not None and spies[-1]["phase"] != phase:
+    sys.exit(1)
+if plan is not None:
+    if not os.path.isfile(plan) or os.path.getsize(plan) == 0:
+        sys.exit(1)
+    if hashlib.sha256(open(plan, "rb").read()).hexdigest() != spies[-1].get("input_sha256"):
+        sys.exit(1)
+sys.exit(0)
