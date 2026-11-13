@@ -188,7 +188,9 @@ if [[ $scenario == usage-limit ]]; then
     # done and reviewed instead of being abandoned on the quota error.
     check "the Codex implementation call hit the usage limit" 'grep -q result=LIMIT "$FAKE_LOG"'
     check "the change was still made (not abandoned on the quota error)" 'python3 "$here/check-modules.py" "$repo"'
-    check "an independent reviewer agent was run after the Codex attempt" 'grep -q "\"kind\": \"agent\"" "$out/events.jsonl" && grep -qi "review" "$out/session.txt"'
+    # WHY ordering and a completed result: an implementation agent must not count as the review. The
+    # review is an agent whose input mentions review, started after the Codex usage-limit reply, with a result.
+    check "an independent reviewer agent ran after the Codex usage limit and returned" 'python3 "$here/check-reviewer-after-limit.py" "$out/events.jsonl"'
     check "final report does not say the review was skipped" '! grep -qiE "review skipped|audit skipped|skipped the review" "$out/session.txt"'
     check "final report does not say nothing was written or vetted" '! grep -qiE "no code was written|nothing is vetted|did not fall back|UNREVIEWED" "$out/session.txt"'
     exit $fail
@@ -196,7 +198,9 @@ if [[ $scenario == usage-limit ]]; then
   check "a fallback reviewer ran on the actual diff or plan" 'grep -q "has_add=yes" "$SPY_LOG"'
   check "the final fallback verdict was for a non-empty change that mentions add" 'tail -1 "$SPY_LOG" | grep -q "has_add=yes"'
   # WHY not for tdd-execute-codex: its last review is the Claude code-reviewer agent, so the last spy call is the tests-only audit.
-  [[ $skill == tdd-execute-codex ]] || check "the final fallback verdict saw the implementation" 'tail -1 "$SPY_LOG" | grep -q "impl=yes"'
+  if [[ $FAKE_TARGET == code && $skill != tdd-execute-codex ]]; then check "the final fallback verdict saw the implementation" 'tail -1 "$SPY_LOG" | grep -q "impl=yes"'; fi
+  if [[ $skill == tdd-execute-codex ]]; then check "the code-reviewer agent ran after the Codex usage limit and returned" 'python3 "$here/check-reviewer-after-limit.py" "$out/events.jsonl"'; fi
+  if [[ $FAKE_TARGET == code ]]; then check "the implementation really adds (behavioral)" 'python3 "$here/check-impl.py" "$repo/app.py"'; fi
   check "the fallback returned a valid verdict" 'grep -qE "result=(APPROVED|WARNING|BLOCKED)$" "$SPY_LOG"'
   check "the last fallback verdict is clean (APPROVED)" 'tail -1 "$SPY_LOG" | grep -q "result=APPROVED$"'
   check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|skipped|(is|are|remains?|stays?|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED" "$out/session.txt"'
