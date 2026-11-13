@@ -69,41 +69,11 @@ elif [[ $(grep -cE '^VERDICT:' "$tmp") == 1 && $(grep -cE '^VERDICT: ' "$tmp") =
 fi
 printf 'reviewer tier=%s bytes=%s has_add=%s impl=%s result=%s\n' "$tier" "$(wc -c < "$in" | tr -d ' ')" "$has_add" "$impl" "$result" >> "$SPY_LOG"
 if [[ $result == FAILED ]]; then replayed=1; cat "$err" "$tmp" >&2; exit 1; fi
-# WHY the delivery is captured and replayed: the reply must reach the caller exactly once whatever the output path is
-# (/dev/stdout and /dev/fd/1 are the same stream as the plain echo), and the event must log what was delivered.
-# WHY the alias is resolved against the ORIGINAL streams, before the capture redirects (r31, r32): once stdout and stderr point at the
-# capture files, /dev/stdout resolves to the capture but /dev/fd/3 (a dup of the caller's real stdout) bypasses it, so the reply
-# was written to the caller directly and then echoed again. The probe runs with fds 0 to 2 and every caller descriptor exactly as
-# received (no command substitution and no scratch descriptors, so a caller's own /dev/fd/5 or /dev/fd/6 is never overwritten),
-# compares the output path with fd 1 and fd 2 by device and inode and writes the answer to a file.
-aliasf="$(mktemp)"
-python3 -I - "$outf" "$aliasf" <<'PY4'
-import os, re, sys
-res = "other"
-try:
-    rp = os.path.realpath(sys.argv[1])
-    m = re.fullmatch(r"/dev/fd/(\d+)", rp)
-    # WHY fstat on the numbered descriptor: os.stat("/dev/fd/N") describes the devfs node, not the pipe or file behind fd N.
-    t = os.fstat(int(m.group(1))) if m else os.stat(sys.argv[1])
-    for name, fd in (("stdout", 1), ("stderr", 2)):
-        f = os.fstat(fd)
-        if (t.st_dev, t.st_ino) == (f.st_dev, f.st_ino) and t.st_ino != 0:
-            res = name
-            break
-except OSError:
-    pass
-open(sys.argv[2], "w").write(res)
-PY4
-alias="$(cat "$aliasf")"; rm -f "$aliasf"
-deliver() {
-  # WHY no redirect of the shell's own error here: stderr is already the capture file, so a failed open reports its
-  # diagnostic there once.
-  case "$alias" in
-    stdout) cat "$tmp" ;;
-    stderr) cat "$tmp" >&2 ;;
-    *) cat "$tmp" > "$outf" || return 1; cat "$tmp" ;;
-  esac
-}
+# WHY the reply goes to the output path ONCE and nowhere else (r31 to r33): production reviewer.sh takes <tier> <input> <output>
+# with OUTPUT_FILE defaulting to /dev/stdout (reviewer.sh:3,9) and writes the reply with a single `cat "$_msg" > "$OUTPUT_FILE"`
+# (reviewer.sh:398, :651, :686). It never echoes the reply a second time, so the spy does the same. Three rounds of alias detection
+# (/dev/fd/N probing, descriptor reservation, replay) were a workaround for the spy echoing too; a caller that wants the reply in a
+# file redirects the spy's stdout itself. What the event log records is the reply written, which is the same single copy.
 delivered=1
-deliver >"$dout" 2>"$derr" || { cat "$dout"; cat "$derr" >&2; exit 1; }
-cat "$dout"; cat "$derr" >&2
+cp "$tmp" "$dout"
+cat "$tmp" > "$outf" || { echo "spy-reviewer: cannot write output: $outf" >> "$derr"; cat "$derr" >&2; exit 1; }

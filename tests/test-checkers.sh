@@ -275,16 +275,40 @@ expect pass "a stderr-only quota error is logged once through the wrapper's Code
 expect pass "and it counts as the usage limit" python3 "$here/check-limit-hit.py" "$EVLOG"
 # the final status, not history: an early incomplete audit followed by an approved fallback is not flagged.
 
-# r20: whatever the output path is, the reply reaches the caller exactly once and the event records exactly what was delivered.
-for op in /dev/stdout /dev/fd/1 "$tmp/o.txt"; do
+# r20 to r33: the spy matches reviewer.sh's output contract (reviewer.sh:3,9,398): the reply is written to the output path once and
+# nowhere else, and the event records that one reply. No alias detection: a caller wanting a file redirects the spy itself.
+evone() { python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print(len(es)==1 and wlog.reply_text(es[-1]).count("VERDICT")==1)' "$here" "$EVLOG"; }
+spyrun() { PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$@"; }
+for op in /dev/stdout /dev/fd/1; do
   mkrun; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
-  got="$(PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$op" 2>/dev/null)"
-  expect pass "spy delivers the reply once on stdout for output path $op" test "$(printf '%s\n' "$got" | grep -c '^VERDICT')" = 1
-  expect pass "the event stdout equals what the caller received for $op" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stdout"].strip()==sys.argv[3].strip())' "$here" "$EVLOG" "$got")" = "True"
+  got="$(spyrun "$op" 2>/dev/null)"
+  expect pass "the reply appears once on stdout for output path $op" test "$(printf '%s\n' "$got" | grep -c '^VERDICT')" = 1
+  expect pass "one event with one reply for $op" test "$(evone)" = True
+  expect pass "one spy log line for $op" test "$(grep -c '^reviewer' "$tmp/run/spy.log")" = 1
 done
-mkrun; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" /dev/stderr >/dev/null 2>"$tmp/e.txt"
-expect pass "a reply sent to /dev/stderr is logged as stderr, once" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stderr"].count("VERDICT")==1 and e["stderr"].strip()==open(sys.argv[3]).read().strip())' "$here" "$EVLOG" "$tmp/e.txt")" = "True"
+mkrun; cd "$tmp/run/repo"; rm -f "$tmp/o.txt"
+got="$(spyrun "$tmp/o.txt" 2>/dev/null)"
+expect pass "a file output path gets the reply once and stdout stays empty" test "$(grep -c '^VERDICT' "$tmp/o.txt"):${#got}" = "1:0"
+expect pass "one event with one reply for a file path" test "$(evone)" = True
+mkrun; cd "$tmp/run/repo"
+spyrun /dev/stderr >"$tmp/so.txt" 2>"$tmp/e.txt"
+expect pass "a reply sent to /dev/stderr arrives once on stderr only" test "$(grep -c '^VERDICT' "$tmp/e.txt"):$(wc -c < "$tmp/so.txt" | tr -d ' ')" = "1:0"
+expect pass "one event with one reply for /dev/stderr" test "$(evone)" = True
+# r31 (/dev/fd/3 3>&1), r32 (/dev/fd/5 and /dev/fd/6) and r33 (/dev/fd/0 0>&1): one delivery, one log entry each.
+mkrun; cd "$tmp/run/repo"
+got3="$(spyrun /dev/fd/3 3>&1 2>/dev/null)"
+expect pass "r31: /dev/fd/3 as a dup of stdout delivers once" test "$(printf '%s\n' "$got3" | grep -c '^VERDICT')" = 1
+expect pass "r31: one event with one reply" test "$(evone)" = True
+for n in 5 6; do
+  mkrun; cd "$tmp/run/repo"; rm -f "$tmp/fd$n.txt"
+  eval "spyrun /dev/fd/$n $n>\"$tmp/fd$n.txt\" >/dev/null 2>/dev/null"
+  expect pass "r32: /dev/fd/$n lands once in the file behind that descriptor" test "$(grep -c '^VERDICT' "$tmp/fd$n.txt")" = 1
+  expect pass "r32: one event with one reply for fd $n" test "$(evone)" = True
+done
+mkrun; cd "$tmp/run/repo"
+got0="$(spyrun /dev/fd/0 0>&1 2>/dev/null)"
+expect pass "r33: /dev/fd/0 with 0>&1 delivers once" test "$(printf '%s\n' "$got0" | grep -c '^VERDICT')" = 1
+expect pass "r33: one event with one reply" test "$(evone)" = True
 
 # r20: the reviewed patch must reproduce the final files from the baseline (hunk locations and context included).
 commitbase() { (cd "$tmp/run/repo" && git add -A >/dev/null 2>&1 && git update-ref HEAD "$(echo base | git commit-tree "$(git write-tree)")"); }
@@ -559,15 +583,5 @@ expect pass "a shell with argv[0] forged to run the wrapper (really -c) is logge
 expect fail "the forged argv[0] does not satisfy the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
 mkdir -p "$tmp/sh3"; printf 'import helper\n' > "$tmp/sh3/app.py"; printf 'X=1\n' > "$tmp/sh3/helper.py"; before="$(python3 "$here/state-hash.py" "$tmp/sh3")"; rm "$tmp/sh3/helper.py"
 expect pass "deleting an imported helper module changes the state hash" test "$before" != "$(python3 "$here/state-hash.py" "$tmp/sh3")"
-mkrun; cd "$tmp/run/repo"
-got3="$(PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" /dev/fd/3 3>&1 2>/dev/null)"
-expect pass "an output path that is a dup of the caller's stdout delivers the reply exactly once" test "$(printf '%s\n' "$got3" | grep -c '^VERDICT')" = 1
-
-# r32: the caller's own /dev/fd/5 and /dev/fd/6 output descriptors are never overwritten by the spy
-for n in 5 6; do
-  mkrun; cd "$tmp/run/repo"; rm -f "$tmp/fd$n.txt"
-  eval "PATH=\"$tmp/bin:\$PATH\" SPY_LOG=\"$tmp/run/spy.log\" bash \"$here/spy-reviewer.sh\" S \"$tmp/plan.md\" /dev/fd/$n $n>\"$tmp/fd$n.txt\" >/dev/null 2>/dev/null"
-  expect pass "a reply to the caller's /dev/fd/$n lands in the file behind that descriptor" grep -q '^VERDICT' "$tmp/fd$n.txt"
-done
 
 exit $fail
