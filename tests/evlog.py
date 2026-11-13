@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Usage: evlog.py <log> <wrapper> <exit> <resume-id-or-empty> <thread-id-or-empty> <phase-source-file> <stdout-file> <stderr-file> -- <argv...>
 # Appends ONE JSON line describing one real execution of a stand-in wrapper (fake-codex-call.sh,
-# recording-codex-call.sh, spy-reviewer.sh). The checkers assert on this log only.
+# shim/codex, spy-reviewer.sh). The checkers assert on this log only.
 #
 # WHY a wrapper-side log instead of parsing the transcript: the wrapper is the only place that
 # knows what was really executed (argv after shell expansion, the thread id it issued or was

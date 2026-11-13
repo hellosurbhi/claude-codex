@@ -224,7 +224,7 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
     ├── review-loop-proof.sh # runs a real headless Claude session through a skill with a scripted reviewer
     ├── fake-codex-call.sh   # the scripted reviewer: one finding per round, tied to repo state
     ├── spy-reviewer.sh      # real fallback reviewer for the usage-limit scenario (no ~/.claude writes)
-    ├── recording-codex-call.sh # pass-through to the real installed wrapper that logs each call (real scenario)
+    ├── shim/codex           # logging `codex` shim put first on PATH in the real scenario (skill and wrapper untouched)
     ├── evlog.py, wlog.py    # wrapper event log: one JSON line per real execution; the checkers read only this
     └── test-checkers.sh     # unit cases for the checkers (no Claude, no network)
 ```

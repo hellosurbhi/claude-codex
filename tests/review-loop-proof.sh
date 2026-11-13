@@ -103,8 +103,13 @@ seam="TEST HARNESS: for this run the Codex wrapper lives at $fake. Wherever a sk
 # WHY stream-json: the real scenario must show the THREAD_ID and VERDICT lines Codex actually
 # returned and whether a follow-up used --resume; those live in tool calls and results,
 # not in the final report.
-# WHY the recorder in real: it runs the REAL installed codex-call.sh unchanged and only adds the log line the checkers need.
-[[ $scenario == real ]] && seam="TEST HARNESS: Codex is real. Wherever a skill says ~/.claude/config/scripts/codex-call.sh, run $here/recording-codex-call.sh with the same arguments instead: it runs the installed wrapper unchanged and records the call. Everything else applies unchanged. You are running unattended: never wait for user input."
+# WHY a PATH shim in real: the installed skill and the installed codex-call.sh run untouched; the
+# wrapper resolves `codex` through PATH, the shim logs the call (see shim/codex) and runs the real binary.
+if [[ $scenario == real ]]; then
+  seam="You are running unattended: never wait for user input. Use the real Codex wrapper at its normal path."
+  REAL_CODEX="$(command -v codex)"; export REAL_CODEX
+  export PATH="$here/shim:$PATH"
+fi
 claude -p "$task" --model sonnet --setting-sources "$sources" \
   --permission-mode acceptEdits \
   --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill Edit(./.claude/plan/**) Edit(.claude/plan/**)" \
@@ -171,8 +176,8 @@ if [[ $scenario == real ]]; then
   # approves is not the harness's to demand; what must hold is that a real call returned a
   # THREAD_ID and verdict, and that a follow-up through --resume came back on the SAME thread
   # with a verdict. The last real verdict is printed for the record.
-  # All real-run checks assert on the wrapper log (wrapper.jsonl, written by recording-codex-call.sh around
-  # the real installed wrapper); the transcript is only the secondary line below.
+  # All real-run checks assert on the wrapper log (wrapper.jsonl, written by the PATH `codex` shim under
+  # the untouched installed wrapper); the transcript is only the secondary line below.
   check "a real codex-call.sh execution exited 0 and returned a THREAD_ID" 'python3 "$here/check-real-basic.py" "$out/wrapper.jsonl" thread'
   # WHY not execute-codex: Codex implements there (no review verdict); its follow-up reply is checked for the thread only.
   [[ $skill == execute-codex ]] || check "a real Codex reply carried a single valid VERDICT" 'python3 "$here/check-real-basic.py" "$out/wrapper.jsonl" verdict'
@@ -199,7 +204,8 @@ if [[ $scenario == usage-limit ]]; then
     check "the change was still made (not abandoned on the quota error)" 'python3 "$here/check-modules.py" "$repo"'
     # WHY ordering and a completed result: an implementation agent must not count as the review. The
     # review is an agent whose input mentions review, started after the Codex usage-limit reply, with a result.
-    check "an independent reviewer agent ran after the Codex usage limit and returned" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --agent "$out/events.jsonl"'
+    # WHY the log, not an agent: on quota the review must come from a non-implementer fallback reviewer (reviewer.sh -> spy), which logs.
+    check "the final clean review after the quota hit came from a fallback reviewer on the implementation phase" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation'
     check "final report does not say the review was skipped" '! grep -qiE "\b(review|audit)\b[^.]{0,40}\bskipped\b|\bskipped\b[^.]{0,20}\b(review|audit)\b" "$out/session.txt"'
     check "final report does not say nothing was written or vetted" '! grep -qiE "no code was written|nothing is vetted|did not fall back|(changes?|work|plan|diff|code|implementation|modules) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
     exit $fail

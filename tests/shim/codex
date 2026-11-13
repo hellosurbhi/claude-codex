@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# shim/codex: a logging stand-in for the `codex` binary, put FIRST on PATH for the `real` scenario of
+# tests/review-loop-proof.sh. The installed skill and the installed ~/.claude/config/scripts/codex-call.sh
+# run untouched; the wrapper resolves `codex` through PATH, lands here, and this runs the REAL codex
+# (REAL_CODEX, an absolute path) with the same arguments, replays its output and exit code unchanged,
+# and appends one JSON event (see evlog.py) built from codex's own --json output.
+#
+# WHY a PATH shim and not a replacement wrapper: pointing the model at a different wrapper meant the
+# installed skill was no longer exercised at its normal path. Nothing the skill or wrapper runs changes.
+set -uo pipefail
+here="$(cd "$(dirname "$0")/.." && pwd)"
+real="${REAL_CODEX:?REAL_CODEX must be the absolute path of the real codex binary}"
+argv=("$@")
+o="$(mktemp)"; e="$(mktemp)"; pf="$(mktemp)"; so="$(mktemp)"
+trap 'rm -f "$o" "$e" "$pf" "$so"' EXIT
+EVLOG="${EVLOG:-$(cd "$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")/.." && pwd)/wrapper.jsonl}"
+rc=0; "$real" "${argv[@]+"${argv[@]}"}" >"$o" 2>"$e" || rc=$?
+# Non-codex-exec calls (login status, --version) are replayed and not logged.
+if [[ "${argv[0]:-}" != exec ]]; then cat "$o"; cat "$e" >&2; exit "$rc"; fi
+python3 - "$o" "$rc" "$pf" "$so" "${argv[@]}" <<'PY'
+import json, sys
+out, rc, pf, so, *argv = sys.argv[1:]
+tid, msg, done = "", "", False
+for line in open(out, errors="replace"):
+    try: ev = json.loads(line)
+    except ValueError: continue
+    if ev.get("type") == "thread.started": tid = ev.get("thread_id", "")
+    if ev.get("type") == "turn.completed": done = True
+    it = ev.get("item", {})
+    if ev.get("type") == "item.completed" and it.get("type") == "agent_message": msg = it.get("text", "")
+resume = ""
+if "resume" in argv:
+    # `resume` takes the thread id then the prompt as its last two positionals.
+    resume = argv[-2]
+    tid = tid or resume
+open(pf, "w").write(argv[-1] if argv else "")
+# Same shape as codex-call.sh prints: THREAD_ID line, then the final message.
+ok = done and bool(msg) and rc == "0"
+open(so, "w").write(("THREAD_ID: %s\n%s\n" % (tid, msg)) if ok else "")
+open(so + ".meta", "w").write(json.dumps({"resume": resume, "tid": tid, "ok": ok}))
+PY
+meta="$(cat "$so.meta")"; rm -f "$so.meta"
+resume="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["resume"])' "$meta")"
+tid="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["tid"])' "$meta")"
+ok="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["ok"])' "$meta")"
+logrc="$rc"; [[ $ok == True ]] || logrc=$(( rc == 0 ? 1 : rc ))
+python3 "$here/evlog.py" "$EVLOG" real "$logrc" "$resume" "$tid" "$pf" "$so" "$e" -- "${argv[@]}"
+cat "$o"; cat "$e" >&2
+exit "$rc"
