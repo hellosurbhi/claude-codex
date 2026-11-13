@@ -64,6 +64,9 @@ bash "$fake" "review" >/dev/null 2>&1
 expect pass "the scripted fake's findings reply is not clean" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(1 if wlog.is_clean(wlog.load(sys.argv[2])[0]) else 0)' "$here" "$EVLOG"
 
 
+# Offline stand-ins: a `claude` that always approves (spy-reviewer.sh calls `claude -p`), and a `codex` for the shim.
+mkdir -p "$tmp/bin"
+printf '#!/usr/bin/env bash\n[[ -n "${EDIT_DURING:-}" ]] && printf "edited while reviewing\\n" >> "$EDIT_DURING"\nprintf "VERDICT: APPROVED\\n"\n' > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"
 # (r12) cases. Each was red against the r11 checkers.
 # WHY start time: a review that BEGAN before the quota reply (even if it finished after) is not a reaction to it.
 mkrun; python3 - "$EVLOG" <<'PY'
@@ -85,7 +88,7 @@ printf 'the plan\n' > "$tmp/plan.md"
 expect fail "a plan that differs from the reviewed input is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 # a real spy run on the plan file logs its sha, which then matches.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
-printf 'the plan\n' > "$tmp/plan.md"; REVIEW_FAKE=1 SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+printf 'the plan\n' > "$tmp/plan.md"; PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "spy logs the reviewed plan sha (event carries input_sha256 of the file)" test "$(python3 -c 'import sys,hashlib,json; sys.path.insert(0,sys.argv[1]); import wlog; e=[x for x in wlog.load(sys.argv[2]) if x["wrapper"]=="spy"]; print(bool(e) and e[-1]["input_sha256"]==hashlib.sha256(open(sys.argv[3],"rb").read()).hexdigest())' "$here" "$EVLOG" "$tmp/plan.md")" = "True"
 # an id only counts for resume when the earlier reply printed it; a verdict is optional on a follow-up.
 mkrun; line fake 0 unknown "no thread line here"
@@ -102,5 +105,63 @@ expect pass "--no-verdict accepts a follow-up with or without a valid verdict" p
 # unique thread ids even for calls made in the same instant.
 mkrun; cd "$tmp/run/repo"; bash "$fake" a >/dev/null 2>&1 & bash "$fake" b >/dev/null 2>&1 & wait
 expect pass "concurrent wrapper runs get distinct seq and distinct thread ids" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2]); print(len({x["seq"] for x in e})==2 and len({x["thread_id"] for x in e})==2)' "$here" "$EVLOG")" = "True"
+
+
+# (r14) cases. Each was red against the c54ad0d checkers and wrappers.
+# reviewer.sh returns a clean approval as ONE line; that must count as clean, and CLEAN/FINDINGS are not verdicts.
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'
+expect pass "the one-line reviewer.sh approval counts as clean" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+mkrun; line fake 0 unknown 'THREAD_ID: t\nVERDICT: CLEAN\n'
+expect fail "VERDICT: CLEAN is not a valid verdict" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.valid_verdict(wlog.load(sys.argv[2])[0]) else 1)' "$here" "$EVLOG"
+# the LAST review by start time decides, even when an older review finished later.
+mkrun; python3 - "$EVLOG" <<'PY'
+import json, sys
+ev = lambda seq, w, code, st, ts, out: {"seq": seq, "wrapper": w, "argv": [], "exit": code, "resume": None, "thread_id": None, "phase": "implementation", "stdout": out, "stderr": "", "ts_start": st, "ts": ts}
+lim = "ERROR: You have hit your usage limit.\n"
+rows = [ev(1, "fake", 1, 0.5, 1, lim), ev(2, "spy", 0, 5, 30, "VERDICT: APPROVED\n"), ev(3, "spy", 0, 10, 15, "VERDICT: BLOCKED\nCRITICAL: bad\n")]
+open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+expect fail "an older approval that finished later does not override a newer blocked review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+# a failed spy call (missing input) is logged and, being the latest review, defeats an earlier approval.
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; cd "$tmp/run/repo"
+bash "$here/spy-reviewer.sh" S "$tmp/no-such-input" >/dev/null 2>&1
+expect pass "the failed spy call with a missing input is logged" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2]); print(len(e)==3 and e[-1]["exit"]!=0)' "$here" "$EVLOG")" = "True"
+expect fail "a later failed review means the last review is not clean" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+# an unchanged CRLF plan hashes by raw bytes and matches.
+mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan line\r\nsecond\r\n' > "$tmp/plan.md"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "an unchanged CRLF plan matches the reviewed digest" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+# the event describes the snapshot, so a plan edited DURING the review no longer matches.
+mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan v1\n' > "$tmp/plan.md"
+EDIT_DURING="$tmp/plan.md" PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+expect fail "a plan edited while it was being reviewed is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+# code edited after the approval is rejected; the reviewed code is accepted.
+mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
+# WHY plumbing, not `git commit`: a throwaway test repo must not run the global commit hooks.
+git add app.py && export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t && git update-ref HEAD "$(echo base | git commit-tree "$(git write-tree)")"
+printf 'x=1\ndef add(a, b):\n    return a + b\n' > app.py
+python3 - "$EVLOG" <<'PY'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1])]
+rows.append({"seq": 2, "wrapper": "spy", "argv": [], "exit": 0, "resume": None, "thread_id": None, "phase": "implementation", "stdout": "VERDICT: APPROVED\n", "stderr": "", "ts_start": 5, "ts": 6, "input_text": "+def add(a, b):\n+    return a + b\n"})
+open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+expect pass "reviewed final code is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+printf 'def evil():\n    pass\n' >> app.py
+expect fail "code edited after the approval is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+# the codex shim mirrors codex-call.sh: turn.failed is a failure with diagnostics, and a thread id is never invented from the resume arg.
+cat > "$tmp/bin/stubcodex" <<'SH'
+#!/usr/bin/env bash
+echo '{"type":"thread.started","thread_id":"T-real"}'
+if [[ "${STUB_MODE:-}" == quota ]]; then echo '{"type":"turn.failed","error":{"message":"You have hit your usage limit."}}'; exit 1; fi
+echo '{"type":"turn.completed"}'; exit 0
+SH
+chmod +x "$tmp/bin/stubcodex"
+mkrun; cd "$tmp/run/repo"
+STUB_MODE=quota REAL_CODEX="$tmp/bin/stubcodex" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
+expect pass "the shim logs a turn.failed quota error as a failed call with the diagnostics" python3 "$here/check-limit-hit.py" "$EVLOG"
+mkrun; cd "$tmp/run/repo"
+REAL_CODEX="$tmp/bin/stubcodex" bash "$here/shim/codex" exec --json resume T-asked "prompt" >/dev/null 2>&1
+expect pass "a completed turn with no agent message is logged as failed, with no invented thread id" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2]); print(e[0]["exit"]!=0 and e[0]["thread_id"] is None)' "$here" "$EVLOG")" = "True"
 
 exit $fail

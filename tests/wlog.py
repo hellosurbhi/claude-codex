@@ -1,7 +1,7 @@
 # Shared reader for the wrapper event log (see evlog.py). Checkers import this and nothing else.
 import json, re
 
-VERDICT = r"VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)"
+VERDICT = r"VERDICT: (APPROVED|WARNING|BLOCKED)"  # the only grammar the skills allow (r14)
 SEVS = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
 def load(path):
@@ -31,8 +31,9 @@ def verdict_block(ev):
     return lines
 
 def is_clean(ev):
-    """Clean means the block is EXACTLY the clean lines and nothing else."""
-    return ev["exit"] == 0 and verdict_block(ev) == ["VERDICT: APPROVED"] + [s + ": none" for s in SEVS]
+    """Clean means the block is EXACTLY a clean reply and nothing else: the Codex form (APPROVED plus four `none`
+    lines) or the reviewer.sh form (APPROVED alone: it omits empty severity lines and rejects `none` placeholders)."""
+    return ev["exit"] == 0 and verdict_block(ev) in (["VERDICT: APPROVED"], ["VERDICT: APPROVED"] + [s + ": none" for s in SEVS])
 
 def issued_before(evs, i):
     """Thread ids the wrapper itself issued (new, non-resume, successful calls) before event i."""

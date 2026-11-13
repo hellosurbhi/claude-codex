@@ -205,14 +205,14 @@ if [[ $scenario == usage-limit ]]; then
     # WHY ordering and a completed result: an implementation agent must not count as the review. The
     # review is an agent whose input mentions review, started after the Codex usage-limit reply, with a result.
     # WHY the log, not an agent: on quota the review must come from a non-implementer fallback reviewer (reviewer.sh -> spy), which logs.
-    check "the final clean review after the quota hit came from a fallback reviewer on the implementation phase" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation'
+    check "the final clean review after the quota hit came from a fallback reviewer on the implementation phase" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --repo "$repo"'
     check "final report does not say the review was skipped" '! grep -qiE "\b(review|audit)\b[^.]{0,40}\bskipped\b|\bskipped\b[^.]{0,20}\b(review|audit)\b" "$out/session.txt"'
     check "final report does not say nothing was written or vetted" '! grep -qiE "no code was written|nothing is vetted|did not fall back|(changes?|work|plan|diff|code|implementation|modules) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
     exit $fail
   fi
   # WHY all of these read the wrapper log: the last spy execution after the quota hit is the final fallback review.
   if [[ $FAKE_TARGET == code ]]; then
-    check "the last fallback review after the quota hit was for the implementation and exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation'
+    check "the last fallback review after the quota hit was for the implementation and exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --repo "$repo"'
   else
     check "the last fallback review after the quota hit was exactly clean and of the current non-empty plan" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --plan-file "$(ls -t "$repo"/.claude/plan/*.md 2>/dev/null | head -1)"'
   fi
