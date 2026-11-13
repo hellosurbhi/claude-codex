@@ -52,6 +52,8 @@ CLAUSES = [
     r"\(the active reviewer is the Codex thread or.{0,400}?no Codex thread is required\)",
     r"\(a fresh Codex thread without `--resume`.{0,900}?on the current head\)",
     r"End the final report with exactly one machine-readable line.{0,400}?last non-blank line of the report\.",
+    # r26: the stop rule (usage limit or unavailable CodeRabbit is never a blocker while tier S can run) lives in the folded failure paragraphs too
+    r"\(a call that merely died.{0,600}?while tier S can run\)",
     r"Never conclude the reviewer is stuck, never report that no clean round was reached, and never hand the user a keep-going-or-drop-it decision; a doubt about a finding goes through",
     r"There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity",
 ]

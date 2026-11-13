@@ -10,7 +10,7 @@ ok()  { echo "PASS: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
 expect() { local want="$1" name="$2"; shift 2; "$@" >/dev/null 2>&1; local rc=$?; if { [[ $want == pass && $rc -eq 0 ]] || [[ $want == fail && $rc -ne 0 ]]; }; then ok "$name"; else bad "$name (rc=$rc, wanted $want)"; fi; }
 gdiff() { local f; for f in "$@"; do git diff --no-index --no-color /dev/null "$f"; done; }
-mkrun() { rm -rf "$tmp/run"; mkdir -p "$tmp/run/repo"; (cd "$tmp/run/repo" && git init -q && printf 'x=1\n' > app.py); export EVLOG="$tmp/run/wrapper.jsonl" FAKE_LOG="$tmp/run/calls.log"; : > "$EVLOG"; : > "$FAKE_LOG"; unset FAKE_LIMIT FAKE_FAIL_FIRST; export FAKE_ROUNDS=0; }
+mkrun() { cd "$tmp"; rm -rf "$tmp/run"; mkdir -p "$tmp/run/repo"; (cd "$tmp/run/repo" && git init -q && printf 'x=1\n' > app.py); cd "$tmp/run/repo"; export EVLOG="$tmp/run/wrapper.jsonl" FAKE_LOG="$tmp/run/calls.log"; : > "$EVLOG"; : > "$FAKE_LOG"; unset FAKE_LIMIT FAKE_FAIL_FIRST; export FAKE_ROUNDS=0; }
 fake="$here/fake-codex-call.sh"
 line() { # wrapper exit phase stdout   -> appends a hand-built event
   python3 - "$EVLOG" "$@" <<'PY'
@@ -454,5 +454,19 @@ expect fail "a spy reply does not satisfy the real verdict check" python3 "$here
 mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
 expect pass "a real wrapper reply satisfies the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
 expect pass "a real wrapper reply satisfies the real verdict check" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+
+# r26: mkrun never leaves the caller in a deleted directory, a folded quota stop rule is mirrored, an indented status line is rejected
+rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+python3 - "$tmp/mir/commands/tdd-claude-codex.md" <<'PY2'
+import sys; p=sys.argv[1]; s=open(p).read()
+a="a Codex usage limit or an unavailable CodeRabbit is never a blocker while tier S can run"; assert a in s
+open(p,"w").write(s.replace(a,"a Codex usage limit is a blocker even while tier S can run",1))
+PY2
+expect fail "a folded failure paragraph that lets a usage limit stop the loop is caught" python3 "$here/test-mirrors.py" "$tmp/mir"
+printf 'done\n\n    AUDIT-STATUS: APPROVED reviewer=codex\n' > "$tmp/ind.txt"
+expect fail "an indented status line (a code block) is rejected" python3 "$here/audit-status.py" "$tmp/ind.txt"
+printf 'done\n\nAUDIT-STATUS: APPROVED reviewer=codex\n' > "$tmp/ok.txt"
+expect pass "an unindented status line is accepted" python3 "$here/audit-status.py" "$tmp/ok.txt" --expect APPROVED
+mkrun; cd "$tmp/run/repo"; mkrun; expect pass "mkrun leaves the shell inside the recreated fixture" test "$(git rev-parse --show-toplevel)" = "$(cd "$tmp/run/repo" && git rev-parse --show-toplevel)"
 
 exit $fail
