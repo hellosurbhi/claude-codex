@@ -142,10 +142,10 @@ if repo is not None:
             if root:
                 r = subprocess.run(["git", "-C", repo, "show", root[0] + ":" + name], capture_output=True)
                 base = r.stdout if r.returncode == 0 else b""
-            if base or name in got:
+            # WHY by existence, not content: an unchanged empty baseline file (an empty __init__.py) must be restored too (r23).
+            if root and subprocess.run(["git", "-C", repo, "cat-file", "-e", root[0] + ":" + name], capture_output=True).returncode == 0:
                 os.makedirs(os.path.dirname(os.path.join(d, name)) or d, exist_ok=True)
-                if root and subprocess.run(["git", "-C", repo, "cat-file", "-e", root[0] + ":" + name], capture_output=True).returncode == 0:
-                    open(os.path.join(d, name), "wb").write(base)
+                open(os.path.join(d, name), "wb").write(base)
         patch = "\n".join(l for sec in secs for l in sec)
         patch += "" if patch.endswith("\n") else "\n"
         if secs:

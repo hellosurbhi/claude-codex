@@ -385,4 +385,23 @@ open(p,"w").write(s.replace(a, "counts as the review then", 1))
 PY
 expect fail "a contradicting quota paragraph in one command copy is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
 
+# r23: unchanged empty baseline file, reply routed to stderr, closing code fence after the status
+mkrun; cd "$tmp/run/repo"; : > __init__.py; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
+printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py
+git diff --no-color HEAD -- app.py > "$tmp/empty.diff"
+limit_then_spy "$tmp/empty.diff"
+expect pass "a valid review beside an unchanged empty baseline file is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+mkrun; cd "$tmp/run/repo"; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
+printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py
+git diff --no-color HEAD -- app.py > "$tmp/err.diff"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/err.diff" /dev/stderr >/dev/null 2>&1
+line fake 1 unknown "$LIMIT"; python3 - "$EVLOG" <<'PY'
+import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
+fake[0]["ts"]=spy[0]["ts_start"]-5; fake[0]["ts_start"]=fake[0]["ts"]-1
+open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in fake+spy)+"\n")
+PY
+expect pass "a clean spy review delivered through /dev/stderr counts as clean" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expect fail "a report whose last non-blank line is a closing fence after the status is rejected" st $'```\nAUDIT-STATUS: APPROVED reviewer=codex\n```'
+
 exit $fail

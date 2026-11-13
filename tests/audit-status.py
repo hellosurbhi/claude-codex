@@ -6,8 +6,7 @@
 import re, sys
 args = sys.argv[1:]
 lines = [l.rstrip() for l in open(args[0], encoding="utf-8", errors="replace").read().splitlines()]
-lines = [l.strip().strip("`*") for l in lines]
-nonblank = [l for l in lines if l]
+nonblank = [l.strip() for l in lines if l.strip()]
 status = [l for l in nonblank if l.startswith("AUDIT-STATUS:")]
 if len(status) != 1 or nonblank[-1] != status[0]:
     sys.exit(1)

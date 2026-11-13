@@ -10,8 +10,15 @@ def load(path):
     except OSError:
         return []
 
+def reply_text(ev):
+    # WHY both streams for a successful spy: the reviewer reply goes to the caller's chosen output path, so a reply routed
+    # to /dev/stderr is logged as stderr; a failed spy keeps diagnostics out of the reply (r23).
+    if ev["wrapper"] == "spy" and ev["exit"] == 0:
+        return ev["stdout"] + ev.get("stderr", "")
+    return ev["stdout"]
+
 def verdict_lines(ev):
-    return re.findall(r"^VERDICT:.*$", ev["stdout"], re.M)
+    return re.findall(r"^VERDICT:.*$", reply_text(ev), re.M)
 
 def valid_verdict(ev):
     """The single valid VERDICT of an event that exited 0, else None."""
@@ -23,7 +30,7 @@ def valid_verdict(ev):
 
 def verdict_block(ev):
     """The reply minus the THREAD_ID line, as non-blank lines."""
-    lines = [l.rstrip() for l in ev["stdout"].splitlines() if l.strip()]
+    lines = [l.rstrip() for l in reply_text(ev).splitlines() if l.strip()]
     # WHY only a LEADING transport line, and only for the Codex wrappers: codex-call.sh prints `THREAD_ID: <id>` first; a
     # reviewer (spy) reply has no such line, so any THREAD_ID text inside it is extra text and must break "clean" (r12).
     if ev["wrapper"] in ("fake", "real") and lines and lines[0].startswith("THREAD_ID: "):
