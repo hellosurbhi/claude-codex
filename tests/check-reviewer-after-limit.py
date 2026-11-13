@@ -6,7 +6,9 @@ ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 limit_at = next((i for i, e in enumerate(ev) if e["kind"] == "result" and "usage limit" in e["text"].lower()), None)
 if limit_at is None:
     sys.exit(1)
-ack = re.compile(r"async|background|launched|will be notified|agent .{0,40}not found|no such agent|unavailable", re.I)
+# A real review result names a verdict or findings; denials, errors and launch acknowledgements do not.
+real = re.compile(r"VERDICT:|\b(CRITICAL|HIGH|MEDIUM|LOW)\b|no (issues|findings|problems)|approved|looks good|reviewed", re.I)
+denied = re.compile(r"permission|denied|not allowed|not found|no such agent|unavailable|launched|async", re.I)
 for i, e in enumerate(ev):
     if i > limit_at and e["kind"] == "agent":
         try:
@@ -16,6 +18,6 @@ for i, e in enumerate(ev):
         if "review" not in kind.lower():
             continue
         for r in ev[i + 1:]:
-            if r["kind"] == "result" and r["id"] == e["id"] and not r.get("error") and len(r["text"].strip()) >= 80 and not ack.search(r["text"][:200]):
+            if r["kind"] == "result" and r["id"] == e["id"] and not r.get("error") and real.search(r["text"]) and not (denied.search(r["text"][:200]) and not re.search(r"VERDICT:", r["text"])):
                 sys.exit(0)
 sys.exit(1)
