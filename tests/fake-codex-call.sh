@@ -108,7 +108,7 @@ done
 # WHY a state hash and an impl flag on every call: a CLEAN verdict only means something if it
 # was given for the state the run ended in, and (for the tdd skills) after add() existed.
 # WHY the brace group with || true: an unmatched glob makes cat exit nonzero, which pipefail would turn into a dead fake.
-state="$({ cat "$dir"/app.py "$dir"/test*.py "$dir"/.claude/plan/*.md 2>/dev/null || true; } | shasum -a 256 | cut -c1-16)"
+state="$(python3 "$(dirname "$0")/state-hash.py" "$dir")"
 impl=no; python3 "$(dirname "$0")/check-impl.py" "$dir/app.py" && impl=yes
 echo "THREAD_ID: $tid"
 if [[ $next == 0 ]]; then

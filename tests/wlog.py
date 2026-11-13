@@ -51,7 +51,8 @@ def issued_before(evs, i):
 
 def limit_index(evs):
     """Index of the first execution that failed with the usage limit, else None."""
+    # WHY the quota sentence at line start: a diagnostic that merely echoes an argument (a thread named "usage limit") is not a quota error (r28).
     for i, e in enumerate(evs):
-        if e["exit"] != 0 and re.search(r"usage limit", e["stdout"] + e["stderr"], re.I):
+        if e["exit"] != 0 and re.search(r"^\s*(ERROR:\s*)?You(\'ve| have|\u2019ve) hit your usage limit", e["stdout"] + e["stderr"], re.I | re.M):
             return i
     return None

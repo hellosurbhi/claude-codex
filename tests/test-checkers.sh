@@ -12,6 +12,9 @@ expect() { local want="$1" name="$2"; shift 2; "$@" >/dev/null 2>&1; local rc=$?
 gdiff() { local f; for f in "$@"; do git diff --no-index --no-color /dev/null "$f"; done; }
 mkrun() { cd "$tmp"; rm -rf "$tmp/run"; mkdir -p "$tmp/run/repo"; (cd "$tmp/run/repo" && git init -q && printf 'x=1\n' > app.py); cd "$tmp/run/repo"; export EVLOG="$tmp/run/wrapper.jsonl" FAKE_LOG="$tmp/run/calls.log"; : > "$EVLOG"; : > "$FAKE_LOG"; unset FAKE_LIMIT FAKE_FAIL_FIRST; export FAKE_ROUNDS=0; }
 fake="$here/fake-codex-call.sh"
+# viawrap runs the shim from a script named codex-call.sh, the way the installed wrapper does (shim provenance, r28)
+mkdir -p "$tmp/wrap"; printf '#!/usr/bin/env bash\nbash "%s/shim/codex" "$@"\nrc=$?\nexit $rc\n' "$here" > "$tmp/wrap/codex-call.sh"
+viawrap() { bash "$tmp/wrap/codex-call.sh" "$@"; }
 line() { # wrapper exit phase stdout   -> appends a hand-built event
   python3 - "$EVLOG" "$@" <<'PY'
 import json, sys
@@ -168,11 +171,11 @@ echo '{"type":"turn.completed"}'; exit 0
 SH
 chmod +x "$tmp/bin/stubcodex"
 mkrun; cd "$tmp/run/repo"
-STUB_MODE=quota REAL_CODEX="$tmp/bin/stubcodex" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
+STUB_MODE=quota REAL_CODEX="$tmp/bin/stubcodex" viawrap exec --json "prompt" >/dev/null 2>&1
 expect pass "the shim logs a turn.failed quota error as a failed call with the diagnostics" python3 "$here/check-limit-hit.py" "$EVLOG"
 expect pass "the failed call is normalized to exit 1 and carries the wrapper's terminal message" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print(e["exit"]==1 and "Treat as UNREVIEWED" in e["stderr"])' "$here" "$EVLOG")" = "True"
 mkrun; cd "$tmp/run/repo"
-REAL_CODEX="$tmp/bin/stubcodex" bash "$here/shim/codex" exec --json resume T-asked "prompt" >/dev/null 2>&1
+REAL_CODEX="$tmp/bin/stubcodex" viawrap exec --json resume T-asked "prompt" >/dev/null 2>&1
 expect pass "a completed turn with no agent message is logged as failed, with no invented thread id" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2]); print(e[0]["exit"]!=0 and e[0]["thread_id"] is None)' "$here" "$EVLOG")" = "True"
 
 
@@ -224,7 +227,7 @@ expect pass "an unwritable output file logs the shell diagnostic" test "$(python
 sc() { python3 "$here/check-scripted.py" "$EVLOG" "$@"; }
 mkrun; cd "$tmp/run/repo"; export FAKE_ROUNDS=1 FAKE_TARGET=code
 bash "$fake" review >/dev/null 2>&1; printf '# review-fix-1\n' >> app.py; bash "$fake" review >/dev/null 2>&1
-st="$({ cat app.py; } | shasum -a 256 | cut -c1-16)"
+st="$(python3 "$here/state-hash.py" .)"
 expect pass "scripted: a finding round then a clean reply for the final state passes" sh -c "python3 '$here/check-scripted.py' '$EVLOG' rounds 1 && python3 '$here/check-scripted.py' '$EVLOG' final $st"
 expect fail "scripted: a clean reply for another state fails" python3 "$here/check-scripted.py" "$EVLOG" final 0000000000000000
 bash "$fake" --resume never-issued again >/dev/null 2>&1
@@ -257,12 +260,12 @@ mkrun; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"; printf '#!/usr/bin/
 PATH="$tmp/bin2:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "a successful spy call logs no stderr it never replayed" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["exit"]==0 and e["stderr"]=="")' "$here" "$EVLOG")" = "True"
 mkrun; cd "$tmp/run/repo"; printf '#!/usr/bin/env bash\nexit 1\n' > "$tmp/bin/stubfail"; chmod +x "$tmp/bin/stubfail"
-REAL_CODEX="$tmp/bin/stubfail" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
+REAL_CODEX="$tmp/bin/stubfail" viawrap exec --json "prompt" >/dev/null 2>&1
 expect pass "a silent Codex failure logs only the terminal message, no invented header" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print("Codex CLI said" not in e["stderr"] and "Treat as UNREVIEWED" in e["stderr"])' "$here" "$EVLOG")" = "True"
 
 # r19: a quota error printed only on stderr is parsed from the merged stream like the wrapper does, once.
 printf '#!/usr/bin/env bash\necho "ERROR: You have hit your usage limit." >&2\nexit 1\n' > "$tmp/bin/stderrquota"; chmod +x "$tmp/bin/stderrquota"
-mkrun; cd "$tmp/run/repo"; REAL_CODEX="$tmp/bin/stderrquota" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
+mkrun; cd "$tmp/run/repo"; REAL_CODEX="$tmp/bin/stderrquota" viawrap exec --json "prompt" >/dev/null 2>&1
 expect pass "a stderr-only quota error is logged once through the wrapper's Codex CLI said header" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print(e["stderr"].count("usage limit")==1 and "Codex CLI said" in e["stderr"])' "$here" "$EVLOG")" = "True"
 expect pass "and it counts as the usage limit" python3 "$here/check-limit-hit.py" "$EVLOG"
 # the final status, not history: an early incomplete audit followed by an approved fallback is not flagged.
@@ -420,9 +423,9 @@ echo '{"type":"turn.completed"}'; exit 0
 SH
 chmod +x "$tmp/bin/stubok"
 mkrun; cd "$tmp/run/repo"
-REAL_CODEX="$tmp/bin/stubok" bash "$here/shim/codex" exec -p review --sandbox read-only --cd "$tmp/run/repo" --json --skip-git-repo-check "resume" >/dev/null 2>&1
+REAL_CODEX="$tmp/bin/stubok" viawrap exec -p review --sandbox read-only --cd "$tmp/run/repo" --json --skip-git-repo-check "resume" >/dev/null 2>&1
 expect pass "a new call whose prompt is the word resume is not logged as a resume" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["resume"])' "$here" "$EVLOG")" = "None"
-REAL_CODEX="$tmp/bin/stubok" bash "$here/shim/codex" exec -p review --sandbox read-only --cd "$tmp/run/repo" resume --json --skip-git-repo-check T-real "again" >/dev/null 2>&1
+REAL_CODEX="$tmp/bin/stubok" viawrap exec -p review --sandbox read-only --cd "$tmp/run/repo" resume --json --skip-git-repo-check T-real "again" >/dev/null 2>&1
 expect pass "a real resume is logged with its thread id" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["resume"])' "$here" "$EVLOG")" = "T-real"
 rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
 python3 - "$tmp/mir/commands/tdd-execute-codex.md" <<'PY'
@@ -486,5 +489,20 @@ rows=[json.loads(l) for l in open(sys.argv[1])]; rows[1]["wrapper"]="real"
 open(sys.argv[1],"w").write("\n".join(json.dumps(x) for x in rows)+"\n")
 PY2
 expect pass "a real resume of a real thread passes the real-only resume check" python3 "$here/check-resume.py" "$EVLOG" --real
+
+# r28: bare codex exec is not wrapper evidence, a moved function changes the state hash, an echoed argument is not a quota error
+mkrun
+REAL_CODEX="$tmp/bin/stubok" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
+expect pass "a bare codex exec call is logged as direct, not real" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["wrapper"])' "$here" "$EVLOG")" = direct
+expect fail "a bare codex exec call does not satisfy the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
+REAL_CODEX="$tmp/bin/stubok" viawrap exec --json "prompt" >/dev/null 2>&1
+expect pass "a call through codex-call.sh is logged as real" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["wrapper"])' "$here" "$EVLOG")" = real
+mkdir -p "$tmp/sh1" "$tmp/sh2"; printf 'def add(a, b):\n    return a + b\n' > "$tmp/sh1/app.py"; : > "$tmp/sh1/test_app.py"
+: > "$tmp/sh2/app.py"; printf 'def add(a, b):\n    return a + b\n' > "$tmp/sh2/test_app.py"
+expect pass "moving add() into the test file changes the state hash" test "$(python3 "$here/state-hash.py" "$tmp/sh1")" != "$(python3 "$here/state-hash.py" "$tmp/sh2")"
+mkrun; line fake 1 unknown 'codex-call: Codex CLI said:\nno saved session found with ID usage limit\n'
+expect fail "an echoed argument named usage limit is not a quota error" python3 "$here/check-limit-hit.py" "$EVLOG"
+mkrun; line fake 1 unknown "$LIMIT"
+expect pass "a real quota sentence is a quota error" python3 "$here/check-limit-hit.py" "$EVLOG"
 
 exit $fail

@@ -218,7 +218,7 @@ check "every finding round ($FAKE_ROUNDS) was fixed: all markers present" all_ma
 check "reviewer calls reached finding rounds 1..$FAKE_ROUNDS in order" rounds_in_order
 # WHY bind the clean verdict to the final state: edits made after the last CLEAN review would
 # otherwise ship unreviewed. The hash is computed exactly as the fake computes it.
-final_state="$(cd "$repo" && { cat app.py test*.py .claude/plan/*.md 2>/dev/null || true; } | shasum -a 256 | cut -c1-16)"
+final_state="$(python3 "$here/state-hash.py" "$repo")"
 check "the last execution was a clean reply for the state the run ended in" 'python3 "$here/check-scripted.py" "$out/wrapper.jsonl" final "$final_state"'
 # WHY: the tdd skills audit tests first and that audit consumes every scripted finding, so a run
 # that skipped the implementation review would still end CLEAN; require the last review saw add().
