@@ -76,15 +76,33 @@ logrc=0; [[ $ok == True ]] || logrc=1
 # reviewed installed wrapper (WRAPPER_SHA256) and the run nonce (EVNONCE) must be set. A bare `codex exec`, a prompt that
 # mentions codex-call.sh or an edited copy of the wrapper therefore fails and is logged as "direct", which no checker counts.
 wpath="$(lsof -a -p "$PPID" -d 255 -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
-kind=direct; EV_PROV="$(python3 - "$wpath" "$real" <<'PY3'
+# WHY also the parent's argument vector (r30): a bare caller can open the wrapper on fd 255 itself (`exec 255<codex-call.sh`),
+# so the open file alone proves nothing. The parent must be a shell RUNNING that file as its script (interpreter, options
+# without -c, then the script path equal to the fd 255 file), which a caller holding the descriptor open cannot satisfy.
+pargs="$(ps -o args= -p "$PPID" 2>/dev/null)"
+kind=direct; EV_PROV="$(python3 - "$wpath" "$real" "$pargs" <<'PY3'
 import hashlib, json, os, sys
-wp, codex = sys.argv[1], sys.argv[2]
+wp, codex, pargs = sys.argv[1], sys.argv[2], sys.argv[3]
 rp = os.path.realpath(wp) if wp and os.path.isfile(wp) else ""
+def runs_script(args, script):
+    t = args.split()
+    if t and os.path.basename(t[0]) == "env":
+        t = t[1:]
+    if not t or os.path.basename(t[0]) not in ("bash", "sh", "zsh") or not script:
+        return False
+    for x in t[1:]:
+        if x.startswith("-"):
+            if not x.startswith("--") and "c" in x[1:]:
+                return False
+            continue
+        return os.path.realpath(x) == script
+    return False
+argv_ok = runs_script(pargs, rp)
 sha = hashlib.sha256(open(rp, "rb").read()).hexdigest() if rp else ""
-print(json.dumps({"nonce": os.environ.get("EVNONCE", ""), "wrapper_path": rp, "wrapper_sha256": sha, "wrapper_inode": os.stat(rp).st_ino if rp else None, "codex": os.path.realpath(codex)}))
+print(json.dumps({"nonce": os.environ.get("EVNONCE", ""), "wrapper_path": rp, "wrapper_sha256": sha, "wrapper_inode": os.stat(rp).st_ino if rp else None, "argv_ok": argv_ok, "codex": os.path.realpath(codex)}))
 PY3
 )"; export EV_PROV
-python3 -c 'import json,os,sys; p=json.loads(os.environ["EV_PROV"]); sys.exit(0 if p["wrapper_sha256"] and p["wrapper_sha256"]==os.environ.get("WRAPPER_SHA256") and p["nonce"] and p["nonce"]==os.environ.get("EVNONCE") else 1)' && kind=real
+python3 -c 'import json,os,sys; p=json.loads(os.environ["EV_PROV"]); sys.exit(0 if p["wrapper_sha256"] and p["argv_ok"] and p["wrapper_sha256"]==os.environ.get("WRAPPER_SHA256") and p["nonce"] and p["nonce"]==os.environ.get("EVNONCE") else 1)' && kind=real
 python3 "$here/evlog.py" "$EVLOG" "$kind" "$logrc" "$resume" "$tid" "$pf" "$so" "$so.err" -- "${argv[@]}"
 cat "$o"; cat "$e" >&2
 exit "$rc"

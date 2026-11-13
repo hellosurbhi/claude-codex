@@ -17,7 +17,7 @@ def is_real(e):
     n, w, c = os.environ.get("EVNONCE"), os.environ.get("WRAPPER_SHA256"), os.environ.get("EXPECT_CODEX")
     if e.get("wrapper") != "real" or not (n and w and c):
         return False
-    return p.get("nonce") == n and p.get("wrapper_sha256") == w and p.get("codex") == os.path.realpath(c) and "/shim/" not in (p.get("codex") or "")
+    return p.get("argv_ok") is True and p.get("nonce") == n and p.get("wrapper_sha256") == w and p.get("codex") == os.path.realpath(c) and "/shim/" not in (p.get("codex") or "")
 
 def reply_text(ev):
     # WHY both streams for a successful spy: the reviewer reply goes to the caller's chosen output path, so a reply routed

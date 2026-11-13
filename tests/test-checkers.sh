@@ -24,7 +24,7 @@ import json, sys
 log, wrapper, code, phase, out = sys.argv[1:6]
 n = sum(1 for _ in open(log))
 import os
-prov = {"nonce": os.environ["EVNONCE"], "wrapper_sha256": os.environ["WRAPPER_SHA256"], "codex": os.path.realpath(os.environ["EXPECT_CODEX"])} if wrapper == "real" else None
+prov = {"argv_ok": True, "nonce": os.environ["EVNONCE"], "wrapper_sha256": os.environ["WRAPPER_SHA256"], "codex": os.path.realpath(os.environ["EXPECT_CODEX"])} if wrapper == "real" else None
 open(log, "a").write(json.dumps({"seq": n + 1, "wrapper": wrapper, "prov": prov, "argv": ["S", "in", "out"] if wrapper == "spy" else [], "exit": int(code), "resume": None, "thread_id": None, "phase": phase, "stdout": out.replace("\\n", "\n"), "stderr": "", "ts": n + 1}) + "\n")
 PY
 }
@@ -514,6 +514,9 @@ REAL_CODEX="$tmp/realbin/codex" viawrap exec --json "prompt" >/dev/null 2>&1
 expect pass "a call made by the reviewed codex-call.sh is logged as real" test "$(wrapper_kind)" = real
 expect pass "that call satisfies the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
 expect pass "that call satisfies the real verdict check" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+mkrun; bash -c "exec 255<'$tmp/wrap/codex-call.sh'; REAL_CODEX='$tmp/realbin/codex' bash '$here/shim/codex' exec --json prompt; true" >/dev/null 2>&1
+expect pass "a bare caller that opened the wrapper on fd 255 itself is logged as direct" test "$(wrapper_kind)" = direct
+expect fail "that fd 255 spoof does not satisfy the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
 mkrun; mkdir -p "$tmp/wrap2"; { cat "$tmp/wrap/codex-call.sh"; echo '# edited copy'; } > "$tmp/wrap2/codex-call.sh"
 REAL_CODEX="$tmp/realbin/codex" bash "$tmp/wrap2/codex-call.sh" exec --json "prompt" >/dev/null 2>&1
 expect pass "an edited copy of the wrapper is logged as direct" test "$(wrapper_kind)" = direct
