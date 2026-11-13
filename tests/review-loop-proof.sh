@@ -156,21 +156,11 @@ if [[ $scenario == real ]]; then
   # with a verdict. The last real verdict is printed for the record.
   check "a real codex-call.sh call returned a THREAD_ID" 'grep -qE "THREAD_ID: [0-9a-f-]{8,}" "$out/events.txt"'
   check "a real Codex reply carried a VERDICT line" 'grep -qE "VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)" "$out/events.txt"'
-  check "the --resume follow-up returned on the same thread with a verdict" 'python3 - "$out/events.txt" <<PY
-import re, sys
-ev = open(sys.argv[1]).read().split("\nCMD ")
-tids = []
-for blk in ev:
-    t = re.search(r"THREAD_ID: ([0-9a-f-]{8,})", blk)
-    if t: tids.append(t.group(1))
-ok = False
-for blk in ev:
-    m = re.search(r"codex-call\.sh.* --resume ([0-9a-f-]{8,})", blk.split("\nOUT ")[0])
-    if m and ("THREAD_ID: " + m.group(1)) in blk and re.search(r"VERDICT: [A-Z]+", blk): ok = True
-sys.exit(0 if ok else 1)
-PY'
+  check "the --resume follow-up returned on the same thread with a verdict" 'python3 "$here/check-resume.py" "$out/events.txt"'
   check "a follow-up reached Codex through --resume" 'grep -qE "CMD .*codex-call.sh.* --resume " "$out/events.txt"'
   echo "RESUME_USED: $(grep -c -- '--resume' "$out/events.txt")"
+  echo "LAST_VERDICT: $(grep -oE 'VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)' "$out/events.txt" | tail -1)"
+  echo "THREAD_IDS: $(grep -oE 'THREAD_ID: [0-9a-f-]{8,}' "$out/events.txt" | sort -u | tr '\n' ' ')"
   check "final report does not label the work UNREVIEWED" '! grep -qiE "(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED|review incomplete|audit incomplete" "$out/session.txt"'
   exit $fail
 fi
@@ -186,13 +176,14 @@ if [[ $scenario == usage-limit ]]; then
     # changes, so the spy is never the reviewer; what must hold is that the work still got
     # done and reviewed instead of being abandoned on the quota error.
     check "the Codex implementation call hit the usage limit" 'grep -q result=LIMIT "$FAKE_LOG"'
-    check "the change was still made (not abandoned on the quota error)" '[[ -f "$repo/mathops.py" && -f "$repo/pkginfo.py" ]]'
+    check "the change was still made (not abandoned on the quota error)" 'for f in mathops strops listops pkginfo; do grep -q "def " "$repo/$f.py" 2>/dev/null && python3 -m py_compile "$repo/$f.py" || exit 1; done'
+    check "the final report says the change was reviewed" 'grep -qi "review" "$out/session.txt"'
     check "final report does not say nothing was written or vetted" '! grep -qiE "no code was written|nothing is vetted|did not fall back|UNREVIEWED" "$out/session.txt"'
     exit $fail
   fi
   check "a fallback reviewer ran on the actual diff or plan" 'grep -q "has_add=yes" "$SPY_LOG"'
-  check "the fallback returned a valid verdict" 'grep -qE "result=(APPROVED|WARNING|BLOCKED)" "$SPY_LOG"'
-  check "the last fallback verdict is clean (APPROVED)" 'tail -1 "$SPY_LOG" | grep -q "result=APPROVED"'
+  check "the fallback returned a valid verdict" 'grep -qE "result=(APPROVED|WARNING|BLOCKED)$" "$SPY_LOG"'
+  check "the last fallback verdict is clean (APPROVED)" 'tail -1 "$SPY_LOG" | grep -q "result=APPROVED$"'
   check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|skipped|(is|are|remains?|stays?|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED" "$out/session.txt"'
   exit $fail
 fi
