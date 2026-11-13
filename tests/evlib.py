@@ -25,13 +25,25 @@ def wrapper_runs(cmd):
             cur.append(t)
     simple.append(cur)
     runs, wrapper_vars = [], set()
+    prefixes = ("bash", "sh", "timeout", "env", "time", "nohup", "exec")
     for words in simple:
-        while words and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]) or words[0] in ("bash", "sh", "timeout", "env", "time", "nohup", "exec")):
+        while words:
             a = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)", words[0])
-            # a variable assigned the wrapper path and later used as the command word counts as that wrapper
-            if a and a.group(2).endswith("codex-call.sh"):
-                wrapper_vars.add(a.group(1))
-            words = words[2:] if words[0] == "timeout" and len(words) > 1 else words[1:]
+            if a:
+                # a variable assigned the wrapper path and later used as the command word counts as that wrapper
+                if a.group(2).endswith("codex-call.sh"):
+                    wrapper_vars.add(a.group(1))
+                words = words[1:]
+            elif words[0] in prefixes:
+                words = words[2:] if words[0] == "timeout" and len(words) > 1 else words[1:]
+            elif words[0].startswith("-") and words[0] != "-c":
+                # env/bash options such as -u NAME, -i, --
+                words = words[2:] if words[0] in ("-u", "-C", "-S") and len(words) > 1 else words[1:]
+            else:
+                break
+        if words and words[0] == "-c" and len(words) > 1:
+            runs.extend(wrapper_runs(words[1]))
+            continue
         if words:
             w = words[0]
             v = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", w)
@@ -50,7 +62,7 @@ def first_limit_cmd_index(ev):
         if e["kind"] == "cmd" and wrapper_runs(e["text"]):
             r = res.get(e["id"])
             if r and "usage limit" in r["text"].lower():
-                return i
+                return ev.index(r)  # the reply's position: a reviewer must start after the quota reply, not after the command
     return None
 
 def good_reply(r):

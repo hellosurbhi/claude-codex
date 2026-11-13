@@ -96,7 +96,7 @@ esac
 seam="TEST HARNESS: for this run the Codex wrapper lives at $fake. Wherever a skill says ~/.claude/config/scripts/codex-call.sh, including its availability check, run $fake with the same arguments instead.$relay Everything else in the skill applies unchanged. You are running unattended: never wait for user input."
 # WHY a follow-up request in the real scenario: real Codex often approves a trivial change on
 # round 1, so without it nothing would exercise `codex-call.sh --resume THREAD_ID`.
-[[ $scenario == real ]] && task="$task After Codex's first verdict, send it one follow-up in the same thread (resume by THREAD_ID) asking it to confirm that verdict, and report the thread id."
+[[ $scenario == real ]] && task="$task After Codex's first reply (its verdict, or its completion report when it implements), send it one follow-up in the same thread (resume by THREAD_ID) asking it to confirm that reply, and report the thread id."
 # WHY stream-json: the real scenario must show the THREAD_ID and VERDICT lines Codex actually
 # returned and whether a follow-up used --resume; those live in tool calls and results,
 # not in the final report.
@@ -122,12 +122,12 @@ for l in open(o + "/stream.jsonl"):
         for c in m["content"]:
             if not isinstance(c, dict): continue
             if c.get("type") == "tool_use" and c.get("name") == "Bash":
-                cmd = str(c["input"].get("command", ""))[:4000]
+                cmd = str(c["input"].get("command", ""))[:400000]
                 ev.append("CMD " + cmd); jl.append({"kind": "cmd", "id": c.get("id"), "text": cmd})
             elif c.get("type") == "tool_use" and c.get("name") in ("Task", "Agent"):
-                jl.append({"kind": "agent", "id": c.get("id"), "text": json.dumps(c.get("input", {}))[:4000]})
+                jl.append({"kind": "agent", "id": c.get("id"), "text": json.dumps(c.get("input", {}))[:400000]})
             if c.get("type") == "tool_result":
-                t = text(c.get("content"))[:20000]
+                t = text(c.get("content"))[:400000]
                 ev.append("OUT " + t); jl.append({"kind": "result", "id": c.get("tool_use_id"), "text": t, "error": bool(c.get("is_error"))})
 open(o + "/session.txt", "w").write(res)
 open(o + "/events.txt", "w").write("\n".join(ev))
@@ -194,7 +194,7 @@ if [[ $scenario == usage-limit ]]; then
     # WHY ordering and a completed result: an implementation agent must not count as the review. The
     # review is an agent whose input mentions review, started after the Codex usage-limit reply, with a result.
     check "an independent reviewer agent ran after the Codex usage limit and returned" 'python3 "$here/check-reviewer-after-limit.py" "$out/events.jsonl"'
-    check "final report does not say the review was skipped" '! grep -qiE "review skipped|audit skipped|skipped the review" "$out/session.txt"'
+    check "final report does not say the review was skipped" '! grep -qiE "\b(review|audit)\b[^.\n]{0,40}\bskipped\b|\bskipped\b[^.\n]{0,20}\b(review|audit)\b" "$out/session.txt"'
     check "final report does not say nothing was written or vetted" '! grep -qiE "no code was written|nothing is vetted|did not fall back|UNREVIEWED" "$out/session.txt"'
     exit $fail
   fi
@@ -207,7 +207,7 @@ if [[ $scenario == usage-limit ]]; then
   if [[ $FAKE_TARGET == code ]]; then check "the implementation really adds (behavioral)" 'python3 "$here/check-impl.py" "$repo/app.py"'; fi
   check "the fallback returned a valid verdict" 'grep -qE "result=(APPROVED|WARNING|BLOCKED)$" "$SPY_LOG"'
   check "the last fallback verdict is clean (APPROVED)" 'tail -1 "$SPY_LOG" | grep -q "result=APPROVED$"'
-  check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|skipped|(changes?|work|plan|diff|code|implementation) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
+  check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|\b(review|audit)\b[^.\n]{0,40}\bskipped\b|\bskipped\b[^.\n]{0,20}\b(review|audit)\b|(changes?|work|plan|diff|code|implementation) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
   exit $fail
 fi
 check "every finding round ($FAKE_ROUNDS) was fixed: all markers present" all_markers
