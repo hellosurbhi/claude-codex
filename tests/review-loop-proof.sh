@@ -104,5 +104,5 @@ if [[ $scenario == failed || $scenario == malformed ]]; then
 fi
 # WHY a phrase match, not any mention of UNREVIEWED: the report may truthfully narrate
 # that early calls "died with UNREVIEWED"; the failure is claiming the work still is.
-check "final report does not label the work UNREVIEWED" '! grep -qiE "(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?UNREVIEWED|[:=] *\**UNREVIEWED|review incomplete|audit incomplete" "$out/session.txt"'
+check "final report does not label the work UNREVIEWED" '! grep -qiE "(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED|review incomplete|audit incomplete" "$out/session.txt"'
 exit $fail
