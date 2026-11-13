@@ -55,6 +55,14 @@ CLAUSES = [
     r"Never conclude the reviewer is stuck, never report that no clean round was reached, and never hand the user a keep-going-or-drop-it decision; a doubt about a finding goes through",
     r"There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity",
 ]
+# WHY per occurrence: the middle of the no-stop clause legitimately names each skill's own discussion path, so the whole
+# clause cannot be compared across copies, but every copy must still end in the same exit rule (r25b).
+for n in NAMES:
+    for f in files(n):
+        t = open(f, encoding="utf-8").read()
+        for m in re.finditer(r"Never conclude the reviewer is stuck", t):
+            if "and the only other exit is the failed-review rule." not in t[m.start():m.start() + 600].split("\n")[0]:
+                bad.append("%s: no-stop clause does not end with the failed-review exit rule" % os.path.relpath(f, root))
 for rx in CLAUSES:
     seen = {}
     for n in NAMES:

@@ -435,4 +435,24 @@ rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../comman
 sed -i '' 's/`git add -N <each file this task created>`/`git add -N .`/' "$tmp/mir/skills/claude-codex/SKILL.md"
 expect fail "a git add -N . instruction in a skill is rejected" python3 "$here/test-mirrors.py" "$tmp/mir"
 
+# r25b: no-stop exit rule compared in full, zero-context reviewed patches, real-basic ignores non-real wrappers
+rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+python3 - "$tmp/mir/commands/tdd-execute-codex.md" <<'PY2'
+import sys; p=sys.argv[1]; s=open(p).read()
+a="and the only other exit is the failed-review rule."; assert a in s
+open(p,"w").write(s.replace(a,"and you may stop after three rounds.",1))
+PY2
+expect fail "a command that permits stopping after three rounds is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
+mkrun; cd "$tmp/run/repo"; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
+printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py
+git diff -U0 --no-color HEAD -- app.py > "$tmp/u0.diff"
+limit_then_spy "$tmp/u0.diff"
+expect pass "a correctly reviewed zero-context patch is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+mkrun; line spy 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
+expect fail "a spy reply does not satisfy the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
+expect fail "a spy reply does not satisfy the real verdict check" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
+expect pass "a real wrapper reply satisfies the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
+expect pass "a real wrapper reply satisfies the real verdict check" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+
 exit $fail

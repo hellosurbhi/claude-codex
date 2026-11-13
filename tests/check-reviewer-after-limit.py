@@ -149,7 +149,8 @@ if repo is not None:
         patch = "\n".join(l for sec in secs for l in sec)
         patch += "" if patch.endswith("\n") else "\n"
         if secs:
-            r = subprocess.run(["git", "apply", "-p1", "--whitespace=nowarn", "-"], input=patch.encode("utf-8", "surrogateescape"), cwd=d, capture_output=True)
+            # WHY --unidiff-zero: a reviewer may legitimately be shown a -U0 diff; the byte comparison below still guards the result (r25b).
+            r = subprocess.run(["git", "apply", "-p1", "--whitespace=nowarn", "--unidiff-zero", "-"], input=patch.encode("utf-8", "surrogateescape"), cwd=d, capture_output=True)
             if r.returncode != 0:
                 sys.exit(1)
         for name in names:
