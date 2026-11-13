@@ -4,7 +4,8 @@
 import sys
 import wlog
 last = "NONE"
-for e in wlog.load(sys.argv[1]):
+# WHY order by START time: the log is appended in completion order, so a slower older review must not override a newer one (r15).
+for e in sorted(wlog.load(sys.argv[1]), key=lambda x: x.get("ts_start", x["ts"])):
     if e["wrapper"] in ("fake", "real"):
         last = wlog.valid_verdict(e) or "NONE"
 print(last)

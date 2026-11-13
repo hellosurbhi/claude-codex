@@ -135,20 +135,29 @@ expect pass "an unchanged CRLF plan matches the reviewed digest" python3 "$here/
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan v1\n' > "$tmp/plan.md"
 EDIT_DURING="$tmp/plan.md" PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect fail "a plan edited while it was being reviewed is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
-# code edited after the approval is rejected; the reviewed code is accepted.
+# the clean review is bound to the exact final .py state (paths, bytes, indentation, other modules, deletions).
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
-# WHY plumbing, not `git commit`: a throwaway test repo must not run the global commit hooks.
-git add app.py && export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t && git update-ref HEAD "$(echo base | git commit-tree "$(git write-tree)")"
-printf 'x=1\ndef add(a, b):\n    return a + b\n' > app.py
-python3 - "$EVLOG" <<'PY'
-import json, sys
-rows = [json.loads(l) for l in open(sys.argv[1])]
-rows.append({"seq": 2, "wrapper": "spy", "argv": [], "exit": 0, "resume": None, "thread_id": None, "phase": "implementation", "stdout": "VERDICT: APPROVED\n", "stderr": "", "ts_start": 5, "ts": 6, "input_text": "+def add(a, b):\n+    return a + b\n"})
-open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
-PY
-expect pass "reviewed final code is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+printf 'x=1\ndef add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > other.py
+printf '+def add(a, b):\n+    return a + b\n' > "$tmp/diff.txt"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+cp "$tmp/run/repo/app.py" "$tmp/app.good"
+expect pass "reviewed final code state is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 printf 'def evil():\n    pass\n' >> app.py
 expect fail "code edited after the approval is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+cp "$tmp/app.good" app.py; printf 'def sub(a, b):\n    return a - b - 1\n' > other.py
+expect fail "an edit to ANOTHER module after the approval is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+printf 'def sub(a, b):\n    return a - b\n' > other.py; sed -i.bak 's/^    return/        return/' app.py; rm -f app.py.bak
+expect fail "an indentation-only change after the approval is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+cp "$tmp/app.good" app.py; rm other.py
+expect fail "a deleted module after the approval is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+# last-verdict.py picks the latest execution by START time.
+mkrun; python3 - "$EVLOG" <<'PY'
+import json, sys
+ev = lambda seq, st, ts, out: {"seq": seq, "wrapper": "fake", "argv": [], "exit": 0, "resume": None, "thread_id": None, "phase": "unknown", "stdout": out, "stderr": "", "ts_start": st, "ts": ts}
+rows = [ev(1, 10, 15, "THREAD_ID: b\nVERDICT: BLOCKED\n"), ev(2, 5, 30, "THREAD_ID: a\nVERDICT: APPROVED\n")]
+open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+expect pass "last-verdict picks the newer BLOCKED review, not the slower older APPROVED" test "$(python3 "$here/last-verdict.py" "$EVLOG")" = "BLOCKED"
 # the codex shim mirrors codex-call.sh: turn.failed is a failure with diagnostics, and a thread id is never invented from the resume arg.
 cat > "$tmp/bin/stubcodex" <<'SH'
 #!/usr/bin/env bash
@@ -160,6 +169,7 @@ chmod +x "$tmp/bin/stubcodex"
 mkrun; cd "$tmp/run/repo"
 STUB_MODE=quota REAL_CODEX="$tmp/bin/stubcodex" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
 expect pass "the shim logs a turn.failed quota error as a failed call with the diagnostics" python3 "$here/check-limit-hit.py" "$EVLOG"
+expect pass "the failed call is normalized to exit 1 and carries the wrapper's terminal message" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print(e["exit"]==1 and "Treat as UNREVIEWED" in e["stderr"])' "$here" "$EVLOG")" = "True"
 mkrun; cd "$tmp/run/repo"
 REAL_CODEX="$tmp/bin/stubcodex" bash "$here/shim/codex" exec --json resume T-asked "prompt" >/dev/null 2>&1
 expect pass "a completed turn with no agent message is logged as failed, with no invented thread id" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2]); print(e[0]["exit"]!=0 and e[0]["thread_id"] is None)' "$here" "$EVLOG")" = "True"

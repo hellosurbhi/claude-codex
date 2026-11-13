@@ -49,6 +49,7 @@ def main(a):
               # WHY raw bytes: the plan checker hashes the file as written, so CRLF or odd bytes must not change the digest (r14).
               "input_sha256": hashlib.sha256(phase_raw).hexdigest(), "input_bytes": len(phase_raw),
               "input_text": phase_text if wrapper == "spy" else None,
+              "tree_sha256": os.environ.get("TREE_SHA256") or None,
               "ts_start": float(os.environ.get("EVSTART") or time.time()), "ts": time.time()}
         f.write(json.dumps(ev) + "\n")
         f.flush()

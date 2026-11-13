@@ -30,16 +30,9 @@ if plan is not None:
     if hashlib.sha256(open(plan, "rb").read()).hexdigest() != spies[-1].get("input_sha256"):
         sys.exit(1)
 if repo is not None:
-    # WHY: bind the clean review to the FINAL code. Every line the run added or changed relative to the first commit
-    # (app.py and test files) must appear in the reviewed input, so code edited after the approval fails (r14).
-    seen = {l.strip().lstrip("+- ").strip() for l in (spies[-1].get("input_text") or "").splitlines()}
-    root = subprocess.run(["git", "-C", repo, "rev-list", "--max-parents=0", "HEAD"], capture_output=True, text=True).stdout.split()
-    for name in sorted(f for f in os.listdir(repo) if f == "app.py" or (f.startswith("test") and f.endswith(".py"))):
-        base = set()
-        if root:
-            r = subprocess.run(["git", "-C", repo, "show", root[0] + ":" + name], capture_output=True, text=True)
-            base = {l.strip() for l in r.stdout.splitlines()} if r.returncode == 0 else set()
-        for l in open(os.path.join(repo, name), errors="replace").read().splitlines():
-            if l.strip() and l.strip() not in base and l.strip() not in seen:
-                sys.exit(1)
+    # WHY an exact digest of the final .py files: the review must cover exactly the code that remains (all modules, paths,
+    # indentation and deletions included), so any edit after the approval fails (r15).
+    final = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "treehash.py"), repo], capture_output=True, text=True).stdout.strip()
+    if not final or spies[-1].get("tree_sha256") != final:
+        sys.exit(1)
 sys.exit(0)

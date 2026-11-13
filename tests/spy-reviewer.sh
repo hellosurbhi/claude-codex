@@ -12,7 +12,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 argv=("$@")
 EVSTART="$(python3 -c 'import time; print(time.time())')"
-tmp="$(mktemp)"; err="$(mktemp)"; snap="$(mktemp)"
+tmp="$(mktemp)"; err="$(mktemp)"; snap="$(mktemp)"; tree=""
 # WHY tolerant of a missing tier: a workflow may call it as `spy <file>` instead of
 # `spy <tier> <file> <out>`; the spy's job is to review what it is handed, not to police usage.
 if [[ -f "${1:-}" ]]; then set -- unknown "$@"; fi
@@ -29,12 +29,14 @@ finish() {
   # WHY the SNAPSHOT is logged and hashed, not the live path: the file may change while the reviewer runs, and the
   # event must describe exactly what was reviewed (r14).
   local src="$snap"; [[ -s "$snap" || -f "$in" ]] || src=/dev/null
-  EVSTART="$EVSTART" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$src" "$o" "$err" -- "${argv[@]+"${argv[@]}"}"
+  TREE_SHA256="$tree" EVSTART="$EVSTART" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$src" "$o" "$err" -- "${argv[@]+"${argv[@]}"}"
   rm -f "$tmp" "$err" "$snap"
 }
 trap finish EXIT
 [[ -f "$in" ]] || { echo "spy-reviewer: input file missing: $in" | tee "$err" >&2; exit 1; }
 cp "$in" "$snap"
+# WHY the code-state digest is taken at review START: it pins which code this review covered, so code changed afterwards is detectable.
+tree="$(python3 "$here/treehash.py" "$(git rev-parse --show-toplevel)")"
 in_live="$in"; in="$snap"
 # WHY the function signature or body, not the word: unrelated text containing "add" must not count as the change.
 has_add=no; grep -qE '(^|[^A-Za-z_])add\(|a \+ b' "$in" && has_add=yes
