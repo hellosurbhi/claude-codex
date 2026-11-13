@@ -71,7 +71,7 @@ deliver() {
   # WHY no redirect of the shell's own error here: stderr is already the capture file, so a failed open reports its
   # diagnostic there once, and an output path of /dev/stderr resolves to the same capture file.
   cat "$tmp" > "$outf" || return 1
-  [[ "$outf" -ef /dev/stdout ]] || cat "$tmp"
+  [[ "$outf" -ef /dev/stdout || "$outf" -ef /dev/stderr ]] || cat "$tmp"
 }
 delivered=1
 deliver >"$dout" 2>"$derr" || { cat "$dout"; cat "$derr" >&2; exit 1; }

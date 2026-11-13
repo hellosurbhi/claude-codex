@@ -328,4 +328,39 @@ expect fail "a malformed status line is rejected" st $'AUDIT-STATUS: DONE review
 expect pass "a trailing blank line after the status is fine" st $'AUDIT-STATUS: APPROVED reviewer=sonnet\n\n' --expect APPROVED
 expect pass "every skill and command carries identical mirrored instructions" python3 "$here/test-mirrors.py"
 
+# r21: reviewed-patch hardening, CRLF, single stderr delivery, mirror clause equality, codex-mcp scoping
+limit_then_spy() { # diff-file : runs the spy on it from the repo, then orders a quota event before it
+  PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$1" "$tmp/out.txt" >/dev/null 2>&1
+  line fake 1 unknown "$LIMIT"; python3 - "$EVLOG" <<'PY'
+import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
+fake[0]["ts"]=spy[0]["ts_start"]-5; fake[0]["ts_start"]=fake[0]["ts"]-1
+open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in fake+spy)+"\n")
+PY
+}
+mkrun; cd "$tmp/run/repo"; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
+printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py
+git diff --no-color HEAD -- app.py > "$tmp/trav.diff"
+printf 'diff --git a/app.py b/../escape.py\ncopy from app.py\ncopy to ../escape.py\n' >> "$tmp/trav.diff"
+limit_then_spy "$tmp/trav.diff"
+expect fail "a copy-only section that writes outside the sandbox is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+test ! -e "$tmp/run/escape.py"; expect pass "the escaping copy target was never created" test ! -e "$tmp/run/escape.py"
+mkrun; cd "$tmp/run/repo"; printf 'k\r\ndef add(a, b):\r\n    return a + b\r\n' > app.py; commitbase
+printf 'k\r\nNEW\r\ndef add(a, b):\r\n    return a + b\r\n' > app.py
+git diff --no-color HEAD -- app.py > "$tmp/crlf.diff"
+limit_then_spy "$tmp/crlf.diff"
+expect pass "a correctly reviewed CRLF file is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+mkrun; PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" /dev/stderr >"$tmp/so.txt" 2>"$tmp/se.txt"
+expect pass "a reply sent to /dev/stderr reaches the caller exactly once across both streams" test "$(cat "$tmp/so.txt" "$tmp/se.txt" | grep -c '^VERDICT')" = 1
+rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+python3 - "$tmp/mir/commands/claude-codex.md" <<'PY'
+import sys; p=sys.argv[1]; s=open(p).read()
+assert "no Codex thread is required" in s or "tier S included" in s
+assert "it must record its evidence" in s
+s=s.replace("it must record its evidence","it need not record its evidence",1)
+open(p,"w").write(s)
+PY
+expect fail "a reversed clause in one command copy is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
+expect pass "every audit-status assertion in the proof is skipped for the codex-mcp guide" test "$(grep -c 'audit-status.py' "$here/review-loop-proof.sh")" = "$(grep 'audit-status.py' "$here/review-loop-proof.sh" | grep -c 'codex-mcp')"
+
 exit $fail

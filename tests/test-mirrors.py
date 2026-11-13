@@ -43,5 +43,21 @@ for n in NAMES:
         a, b = len(re.findall(rx, ts)), len(re.findall(rx, tc))
         if a != b or (n in need and a == 0):
             bad.append("%s: %r appears %d times in the skill and %d in the command" % (n, rx[:55], a, b))
+# whole-clause equality: every occurrence of each mirrored clause, in every file, must be the same text (r21)
+CLAUSES = [
+    r"\(the active reviewer is the Codex thread or.{0,400}?no Codex thread is required\)",
+    r"\(a fresh Codex thread without `--resume`.{0,900}?on the current head\)",
+    r"End the final report with exactly one machine-readable line.{0,400}?last non-blank line of the report\.",
+]
+for rx in CLAUSES:
+    seen = {}
+    for n in NAMES:
+        for f in files(n):
+            for m in re.findall(rx, open(f, encoding="utf-8").read(), re.S):
+                seen.setdefault(re.sub(r"\s+", " ", m), []).append(os.path.relpath(f, root))
+    if len(seen) > 1:
+        bad.append("clause %r differs between copies: %s" % (rx[:40], " | ".join("%d copies like %r" % (len(v), k[:60]) for k, v in seen.items())))
+    if not seen:
+        bad.append("clause %r found in no file" % rx[:40])
 print("\n".join(bad))
 sys.exit(1 if bad else 0)

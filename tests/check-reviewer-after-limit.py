@@ -4,7 +4,7 @@
 # called for that phase (a tests-only call does not satisfy "implementation"). With --plan-file, the
 # review input is the current non-empty plan file (sha256 equal), so a stale or empty plan fails.
 # WHY only the log: transcripts quote docs and agent text; the wrapper log is what actually ran.
-import hashlib, os, subprocess, sys, tempfile
+import hashlib, os, re, subprocess, sys, tempfile
 import wlog
 def changes(lines):
     # (added, removed) line lists from the hunks of ONE file's diff; only the one-character prefix is removed.
@@ -45,15 +45,31 @@ def reviewed_changes(lines):
             out[n] = (pa + a, pr + r)
     return out
 
-def patch_sections(lines):
+def patch_sections(lines, names):
     # The .py file sections of a git diff, each starting at its "diff --git" line, kept whole (headers, hunks, context).
+    # WHY every .py section is validated: a copy/rename-only section never reaches reviewed_changes, so without this it
+    # could write outside the temp dir or smuggle a file the final tree does not have. Each section must be a plain
+    # same-path edit of a file in the final set, with no copy/rename lines and no traversal (r21). None means reject.
     secs, cur = [], None
     for l in lines:
         if l.startswith("diff --git "):
             cur = [l]; secs.append(cur)
         elif cur is not None:
             cur.append(l)
-    return [sc for sc in secs if sc[0].split(" b/")[-1].endswith(".py")]
+    out = []
+    for sc in secs:
+        m = re.fullmatch(r"diff --git a/(.+) b/(.+)", sc[0])
+        if not m:
+            return None
+        a_, b_ = m.groups()
+        if not (a_.endswith(".py") or b_.endswith(".py")):
+            continue
+        if a_ != b_ or b_ not in names or os.path.isabs(b_) or ".." in b_.split("/"):
+            return None
+        if any(re.match(r"(copy|rename|similarity|dissimilarity) ", x) for x in sc[1:]):
+            return None
+        out.append(sc)
+    return out
 
 args = sys.argv[1:]
 evs = wlog.load(args[0])
@@ -109,15 +125,17 @@ if repo is not None:
         with tempfile.TemporaryDirectory() as d:
             a, b = os.path.join(d, "a"), os.path.join(d, "b")
             open(a, "wb").write(base); open(b, "wb").write(cur)
-            out = subprocess.run(["git", "diff", "--no-index", "--no-color", "--no-ext-diff", "-U0", a, b], capture_output=True, text=True, errors="replace").stdout
-        expected[name] = changes(out.splitlines())
-    got = reviewed_changes((spies[-1].get("input_text") or "").splitlines())
+            out = subprocess.run(["git", "diff", "--no-index", "--no-color", "--no-ext-diff", "-U0", a, b], capture_output=True).stdout.decode("utf-8", "surrogateescape")
+        expected[name] = changes(out.split("\n"))
+    got = reviewed_changes((spies[-1].get("input_text") or "").split("\n"))
     if set(got) != set(expected) or any(got[n] != expected[n] for n in expected):
         sys.exit(1)
     # WHY apply the reviewed patch: matching added/removed lines alone accepts a stale patch whose lines sit at other
     # locations or in other context. Applying the full patch (hunk headers and context included) to the baseline must
     # reproduce every final .py file exactly (r20).
-    secs = patch_sections((spies[-1].get("input_text") or "").splitlines())
+    secs = patch_sections((spies[-1].get("input_text") or "").split("\n"), names)
+    if secs is None:
+        sys.exit(1)
     with tempfile.TemporaryDirectory() as d:
         for name in names:
             base = b""
@@ -128,9 +146,10 @@ if repo is not None:
                 os.makedirs(os.path.dirname(os.path.join(d, name)) or d, exist_ok=True)
                 if root and subprocess.run(["git", "-C", repo, "cat-file", "-e", root[0] + ":" + name], capture_output=True).returncode == 0:
                     open(os.path.join(d, name), "wb").write(base)
-        patch = "\n".join(l for sec in secs for l in sec) + "\n"
+        patch = "\n".join(l for sec in secs for l in sec)
+        patch += "" if patch.endswith("\n") else "\n"
         if secs:
-            r = subprocess.run(["git", "apply", "--unsafe-paths", "--directory", "", "-p1", "--whitespace=nowarn", "-"], input=patch.encode(), cwd=d, capture_output=True)
+            r = subprocess.run(["git", "apply", "-p1", "--whitespace=nowarn", "-"], input=patch.encode("utf-8", "surrogateescape"), cwd=d, capture_output=True)
             if r.returncode != 0:
                 sys.exit(1)
         for name in names:
