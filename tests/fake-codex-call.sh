@@ -70,15 +70,20 @@ for ((k = 1; k <= rounds; k++)); do
   # or the session log must not count as the fix being made.
   marker_present "$k" "$dir" || { next=$k; break; }
 done
+# WHY a state hash and an impl flag on every call: a CLEAN verdict only means something if it
+# was given for the state the run ended in, and (for the tdd skills) after add() existed.
+# WHY the brace group with || true: an unmatched glob makes cat exit nonzero, which pipefail would turn into a dead fake.
+state="$({ cat "$dir"/app.py "$dir"/test*.py "$dir"/.claude/plan/*.md 2>/dev/null || true; } | shasum -a 256 | cut -c1-16)"
+impl=no; grep -q 'def add(a, b)' "$dir/app.py" 2>/dev/null && impl=yes
 echo "THREAD_ID: fake-thread"
 if [[ $next == 0 ]]; then
-  printf 'call=%s resume=%s result=CLEAN\n' "$n" "${resume:-new}" >> "$FAKE_LOG"
+  printf 'call=%s resume=%s result=CLEAN state=%s impl=%s\n' "$n" "${resume:-new}" "$state" "$impl" >> "$FAKE_LOG"
   printf 'VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
   exit 0
 fi
 sev=${sevs[$(( (next - 1) % ${#sevs[@]} ))]}
 case "$sev" in CRITICAL) verdict=BLOCKED ;; HIGH) verdict=WARNING ;; *) verdict=APPROVED ;; esac
-printf 'call=%s resume=%s result=%s round=%s\n' "$n" "${resume:-new}" "$sev" "$next" >> "$FAKE_LOG"
+printf 'call=%s resume=%s result=%s round=%s state=%s impl=%s\n' "$n" "${resume:-new}" "$sev" "$next" "$state" "$impl" >> "$FAKE_LOG"
 echo "VERDICT: $verdict"
 for s in CRITICAL HIGH MEDIUM LOW; do
   if [[ $s == "$sev" ]]; then

@@ -104,7 +104,7 @@ seam="TEST HARNESS: for this run the Codex wrapper lives at $fake. Wherever a sk
 claude -p "$task" --model sonnet --setting-sources "$sources" \
   --permission-mode acceptEdits \
   --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill Edit(./.claude/plan/**) Edit(.claude/plan/**)" \
-  --append-system-prompt "$seam" --output-format stream-json --verbose > "$out/stream.jsonl" 2> "$out/session.err" && claude_rc=0 || claude_rc=$?
+  --append-system-prompt "$seam" --no-session-persistence --output-format stream-json --verbose > "$out/stream.jsonl" 2> "$out/session.err" && claude_rc=0 || claude_rc=$?
 python3 - "$out" <<'PY'
 import json, sys
 o = sys.argv[1]; res = ""; ev = []
@@ -116,8 +116,8 @@ for l in open(o + "/stream.jsonl"):
     if isinstance(m, dict) and isinstance(m.get("content"), list):
         for c in m["content"]:
             if not isinstance(c, dict): continue
-            if c.get("type") == "tool_use" and c.get("name") == "Bash": ev.append("CMD " + str(c["input"].get("command", ""))[:300])
-            if c.get("type") == "tool_result": ev.append("OUT " + str(c.get("content"))[:600])
+            if c.get("type") == "tool_use" and c.get("name") == "Bash": ev.append("CMD " + str(c["input"].get("command", ""))[:4000])
+            if c.get("type") == "tool_result": ev.append("OUT " + str(c.get("content"))[:20000])
 open(o + "/session.txt", "w").write(res)
 open(o + "/events.txt", "w").write("\n".join(ev))
 PY
@@ -141,7 +141,7 @@ all_markers() {
 rounds_in_order() {
   local k=0 line
   while IFS= read -r line; do
-    if [[ $line == *"round=$((k + 1))" ]]; then k=$((k + 1)); fi
+    if [[ $line == *"round=$((k + 1)) "* ]]; then k=$((k + 1)); fi
   done < "$FAKE_LOG"
   [[ $k -eq $FAKE_ROUNDS ]]
 }
@@ -150,10 +150,25 @@ check "session produced a report" '[[ -s "$out/session.txt" ]]'
 if [[ $scenario == real ]]; then
   # Real Codex: no scripted findings, so check what is observable: a real call returned
   # a THREAD_ID and a valid single VERDICT, and (workflows that follow up) a --resume was used.
+  # WHY mechanics, not a clean final verdict: real Codex output is not scripted, so whether it
+  # approves is not the harness's to demand; what must hold is that a real call returned a
+  # THREAD_ID and verdict, and that a follow-up through --resume came back on the SAME thread
+  # with a verdict. The last real verdict is printed for the record.
   check "a real codex-call.sh call returned a THREAD_ID" 'grep -qE "THREAD_ID: [0-9a-f-]{8,}" "$out/events.txt"'
-  check "a real Codex reply carried a VERDICT line" 'grep -qE "VERDICT: [A-Z]+" "$out/events.txt"'
-  echo "THREAD_IDS: $(grep -oE 'THREAD_ID: [0-9a-f-]{8,}' "$out/events.txt" | sort -u | tr '\n' ' ')"
-  echo "VERDICTS: $(grep -oE 'VERDICT: [A-Z]+' "$out/events.txt" | tr '\n' ' ')"
+  check "a real Codex reply carried a VERDICT line" 'grep -qE "VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)" "$out/events.txt"'
+  check "the --resume follow-up returned on the same thread with a verdict" 'python3 - "$out/events.txt" <<PY
+import re, sys
+ev = open(sys.argv[1]).read().split("\nCMD ")
+tids = []
+for blk in ev:
+    t = re.search(r"THREAD_ID: ([0-9a-f-]{8,})", blk)
+    if t: tids.append(t.group(1))
+ok = False
+for blk in ev:
+    m = re.search(r"codex-call\.sh.* --resume ([0-9a-f-]{8,})", blk.split("\nOUT ")[0])
+    if m and ("THREAD_ID: " + m.group(1)) in blk and re.search(r"VERDICT: [A-Z]+", blk): ok = True
+sys.exit(0 if ok else 1)
+PY'
   check "a follow-up reached Codex through --resume" 'grep -qE "CMD .*codex-call.sh.* --resume " "$out/events.txt"'
   echo "RESUME_USED: $(grep -c -- '--resume' "$out/events.txt")"
   check "final report does not label the work UNREVIEWED" '! grep -qiE "(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED|review incomplete|audit incomplete" "$out/session.txt"'
@@ -167,7 +182,12 @@ if [[ $scenario == usage-limit ]]; then
   # large changes), so the spy is never the reviewer there; only the Codex attempt and an
   # honest report are checked for it.
   if [[ $skill == execute-codex ]]; then
-    check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|(is|are|remains?|stays?|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED" "$out/session.txt"'
+    # execute-codex reviews with a Claude agent by design and Codex only implements large
+    # changes, so the spy is never the reviewer; what must hold is that the work still got
+    # done and reviewed instead of being abandoned on the quota error.
+    check "the Codex implementation call hit the usage limit" 'grep -q result=LIMIT "$FAKE_LOG"'
+    check "the change was still made (not abandoned on the quota error)" '[[ -f "$repo/mathops.py" && -f "$repo/pkginfo.py" ]]'
+    check "final report does not say nothing was written or vetted" '! grep -qiE "no code was written|nothing is vetted|did not fall back|UNREVIEWED" "$out/session.txt"'
     exit $fail
   fi
   check "a fallback reviewer ran on the actual diff or plan" 'grep -q "has_add=yes" "$SPY_LOG"'
@@ -179,6 +199,15 @@ fi
 check "every finding round ($FAKE_ROUNDS) was fixed: all markers present" all_markers
 check "reviewer calls reached finding rounds 1..$FAKE_ROUNDS in order" rounds_in_order
 check "re-reviewed after the last finding round and got a clean round" 'tail -1 "$FAKE_LOG" | grep -q result=CLEAN'
+# WHY bind the clean verdict to the final state: edits made after the last CLEAN review would
+# otherwise ship unreviewed. The hash is computed exactly as the fake computes it.
+final_state="$(cd "$repo" && { cat app.py test*.py .claude/plan/*.md 2>/dev/null || true; } | shasum -a 256 | cut -c1-16)"
+check "the last clean verdict was given for the state the run ended in" 'tail -1 "$FAKE_LOG" | grep -q "result=CLEAN state=$final_state"'
+# WHY: the tdd skills audit tests first and that audit consumes every scripted finding, so a run
+# that skipped the implementation review would still end CLEAN; require the last review saw add().
+if [[ $FAKE_TARGET == code ]]; then
+  check "the last clean review happened after add() was implemented" 'tail -1 "$FAKE_LOG" | grep -q "impl=yes"'
+fi
 if [[ $scenario == failed || $scenario == malformed ]]; then
   check "the first $FAKE_FAIL_FIRST calls returned no valid verdict" '[[ $(sed -n "1,${FAKE_FAIL_FIRST}p" "$FAKE_LOG" | grep -cE "result=(DEAD|MALFORMED)") -eq $FAKE_FAIL_FIRST ]]'
   check "kept going: the next call returned a verdict" 'sed -n "$((FAKE_FAIL_FIRST + 1))p" "$FAKE_LOG" | grep -qvE "result=(DEAD|MALFORMED)"'

@@ -17,14 +17,26 @@ tier="${1:-}" in="${2:-}" outf="${3:-/dev/stdout}"
 # and the run's repo sits directly inside the out dir the harness reads spy.log from.
 SPY_LOG="${SPY_LOG:-$(cd "$(git rev-parse --show-toplevel)/.." && pwd)/spy.log}"
 [[ -f "$in" ]] || { echo "spy-reviewer: input file missing: $in" >&2; exit 1; }
-has_add=no; grep -q 'add' "$in" && has_add=yes
+# WHY the function signature or body, not the word: unrelated text containing "add" must not count as the change.
+has_add=no; grep -qE 'def add\(a, b\)|a \+ b' "$in" && has_add=yes
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
 prompt="You are an independent code reviewer. Review the diff or plan below. Reply with exactly one line 'VERDICT: APPROVED' or 'VERDICT: WARNING' or 'VERDICT: BLOCKED', then four lines 'CRITICAL:', 'HIGH:', 'MEDIUM:', 'LOW:' each listing every finding at that severity or 'none'. The change is meant to add a function add(a, b) returning a + b. REVIEW.md in this repo requires a tracking comment 'review-fix-N' only if a finding names one; otherwise report only real defects. If the input is a tests-only diff written before the implementation exists (the TDD red phase), the missing add function is expected, not a defect; judge the tests themselves.
 
 $(cat "$in")"
-env -u CLAUDECODE claude -p "$prompt" --model sonnet --setting-sources project --permission-mode default > "$tmp" 2>/dev/null || true
-verdict="$(grep -cE '^VERDICT: (APPROVED|WARNING|BLOCKED)$' "$tmp" || true)"
-result=NOVERDICT; [[ "$verdict" == 1 ]] && result="$(grep -E '^VERDICT:' "$tmp" | sed 's/VERDICT: //')"
+# WHY --no-session-persistence: a test reviewer must not write transcripts under ~/.claude/projects.
+# WHY failures are kept: a crashed or unauthenticated reviewer must read as FAILED, never as a verdict.
+err="$(mktemp)"; trap 'rm -f "$tmp" "$err"' EXIT
+rc=0; env -u CLAUDECODE claude -p "$prompt" --model sonnet --setting-sources project --permission-mode default --no-session-persistence > "$tmp" 2> "$err" || rc=$?
+# WHY strict grammar: APPROVED only counts as clean when it is the single verdict line AND all four
+# severity lines say none; an APPROVED that still lists findings is a finding round.
+result=NOVERDICT
+if (( rc != 0 )); then
+  result=FAILED
+elif [[ $(grep -cE '^VERDICT: ' "$tmp") == 1 && $(grep -cE '^VERDICT: (APPROVED|WARNING|BLOCKED)$' "$tmp") == 1 ]]; then
+  result="$(grep -E '^VERDICT:' "$tmp" | sed 's/VERDICT: //')"
+  if [[ $result == APPROVED ]] && ! [[ $(grep -cE '^(CRITICAL|HIGH|MEDIUM|LOW): none$' "$tmp") == 4 && $(grep -cE '^(CRITICAL|HIGH|MEDIUM|LOW):' "$tmp") == 4 ]]; then result=APPROVED_WITH_FINDINGS; fi
+fi
 printf 'reviewer tier=%s bytes=%s has_add=%s result=%s\n' "$tier" "$(wc -c < "$in" | tr -d ' ')" "$has_add" "$result" >> "$SPY_LOG"
+if [[ $result == FAILED ]]; then cat "$err" >&2; exit 1; fi
 cat "$tmp" > "$outf"
 [[ "$outf" == /dev/stdout ]] || cat "$tmp"

@@ -222,10 +222,11 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
 │   └── codex-call.sh        # codex exec wrapper every skill calls (install step 3)
 └── tests/
     ├── review-loop-proof.sh # runs a real headless Claude session through a skill with a scripted reviewer
-    └── fake-codex-call.sh   # the scripted reviewer: one finding per round, tied to repo state
+    ├── fake-codex-call.sh   # the scripted reviewer: one finding per round, tied to repo state
+    └── spy-reviewer.sh      # real fallback reviewer for the usage-limit scenario (no ~/.claude writes)
 ```
 
-`tests/review-loop-proof.sh <skills-dir|installed> <claude-codex|plan-codex> <round6|high-only|medium-only|low-only|failed|malformed>` proves the loop has no round cap and no severity floor: it passes only when every scripted round is fixed, round 6 is reached in the `round6` scenario, the run ends on a clean re-review, and in the `failed` scenario two dead calls (and in `malformed` an empty, verdict-less, duplicate-verdict and invalid-verdict reply) are followed by more calls until a verdict arrives. The output directory must be empty. Each run is a real Claude session, so it uses API quota.
+`tests/review-loop-proof.sh <skills-dir|installed> <claude-codex|plan-codex|execute-codex|tdd-claude-codex|tdd-execute-codex|codex-mcp> <scenario> [empty-out-dir]` proves the loop has no round cap and no severity floor. Scenarios: `round6`, `high-only`, `medium-only`, `low-only` (every scripted round is fixed, round 6 is reached in `round6`, and the run ends on a clean re-review of the final state), `failed` and `malformed` (dead, empty, verdict-less, duplicate-verdict and invalid-verdict replies are followed by more calls until a verdict arrives), `usage-limit` (Codex reports a usage limit with a reset time on every call; a real fallback reviewer, `tests/spy-reviewer.sh`, must review the actual change and return a clean verdict) and `real` (no fake: the installed `codex-call.sh` and real Codex, checking a THREAD_ID, a verdict and a `--resume` follow-up on the same thread). `installed` loads the skills from `~/.claude/skills` instead of copying a source folder. The output directory must be empty. Each run is a real Claude session, so it uses API quota. For the execute-codex and tdd-execute-codex loops, where a code-reviewer agent does the review, the harness tells that agent to relay the scripted reviewer.
 
 The `prompts/codex/` files are passed via `--role` on each Codex call to shape its behaviour per phase.
 
