@@ -588,6 +588,7 @@ expect pass "deleting an imported helper module changes the state hash" test "$b
 mkrun; cd "$tmp/run/repo"
 spyrun "$tmp/no-such-dir/o.txt" >/dev/null 2>&1; rc=$?
 expect pass "an unwritable output path fails the spy" test "$rc" != 0
+expect pass "and the event stderr holds the open failure once" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stderr"].count("no-such-dir"))' "$here" "$EVLOG")" = 1
 expect pass "and the event logs no reply" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print(len(es)==1 and "VERDICT" not in wlog.reply_text(es[-1]))' "$here" "$EVLOG")" = True
 
 exit $fail

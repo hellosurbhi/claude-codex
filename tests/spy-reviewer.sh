@@ -76,5 +76,10 @@ if [[ $result == FAILED ]]; then replayed=1; cat "$err" "$tmp" >&2; exit 1; fi
 # file redirects the spy's stdout itself. What the event log records is the reply written, which is the same single copy.
 delivered=1
 # WHY the event copy is made only after the write succeeds (r34): a failed write delivered nothing, so the log must not show an approval.
-if ! cat "$tmp" > "$outf" 2>>"$derr"; then echo "spy-reviewer: cannot write output: $outf" >> "$derr"; cat "$derr" >&2; exit 1; fi
+# WHY an append-open probe with stderr captured, then the real write with stderr untouched (r35): bash reports a failed open of "$outf"
+# to the stderr in effect at that moment, so the diagnostic only reaches the event log if stderr is captured first; but capturing
+# stderr around the real write would make an output path of /dev/stderr resolve to the capture. The probe opens in append mode with
+# nothing written, so it cannot change the file, and a failure there is replayed once to the caller.
+if ! : 2>>"$derr" >> "$outf"; then cat "$derr" >&2; exit 1; fi
+cat "$tmp" > "$outf" 2>>"$derr" || { cat "$derr" >&2; exit 1; }
 cp "$tmp" "$dout"
