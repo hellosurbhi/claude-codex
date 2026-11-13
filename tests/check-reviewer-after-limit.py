@@ -24,6 +24,7 @@ for i, e in enumerate(ev):
                 t = r["text"]
                 lines = re.findall(r"^VERDICT:.*$", t, re.M)
                 sev = re.findall(r"^(CRITICAL|HIGH|MEDIUM|LOW): none\s*$", t, re.M)
-                ok = len(lines) == 1 and re.fullmatch(r"VERDICT: APPROVED\s*", lines[0]) is not None and sorted(sev) == ["CRITICAL", "HIGH", "LOW", "MEDIUM"]
+                allsev = re.findall(r"^\s*(?:CRITICAL|HIGH|MEDIUM|LOW)\b.*$", t, re.M | re.I)
+                ok = len(allsev) == 4 and len(lines) == 1 and re.fullmatch(r"VERDICT: APPROVED\s*", lines[0]) is not None and sorted(sev) == ["CRITICAL", "HIGH", "LOW", "MEDIUM"]
         last_ok = ok
 sys.exit(0 if last_ok else 1)

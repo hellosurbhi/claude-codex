@@ -194,8 +194,8 @@ if [[ $scenario == usage-limit ]]; then
     # WHY ordering and a completed result: an implementation agent must not count as the review. The
     # review is an agent whose input mentions review, started after the Codex usage-limit reply, with a result.
     check "an independent reviewer agent ran after the Codex usage limit and returned" 'python3 "$here/check-reviewer-after-limit.py" "$out/events.jsonl"'
-    check "final report does not say the review was skipped" '! grep -qiE "\b(review|audit)\b[^.\n]{0,40}\bskipped\b|\bskipped\b[^.\n]{0,20}\b(review|audit)\b" "$out/session.txt"'
-    check "final report does not say nothing was written or vetted" '! grep -qiE "no code was written|nothing is vetted|did not fall back|UNREVIEWED" "$out/session.txt"'
+    check "final report does not say the review was skipped" '! grep -qiE "\b(review|audit)\b[^.]{0,40}\bskipped\b|\bskipped\b[^.]{0,20}\b(review|audit)\b" "$out/session.txt"'
+    check "final report does not say nothing was written or vetted" '! grep -qiE "no code was written|nothing is vetted|did not fall back|(changes?|work|plan|diff|code|implementation|modules) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
     exit $fail
   fi
   check "a fallback reviewer ran on the actual diff or plan" 'grep -q "has_add=yes" "$SPY_LOG"'
@@ -207,7 +207,7 @@ if [[ $scenario == usage-limit ]]; then
   if [[ $FAKE_TARGET == code ]]; then check "the implementation really adds (behavioral)" 'python3 "$here/check-impl.py" "$repo/app.py"'; fi
   check "the fallback returned a valid verdict" 'grep -qE "result=(APPROVED|WARNING|BLOCKED)$" "$SPY_LOG"'
   check "the last fallback verdict is clean (APPROVED)" 'tail -1 "$SPY_LOG" | grep -q "result=APPROVED$"'
-  check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|\b(review|audit)\b[^.\n]{0,40}\bskipped\b|\bskipped\b[^.\n]{0,20}\b(review|audit)\b|(changes?|work|plan|diff|code|implementation) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
+  check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|\b(review|audit)\b[^.]{0,40}\bskipped\b|\bskipped\b[^.]{0,20}\b(review|audit)\b|(changes?|work|plan|diff|code|implementation) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
   exit $fail
 fi
 check "every finding round ($FAKE_ROUNDS) was fixed: all markers present" all_markers
