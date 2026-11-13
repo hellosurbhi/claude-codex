@@ -11,8 +11,10 @@ noverdict = "--no-verdict" in sys.argv
 for i, e in enumerate(evs):
     if not e["resume"] or e["exit"] != 0 or e["wrapper"] not in ("fake", "real"):
         continue
-    tids = re.findall(r"^THREAD_ID: (\S+)", e["stdout"], re.M)
-    if tids != [e["resume"]] or e["resume"] not in wlog.issued_before(evs, i):
+    # WHY the leading transport line and the logged id: the wrapper prints THREAD_ID first; a message that repeats or
+    # quotes the id later must not change which thread the call resumed (r22).
+    first = e["stdout"].split("\n", 1)[0]
+    if first != "THREAD_ID: " + e["resume"] or e["thread_id"] != e["resume"] or e["resume"] not in wlog.issued_before(evs, i):
         continue
     if noverdict:
         # WHY optional, not forbidden: a follow-up reply may carry one valid verdict or none, but never an invalid or repeated one.

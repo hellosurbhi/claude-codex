@@ -59,5 +59,22 @@ for rx in CLAUSES:
         bad.append("clause %r differs between copies: %s" % (rx[:40], " | ".join("%d copies like %r" % (len(v), k[:60]) for k, v in seen.items())))
     if not seen:
         bad.append("clause %r found in no file" % rx[:40])
+# whole-paragraph equality for the quota and failure paragraphs: a skill and its command must hold the same text (r22)
+PARAS = ["If Codex hit its usage limit", "**Codex availability check**", "**Usage limit (never block", "**MANDATORY mid-call failure handling**", "**Failed review**", "**Failed audit**"]
+def paras(path, anchor):
+    out = []
+    for l in open(path, encoding="utf-8").read().split("\n"):
+        t = re.sub(r"\s+", " ", re.sub(r"^\s*(\d+\.|-)\s*", "", l)).strip()
+        if t.startswith(anchor):
+            out.append(t)
+    return out
+for n in NAMES:
+    sk, cm = files(n)
+    for a in PARAS:
+        x, y = paras(sk, a), paras(cm, a)
+        # WHY exempt: these commands fold the failure rules into their no-iteration-cap paragraph, whose chain and dispute
+        # clauses are already compared clause by clause above; the other paragraphs are compared whole
+        if x != y and (n, a) not in [(m, b) for m in ("claude-codex", "tdd-claude-codex", "tdd-execute-codex") for b in ("**Failed review**", "**Failed audit**")]:
+            bad.append("%s: paragraph %r differs between skill and command" % (n, a[:40]))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)

@@ -14,7 +14,7 @@ def phase_of(text):
     # Phase comes from what the wrapper actually received: a diff or plan file for the reviewer
     # spy, the prompt for the Codex wrappers. Implementation wins over tests: a diff holding
     # both the tests and `def add` is the implementation phase.
-    if re.search(r"def add\(|return\s+\w+\s*\+\s*\w+", text):
+    if re.search(r"def\s+add\s*\(|return\s*\(?\s*\w+\s*\+\s*\w+", text):
         return "implementation"
     if re.search(r"\.claude/plan|<!--\s*review-fix|^#{1,3} .*\bplan\b", text, re.I | re.M) and not re.search(r"^diff --git|^\+\+\+ ", text, re.M):
         return "plan"

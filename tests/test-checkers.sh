@@ -363,4 +363,26 @@ PY
 expect fail "a reversed clause in one command copy is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
 expect pass "every audit-status assertion in the proof is skipped for the codex-mcp guide" test "$(grep -c 'audit-status.py' "$here/review-loop-proof.sh")" = "$(grep 'audit-status.py' "$here/review-loop-proof.sh" | grep -c 'codex-mcp')"
 
+# r22: formatting-independent phase, resume reply that repeats its thread id, whole quota paragraphs mirrored
+mkrun; cd "$tmp/run/repo"; printf 'def add (a, b): return (a + b)\n' > "$tmp/fmt.py"; git diff --no-index --no-color /dev/null "$tmp/fmt.py" > "$tmp/fmt.diff"
+PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/fmt.diff" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "an implementation formatted as def add (a, b): return (a + b) is phase implementation" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = implementation
+grep -q "has_add=yes" "$tmp/run/spy.log"; expect pass "the spy marks the oddly formatted add as implemented" grep -q "impl=yes" "$tmp/run/spy.log"
+mkrun
+python3 - "$EVLOG" <<'PY'
+import json, sys
+rows = [{"seq": 1, "wrapper": "fake", "argv": [], "exit": 0, "resume": "", "thread_id": "t-1", "phase": "unknown", "stdout": "THREAD_ID: t-1\nstarted\n", "stderr": "", "ts": 1},
+        {"seq": 2, "wrapper": "fake", "argv": [], "exit": 0, "resume": "t-1", "thread_id": "t-1", "phase": "unknown", "stdout": "THREAD_ID: t-1\nDone, continuing thread:\nTHREAD_ID: t-1\n", "stderr": "", "ts": 2}]
+open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+expect pass "--no-verdict accepts a correct resume whose message repeats the thread id" python3 "$here/check-resume.py" "$EVLOG" --no-verdict
+rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+python3 - "$tmp/mir/commands/execute-codex.md" <<'PY'
+import sys; p=sys.argv[1]; s=open(p).read()
+a="never counts as the review then"
+assert a in s
+open(p,"w").write(s.replace(a, "counts as the review then", 1))
+PY
+expect fail "a contradicting quota paragraph in one command copy is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
+
 exit $fail

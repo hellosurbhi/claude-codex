@@ -45,9 +45,9 @@ cp "$in" "$snap"
 tree="$(python3 "$here/treehash.py" "$(git rev-parse --show-toplevel)")"
 in_live="$in"; in="$snap"
 # WHY the function signature or body, not the word: unrelated text containing "add" must not count as the change.
-has_add=no; grep -qE '(^|[^A-Za-z_])add\(|a \+ b' "$in" && has_add=yes
+has_add=no; grep -qE '(^|[^A-Za-z_])add[[:space:]]*\(|[a-z_]+[[:space:]]*\+[[:space:]]*[a-z_]+' "$in" && has_add=yes
 # WHY a separate impl flag: a tests-only diff mentions add( in assertions, which is a real change under review but not the implementation.
-impl=no; grep -qE 'def add\(|return [a-z_]+ \+ [a-z_]+' "$in" && impl=yes
+impl=no; grep -qE 'def[[:space:]]+add[[:space:]]*\(|return[[:space:]]*\(?[[:space:]]*[a-z_]+[[:space:]]*\+[[:space:]]*[a-z_]+' "$in" && impl=yes
 prompt="You are an independent code reviewer. Review the diff or plan below. Reply in the reviewer.sh format: a first line 'VERDICT: APPROVED' or 'VERDICT: WARNING' or 'VERDICT: BLOCKED', then one line per severity that has findings ('CRITICAL:', 'HIGH:', 'MEDIUM:', 'LOW:'). OMIT severity lines with no findings and never write 'none'. A fully clean review is exactly the one line 'VERDICT: APPROVED'. The change is meant to add a function add(a, b) returning a + b. REVIEW.md in this repo requires a tracking comment 'review-fix-N' only if a finding names one; otherwise report only real defects. If the input is a tests-only diff written before the implementation exists (the TDD red phase), the missing add function is expected, not a defect; judge the tests themselves.
 
 $(cat "$in")"
