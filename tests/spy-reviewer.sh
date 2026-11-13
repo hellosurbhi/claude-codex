@@ -71,11 +71,42 @@ printf 'reviewer tier=%s bytes=%s has_add=%s impl=%s result=%s\n' "$tier" "$(wc 
 if [[ $result == FAILED ]]; then replayed=1; cat "$err" "$tmp" >&2; exit 1; fi
 # WHY the delivery is captured and replayed: the reply must reach the caller exactly once whatever the output path is
 # (/dev/stdout and /dev/fd/1 are the same stream as the plain echo), and the event must log what was delivered.
+# WHY the alias is resolved against the ORIGINAL streams, before the capture redirects (r31): once stdout and stderr point at the
+# capture files, /dev/stdout resolves to the capture but /dev/fd/3 (a dup of the caller's real stdout) bypasses it, so the reply
+# was written to the caller directly and then echoed again. Comparing the output path with fd 1 and fd 2 by device and inode, from
+# a process that inherits those streams unchanged, tells which stream the reply reaches, and each case delivers exactly once.
+exec 5>&1 6>&2  # WHY dups: inside $(...) fd 1 is the substitution pipe, so the caller's real streams are carried on 5 and 6
+alias="$(python3 -I - "$outf" <<'PY4'
+import os, sys
+try:
+    # WHY by name first: /dev/stdout and /dev/fd/1 resolve to THIS process's fd 1, the substitution pipe, not the caller's stream.
+    rp = os.path.realpath(sys.argv[1])
+    if rp in ("/dev/fd/1", "/dev/stdout"):
+        print("stdout"); raise SystemExit
+    if rp in ("/dev/fd/2", "/dev/stderr"):
+        print("stderr"); raise SystemExit
+    # WHY fstat on the numbered descriptor: os.stat("/dev/fd/N") describes the devfs node, not the pipe or file behind fd N.
+    import re
+    m = re.fullmatch(r"/dev/fd/(\d+)", rp)
+    t = os.fstat(int(m.group(1))) if m else os.stat(sys.argv[1])
+    for name, fd in (("stdout", 5), ("stderr", 6)):
+        f = os.fstat(fd)
+        if (t.st_dev, t.st_ino) == (f.st_dev, f.st_ino) and t.st_ino != 0:
+            print(name); break
+    else:
+        print("other")
+except OSError:
+    print("other")
+PY4
+)"
 deliver() {
   # WHY no redirect of the shell's own error here: stderr is already the capture file, so a failed open reports its
-  # diagnostic there once, and an output path of /dev/stderr resolves to the same capture file.
-  cat "$tmp" > "$outf" || return 1
-  [[ "$outf" -ef /dev/stdout || "$outf" -ef /dev/stderr ]] || cat "$tmp"
+  # diagnostic there once.
+  case "$alias" in
+    stdout) cat "$tmp" ;;
+    stderr) cat "$tmp" >&2 ;;
+    *) cat "$tmp" > "$outf" || return 1; cat "$tmp" ;;
+  esac
 }
 delivered=1
 deliver >"$dout" 2>"$derr" || { cat "$dout"; cat "$derr" >&2; exit 1; }

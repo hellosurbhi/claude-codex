@@ -76,28 +76,36 @@ logrc=0; [[ $ok == True ]] || logrc=1
 # reviewed installed wrapper (WRAPPER_SHA256) and the run nonce (EVNONCE) must be set. A bare `codex exec`, a prompt that
 # mentions codex-call.sh or an edited copy of the wrapper therefore fails and is logged as "direct", which no checker counts.
 wpath="$(lsof -a -p "$PPID" -d 255 -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
-# WHY also the parent's argument vector (r30): a bare caller can open the wrapper on fd 255 itself (`exec 255<codex-call.sh`),
-# so the open file alone proves nothing. The parent must be a shell RUNNING that file as its script (interpreter, options
-# without -c, then the script path equal to the fd 255 file), which a caller holding the descriptor open cannot satisfy.
-pargs="$(ps -o args= -p "$PPID" 2>/dev/null)"
-kind=direct; EV_PROV="$(python3 - "$wpath" "$real" "$pargs" <<'PY3'
-import hashlib, json, os, sys
-wp, codex, pargs = sys.argv[1], sys.argv[2], sys.argv[3]
+# WHY the parent's TRUE argument vector, not ps text (r30, r31): the kernel's KERN_PROCARGS2 record keeps argv boundaries and the
+# executable path, so a forged argv[0] such as "bash <wrapper>" cannot pass. The parent must be exactly
+# [<bash>, <absolute wrapper path>, ...] with the shell executable /bin/bash or the bash this PATH resolves, and the wrapper
+# also open on fd 255 with the reviewed hash. Threat model: this proves the skill really called the installed codex-call.sh as
+# opposed to a mistake or a stand-in; a same-uid adversary who can rewrite the harness itself is out of scope.
+kind=direct; EV_PROV="$(python3 -I - "$wpath" "$real" "$PPID" "$(command -v bash)" <<'PY3'
+import ctypes, ctypes.util, hashlib, json, os, struct, sys
+wp, codex, ppid, pathbash = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 rp = os.path.realpath(wp) if wp and os.path.isfile(wp) else ""
-def runs_script(args, script):
-    t = args.split()
-    if t and os.path.basename(t[0]) == "env":
-        t = t[1:]
-    if not t or os.path.basename(t[0]) not in ("bash", "sh", "zsh") or not script:
+def procargs(pid):
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2
+    size = ctypes.c_size_t(0)
+    if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
+        return None, []
+    buf = ctypes.create_string_buffer(size.value)
+    if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+        return None, []
+    raw = buf.raw[:size.value]
+    argc = struct.unpack("i", raw[:4])[0]
+    exe, _, rest = raw[4:].partition(b"\0")
+    items = rest.lstrip(b"\0").split(b"\0")[:argc]
+    return exe.decode(errors="replace"), [x.decode(errors="replace") for x in items]
+def runs_script(pid, script):
+    exe, av = procargs(pid)
+    shells = {os.path.realpath("/bin/bash"), os.path.realpath(pathbash)}
+    if not exe or not script or os.path.realpath(exe) not in shells or len(av) < 2:
         return False
-    for x in t[1:]:
-        if x.startswith("-"):
-            if not x.startswith("--") and "c" in x[1:]:
-                return False
-            continue
-        return os.path.realpath(x) == script
-    return False
-argv_ok = runs_script(pargs, rp)
+    return os.path.isabs(av[1]) and not av[1].startswith("-") and os.path.realpath(av[1]) == script
+argv_ok = runs_script(ppid, rp)
 sha = hashlib.sha256(open(rp, "rb").read()).hexdigest() if rp else ""
 print(json.dumps({"nonce": os.environ.get("EVNONCE", ""), "wrapper_path": rp, "wrapper_sha256": sha, "wrapper_inode": os.stat(rp).st_ino if rp else None, "argv_ok": argv_ok, "codex": os.path.realpath(codex)}))
 PY3

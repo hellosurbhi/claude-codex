@@ -552,4 +552,15 @@ open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in rows)+"\n")
 PY2
 expect fail "a diagnose invocation does not pass the fallback check" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 
+# r31: forged argv[0], deleted helper module, an output path that is a dup of the caller's stdout
+mkrun; W="$tmp/wrap/codex-call.sh"
+( exec -a "bash $W" bash -c "exec 255<'$W'; REAL_CODEX='$tmp/realbin/codex' bash '$here/shim/codex' exec --json prompt; true" ) >/dev/null 2>&1
+expect pass "a shell with argv[0] forged to run the wrapper (really -c) is logged as direct" test "$(wrapper_kind)" = direct
+expect fail "the forged argv[0] does not satisfy the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
+mkdir -p "$tmp/sh3"; printf 'import helper\n' > "$tmp/sh3/app.py"; printf 'X=1\n' > "$tmp/sh3/helper.py"; before="$(python3 "$here/state-hash.py" "$tmp/sh3")"; rm "$tmp/sh3/helper.py"
+expect pass "deleting an imported helper module changes the state hash" test "$before" != "$(python3 "$here/state-hash.py" "$tmp/sh3")"
+mkrun; cd "$tmp/run/repo"
+got3="$(PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" /dev/fd/3 3>&1 2>/dev/null)"
+expect pass "an output path that is a dup of the caller's stdout delivers the reply exactly once" test "$(printf '%s\n' "$got3" | grep -c '^VERDICT')" = 1
+
 exit $fail

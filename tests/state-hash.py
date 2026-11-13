@@ -3,7 +3,12 @@
 # (add() from app.py into test_app.py), so a CLEAN verdict would still look current after the change (r28).
 import glob, hashlib, os, sys
 d = sys.argv[1]
-names = sorted(set(glob.glob(os.path.join(d, "app.py")) + glob.glob(os.path.join(d, "test*.py")) + glob.glob(os.path.join(d, ".claude/plan/*.md"))))
+names = set(glob.glob(os.path.join(d, ".claude/plan/*.md")))
+# WHY every .py file, helpers included (r31): deleting an imported helper after a CLEAN review must change the digest.
+for dp, dn, fn in os.walk(d):
+    dn[:] = [x for x in dn if x not in (".git", ".claude", "__pycache__", ".pytest_cache", "node_modules")]
+    names |= {os.path.join(dp, f) for f in fn if f.endswith(".py")}
+names = sorted(names)
 h = hashlib.sha256()
 for p in names:
     b = open(p, "rb").read()
