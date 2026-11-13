@@ -72,12 +72,12 @@ After all tasks complete (either path):
 
 **Step R1 — Run Codex Review via codex-call.sh**
 
-Call Codex via `codex-call.sh` with:
+Before the call, run `git add -N .` in your own shell so newly created files appear in `git diff HEAD` (the Codex reviewer is read-only and cannot update the index itself). Call Codex via `codex-call.sh` with:
 - append to prompt: `"Be concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
 ```
-Run `git add -N .` (so newly created files are included), then `git diff HEAD` to see all uncommitted changes, then review them.
+Run `git diff HEAD` to see all uncommitted changes, then review them.
 
 Return ONLY a structured verdict in this exact format — no explanations, no prose:
 
@@ -120,10 +120,10 @@ Address ALL accepted findings before re-reviewing:
 - Collect every accepted CRITICAL, HIGH, MEDIUM and LOW finding from the last review
 - Fix them all with Edit/Write in one batch
 - Run available tests/lint to verify
-- Re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
+- Run `git add -N .` in your own shell again (so any file a fix created is included; the reviewer is read-only), then re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
-Run `git add -N .` and then `git diff HEAD` again to see the updated changes after fixes, including any file a fix created, then re-review.
+Run `git diff HEAD` again to see the updated changes after fixes, then re-review.
 
 Return ONLY the structured verdict in the same format.
 ```

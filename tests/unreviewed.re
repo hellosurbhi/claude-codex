@@ -1,1 +1,1 @@
-(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?[*_]*UNREVIEWED|(status|final[^:=]{0,30}|overall|result)[:=] *[*_]*UNREVIEWED|review incomplete|audit incomplete
+(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?[*_]*UNREVIEWED|(status|final[^:=]{0,30}|overall|result)[:=] *[*_]*UNREVIEWED|(status|final|overall|result)[^.]{0,30}(review|audit) incomplete

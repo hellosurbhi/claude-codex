@@ -265,4 +265,13 @@ mkrun; cd "$tmp/run/repo"; printf '#!/usr/bin/env bash\nexit 1\n' > "$tmp/bin/st
 REAL_CODEX="$tmp/bin/stubfail" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
 expect pass "a silent Codex failure logs only the terminal message, no invented header" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print("Codex CLI said" not in e["stderr"] and "Treat as UNREVIEWED" in e["stderr"])' "$here" "$EVLOG")" = "True"
 
+# r19: a quota error printed only on stderr is parsed from the merged stream like the wrapper does, once.
+printf '#!/usr/bin/env bash\necho "ERROR: You have hit your usage limit." >&2\nexit 1\n' > "$tmp/bin/stderrquota"; chmod +x "$tmp/bin/stderrquota"
+mkrun; cd "$tmp/run/repo"; REAL_CODEX="$tmp/bin/stderrquota" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
+expect pass "a stderr-only quota error is logged once through the wrapper's Codex CLI said header" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print(e["stderr"].count("usage limit")==1 and "Codex CLI said" in e["stderr"])' "$here" "$EVLOG")" = "True"
+expect pass "and it counts as the usage limit" python3 "$here/check-limit-hit.py" "$EVLOG"
+# the final status, not history: an early incomplete audit followed by an approved fallback is not flagged.
+expect fail "Initial audit incomplete due to quota, final fallback APPROVED is not flagged" unrev "Initial Codex audit incomplete due to quota. Final fallback review: APPROVED."
+expect pass "Review incomplete as a final statement is flagged" unrev "Final status: review incomplete. The changes are UNREVIEWED."
+
 exit $fail

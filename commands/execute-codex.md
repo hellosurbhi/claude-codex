@@ -67,7 +67,7 @@ Announce your routing decision before implementing (e.g. "Small change — imple
 After all tasks complete (either path):
 1. Run self-verification: lint / typecheck / tests if available
 2. If Codex hit its usage limit in this run (see the usage-limit paragraph under the Codex availability check), this step and the dispute handling after it are REPLACED by that paragraph's fallback chain: the code-reviewer agent is Claude reviewing its own code and never counts as the review then. Otherwise launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
-   - the output of `git add -N .` followed by `git diff HEAD` (so newly created files are included)
+   - the output of `git diff HEAD`, produced after running `git add -N .` in your own shell (so newly created files are included)
    - Original task requirements
    - Required output: exactly one `VERDICT: APPROVED | WARNING | BLOCKED` line, then `CRITICAL:`, `HIGH:`, `MEDIUM:` and `LOW:` lines listing every finding at that severity (`none` when empty). A reply without exactly one valid verdict line is a failed review: re-launch it.
 3. Critically evaluate each finding at every severity (accuracy, reviewer context, preference or false positive); contest doubtful ones with a fresh code-reviewer agent and drop only findings the reviewer explicitly withdraws in writing; your own disagreement never drops a finding.
@@ -126,7 +126,7 @@ If failures: fix regressions before proceeding to review.
 **Step B3 — Code Review (Claude Sonnet)**
 
 Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
-- the output of `git add -N .` followed by `git diff HEAD` (so newly created files are included)
+- the output of `git diff HEAD`, produced after running `git add -N .` in your own shell (so newly created files are included)
 - Original task requirements
 - Required output: exactly one `VERDICT: APPROVED | WARNING | BLOCKED` line, then `CRITICAL:`, `HIGH:`, `MEDIUM:` and `LOW:` lines listing every finding at that severity (`none` when empty). A reply without exactly one valid verdict line is a failed review: re-launch it.
 

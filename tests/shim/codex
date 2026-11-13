@@ -15,9 +15,11 @@ o="$(mktemp)"; e="$(mktemp)"; pf="$(mktemp)"; so="$(mktemp)"
 trap 'rm -f "$o" "$e" "$pf" "$so" "$so.err" "$so.meta"' EXIT
 EVLOG="${EVLOG:-$(cd "$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")/.." && pwd)/wrapper.jsonl}"
 EVSTART="$(python3 -c 'import time; print(time.time())')"; export EVSTART
-rc=0; "$real" "${argv[@]+"${argv[@]}"}" >"$o" 2>"$e" || rc=$?
 # Non-codex-exec calls (login status, --version) are replayed and not logged.
-if [[ "${argv[0]:-}" != exec ]]; then cat "$o"; cat "$e" >&2; exit "$rc"; fi
+if [[ "${argv[0]:-}" != exec ]]; then rc=0; "$real" "${argv[@]+"${argv[@]}"}" >"$o" 2>"$e" || rc=$?; cat "$o"; cat "$e" >&2; exit "$rc"; fi
+# WHY one merged stream for exec: codex-call.sh runs codex with `>"$out" 2>&1` and parses that single file, so a quota
+# error printed only on stderr is parsed (and replayed) exactly like stdout lines; separate files changed the diagnostics (r19).
+rc=0; "$real" "${argv[@]+"${argv[@]}"}" >"$o" 2>&1 || rc=$?
 python3 - "$o" "$rc" "$pf" "$so" "$e" "${argv[@]}" <<'PY'
 import json, sys
 out, rc, pf, so, errf, *argv = sys.argv[1:]
@@ -46,7 +48,6 @@ if not ok:
     # WHY the header only when there is something to say: the real wrapper prints just its terminal message when Codex said nothing (r18).
     said = errs + [l.rstrip() for l in raw if not l.lstrip().startswith("{")][-20:]
     diag = ("codex-call: Codex CLI said:\n" + "\n".join(said) + "\n") if said else ""
-    diag += open(errf, errors="replace").read()
     diag += "codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED.\n"
 open(so + ".err", "w").write(diag)
 open(so + ".meta", "w").write(json.dumps({"resume": resume, "tid": tid if ok else "", "ok": ok}))
