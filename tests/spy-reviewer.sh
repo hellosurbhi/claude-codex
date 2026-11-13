@@ -39,6 +39,6 @@ elif [[ $(grep -cE '^VERDICT:' "$tmp") == 1 && $(grep -cE '^VERDICT: ' "$tmp") =
   if [[ $result == APPROVED ]] && ! [[ $(grep -cE '^(CRITICAL|HIGH|MEDIUM|LOW): none$' "$tmp") == 4 && $(grep -cE '^(CRITICAL|HIGH|MEDIUM|LOW):' "$tmp") == 4 && $(grep -E '^(CRITICAL|HIGH|MEDIUM|LOW):' "$tmp" | cut -d: -f1 | sort -u | wc -l | tr -d ' ') == 4 && $(grep -cE '[^[:space:]]' "$tmp") == 5 ]]; then result=APPROVED_WITH_FINDINGS; fi
 fi
 printf 'reviewer tier=%s bytes=%s has_add=%s impl=%s result=%s\n' "$tier" "$(wc -c < "$in" | tr -d ' ')" "$has_add" "$impl" "$result" >> "$SPY_LOG"
-if [[ $result == FAILED ]]; then cat "$err" >&2; exit 1; fi
+if [[ $result == FAILED ]]; then cat "$err" "$tmp" >&2; exit 1; fi
 cat "$tmp" > "$outf"
 [[ "$outf" == /dev/stdout ]] || cat "$tmp"

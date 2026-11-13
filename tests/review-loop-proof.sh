@@ -181,7 +181,7 @@ if [[ $scenario == usage-limit ]]; then
   # Codex is over quota for the whole run. A workflow that keeps its gate must get a real
   # fallback review of the actual change and only finish after a clean verdict from it.
   # WHY also the event stream: the model may point FAKE_LOG elsewhere for its own call, but the quota error text still reaches its tool results.
-  check "Codex was tried and reported the usage limit" 'grep -q result=LIMIT "$FAKE_LOG" || grep -qi "usage limit" "$out/events.txt"'
+  check "Codex was tried and reported the usage limit" 'python3 "$here/check-limit-hit.py" "$out/events.jsonl"'
   # execute-codex reviews with a Claude code-reviewer agent by design (Codex only implements
   # large changes), so the spy is never the reviewer there; only the Codex attempt and an
   # honest report are checked for it.
@@ -189,7 +189,7 @@ if [[ $scenario == usage-limit ]]; then
     # execute-codex reviews with a Claude agent by design and Codex only implements large
     # changes, so the spy is never the reviewer; what must hold is that the work still got
     # done and reviewed instead of being abandoned on the quota error.
-    check "the Codex implementation call hit the usage limit" 'grep -q result=LIMIT "$FAKE_LOG" || grep -qi "usage limit" "$out/events.txt"'
+    check "the Codex implementation call hit the usage limit" 'python3 "$here/check-limit-hit.py" "$out/events.jsonl"'
     check "the change was still made (not abandoned on the quota error)" 'python3 "$here/check-modules.py" "$repo"'
     # WHY ordering and a completed result: an implementation agent must not count as the review. The
     # review is an agent whose input mentions review, started after the Codex usage-limit reply, with a result.
@@ -207,7 +207,7 @@ if [[ $scenario == usage-limit ]]; then
   if [[ $FAKE_TARGET == code ]]; then check "the implementation really adds (behavioral)" 'python3 "$here/check-impl.py" "$repo/app.py"'; fi
   check "the fallback returned a valid verdict" 'grep -qE "result=(APPROVED|WARNING|BLOCKED)$" "$SPY_LOG"'
   check "the last fallback verdict is clean (APPROVED)" 'tail -1 "$SPY_LOG" | grep -q "result=APPROVED$"'
-  check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|skipped" "$out/session.txt"'
+  check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|skipped|(changes?|work|plan|diff|code|implementation) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
   exit $fail
 fi
 check "every finding round ($FAKE_ROUNDS) was fixed: all markers present" all_markers

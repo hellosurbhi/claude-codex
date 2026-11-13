@@ -4,7 +4,7 @@
 import json, re, sys
 from evlib import wrapper_runs
 ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-res = {e["id"]: e["text"] for e in ev if e["kind"] == "result"}
+res = {e["id"]: (e["text"] if not e.get("error") else "") for e in ev if e["kind"] == "result"}
 last = "NONE"
 for e in ev:
     if e["kind"] == "cmd" and wrapper_runs(e["text"]):
