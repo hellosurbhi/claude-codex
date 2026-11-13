@@ -584,4 +584,10 @@ expect fail "the forged argv[0] does not satisfy the real thread check" python3 
 mkdir -p "$tmp/sh3"; printf 'import helper\n' > "$tmp/sh3/app.py"; printf 'X=1\n' > "$tmp/sh3/helper.py"; before="$(python3 "$here/state-hash.py" "$tmp/sh3")"; rm "$tmp/sh3/helper.py"
 expect pass "deleting an imported helper module changes the state hash" test "$before" != "$(python3 "$here/state-hash.py" "$tmp/sh3")"
 
+# r34: an unwritable output path delivers nothing and the event must not log the reply
+mkrun; cd "$tmp/run/repo"
+spyrun "$tmp/no-such-dir/o.txt" >/dev/null 2>&1; rc=$?
+expect pass "an unwritable output path fails the spy" test "$rc" != 0
+expect pass "and the event logs no reply" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print(len(es)==1 and "VERDICT" not in wlog.reply_text(es[-1]))' "$here" "$EVLOG")" = True
+
 exit $fail

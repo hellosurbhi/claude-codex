@@ -75,5 +75,6 @@ if [[ $result == FAILED ]]; then replayed=1; cat "$err" "$tmp" >&2; exit 1; fi
 # (/dev/fd/N probing, descriptor reservation, replay) were a workaround for the spy echoing too; a caller that wants the reply in a
 # file redirects the spy's stdout itself. What the event log records is the reply written, which is the same single copy.
 delivered=1
+# WHY the event copy is made only after the write succeeds (r34): a failed write delivered nothing, so the log must not show an approval.
+if ! cat "$tmp" > "$outf" 2>>"$derr"; then echo "spy-reviewer: cannot write output: $outf" >> "$derr"; cat "$derr" >&2; exit 1; fi
 cp "$tmp" "$dout"
-cat "$tmp" > "$outf" || { echo "spy-reviewer: cannot write output: $outf" >> "$derr"; cat "$derr" >&2; exit 1; }
