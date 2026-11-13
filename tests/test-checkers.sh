@@ -469,4 +469,22 @@ printf 'done\n\nAUDIT-STATUS: APPROVED reviewer=codex\n' > "$tmp/ok.txt"
 expect pass "an unindented status line is accepted" python3 "$here/audit-status.py" "$tmp/ok.txt" --expect APPROVED
 mkrun; cd "$tmp/run/repo"; mkrun; expect pass "mkrun leaves the shell inside the recreated fixture" test "$(git rev-parse --show-toplevel)" = "$(cd "$tmp/run/repo" && git rev-parse --show-toplevel)"
 
+# r27: the real scenario's resume check counts real-wrapper events only, for both the issuing and the resumed call
+mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
+python3 - "$EVLOG" <<'PY2'
+import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1])]
+rows[0]["thread_id"]="abcdef12-3456"
+r=dict(rows[0]); r.update(seq=2, wrapper="fake", resume="abcdef12-3456", ts=2)
+rows.append(r); open(sys.argv[1],"w").write("\n".join(json.dumps(x) for x in rows)+"\n")
+PY2
+expect pass "a fake resume of a real thread passes the unrestricted resume check" python3 "$here/check-resume.py" "$EVLOG"
+expect fail "a fake resume of a real thread fails the real-only resume check" python3 "$here/check-resume.py" "$EVLOG" --real
+python3 - "$EVLOG" <<'PY2'
+import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1])]; rows[1]["wrapper"]="real"
+open(sys.argv[1],"w").write("\n".join(json.dumps(x) for x in rows)+"\n")
+PY2
+expect pass "a real resume of a real thread passes the real-only resume check" python3 "$here/check-resume.py" "$EVLOG" --real
+
 exit $fail

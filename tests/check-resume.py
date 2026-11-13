@@ -1,4 +1,4 @@
-# Usage: check-resume.py <wrapper.jsonl> [--no-verdict]. Exit 0 when the wrapper log holds a --resume
+# Usage: check-resume.py <wrapper.jsonl> [--no-verdict] [--real]. Exit 0 when the wrapper log holds a --resume
 # execution that exited 0, returned the same thread id it was asked to resume, and that id was
 # issued by the wrapper itself in an EARLIER non-resume execution of this run. Unless --no-verdict
 # (execute-codex: Codex implements, so a follow-up reply has no verdict), the reply must carry
@@ -7,6 +7,10 @@
 import re, sys
 import wlog
 evs = wlog.load(sys.argv[1])
+# WHY --real filters BEFORE indexing: the real scenario claims real Codex evidence, so both the issuing call and the resumed
+# call must be real-wrapper events; a fake resume of a real thread id must not pass (r27).
+if "--real" in sys.argv:
+    evs = [e for e in evs if e["wrapper"] == "real"]
 noverdict = "--no-verdict" in sys.argv
 for i, e in enumerate(evs):
     if not e["resume"] or e["exit"] != 0 or e["wrapper"] not in ("fake", "real"):
