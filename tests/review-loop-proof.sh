@@ -35,6 +35,9 @@ if [[ -n "$(ls -A "$out")" ]]; then echo "out dir must be empty: $out" >&2; exit
 repo="$out/repo"; mkdir -p "$repo"
 fake="$here/fake-codex-call.sh"
 export FAKE_LOG="$out/calls.log"; : > "$FAKE_LOG"
+# WHY one wrapper event log: every stand-in wrapper appends a JSON line per real execution and the
+# checkers assert on it alone (see evlog.py); transcript text is only a secondary sanity check.
+export EVLOG="$out/wrapper.jsonl"; : > "$EVLOG"
 case "$scenario" in
   round6)      export FAKE_ROUNDS=6 FAKE_SEVERITIES="LOW MEDIUM HIGH LOW MEDIUM HIGH" ;;
   high-only)   export FAKE_ROUNDS=2 FAKE_SEVERITIES=HIGH ;;
@@ -100,7 +103,8 @@ seam="TEST HARNESS: for this run the Codex wrapper lives at $fake. Wherever a sk
 # WHY stream-json: the real scenario must show the THREAD_ID and VERDICT lines Codex actually
 # returned and whether a follow-up used --resume; those live in tool calls and results,
 # not in the final report.
-[[ $scenario == real ]] && seam="You are running unattended: never wait for user input. Use the real Codex wrapper at its normal path."
+# WHY the recorder in real: it runs the REAL installed codex-call.sh unchanged and only adds the log line the checkers need.
+[[ $scenario == real ]] && seam="TEST HARNESS: Codex is real. Wherever a skill says ~/.claude/config/scripts/codex-call.sh, run $here/recording-codex-call.sh with the same arguments instead: it runs the installed wrapper unchanged and records the call. Everything else applies unchanged. You are running unattended: never wait for user input."
 claude -p "$task" --model sonnet --setting-sources "$sources" \
   --permission-mode acceptEdits \
   --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill Edit(./.claude/plan/**) Edit(.claude/plan/**)" \
@@ -167,13 +171,15 @@ if [[ $scenario == real ]]; then
   # approves is not the harness's to demand; what must hold is that a real call returned a
   # THREAD_ID and verdict, and that a follow-up through --resume came back on the SAME thread
   # with a verdict. The last real verdict is printed for the record.
-  check "a real codex-call.sh call returned a THREAD_ID" 'grep -qE "THREAD_ID: [0-9a-f-]{8,}" "$out/events.txt"'
+  # All real-run checks assert on the wrapper log (wrapper.jsonl, written by recording-codex-call.sh around
+  # the real installed wrapper); the transcript is only the secondary line below.
+  check "a real codex-call.sh execution exited 0 and returned a THREAD_ID" 'python3 "$here/check-real-basic.py" "$out/wrapper.jsonl" thread'
   # WHY not execute-codex: Codex implements there (no review verdict); its follow-up reply is checked for the thread only.
-  [[ $skill == execute-codex ]] || check "a real Codex reply carried a VERDICT line" 'grep -qE "VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)" "$out/events.txt"'
-  check "the --resume follow-up returned on the same thread with a verdict" 'python3 "$here/check-resume.py" "$out/events.jsonl" ${NOVERDICT:+--no-verdict}'
-  echo "RESUME_USED: $(grep -c -- '--resume' "$out/events.txt")"
-  echo "LAST_VERDICT: $(python3 "$here/last-verdict.py" "$out/events.jsonl")"
-  echo "THREAD_IDS: $(grep -oE 'THREAD_ID: [0-9a-f-]{8,}' "$out/events.txt" | sort -u | tr '\n' ' ')"
+  [[ $skill == execute-codex ]] || check "a real Codex reply carried a single valid VERDICT" 'python3 "$here/check-real-basic.py" "$out/wrapper.jsonl" verdict'
+  check "the --resume follow-up returned on the same wrapper-issued thread with a verdict" 'python3 "$here/check-resume.py" "$out/wrapper.jsonl" ${NOVERDICT:+--no-verdict}'
+  echo "LAST_VERDICT: $(python3 "$here/last-verdict.py" "$out/wrapper.jsonl")"
+  echo "THREAD_IDS: $(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; print(" ".join(sorted({e["thread_id"] for e in wlog.load(sys.argv[2]) if e["thread_id"]})))' "$here" "$out/wrapper.jsonl")"
+  echo "SECONDARY (transcript): resume mentions=$(grep -c -- '--resume' "$out/events.txt")"
   check "final report does not label the work UNREVIEWED" '! grep -qiE "(is|are|remains?|stays?|stay|left|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED|review incomplete|audit incomplete" "$out/session.txt"'
   exit $fail
 fi
@@ -181,7 +187,7 @@ if [[ $scenario == usage-limit ]]; then
   # Codex is over quota for the whole run. A workflow that keeps its gate must get a real
   # fallback review of the actual change and only finish after a clean verdict from it.
   # WHY also the event stream: the model may point FAKE_LOG elsewhere for its own call, but the quota error text still reaches its tool results.
-  check "Codex was tried and reported the usage limit" 'python3 "$here/check-limit-hit.py" "$out/events.jsonl"'
+  check "Codex was tried and reported the usage limit" 'python3 "$here/check-limit-hit.py" "$out/wrapper.jsonl"'
   # execute-codex reviews with a Claude code-reviewer agent by design (Codex only implements
   # large changes), so the spy is never the reviewer there; only the Codex attempt and an
   # honest report are checked for it.
@@ -189,24 +195,25 @@ if [[ $scenario == usage-limit ]]; then
     # execute-codex reviews with a Claude agent by design and Codex only implements large
     # changes, so the spy is never the reviewer; what must hold is that the work still got
     # done and reviewed instead of being abandoned on the quota error.
-    check "the Codex implementation call hit the usage limit" 'python3 "$here/check-limit-hit.py" "$out/events.jsonl"'
+    check "the Codex implementation call hit the usage limit" 'python3 "$here/check-limit-hit.py" "$out/wrapper.jsonl"'
     check "the change was still made (not abandoned on the quota error)" 'python3 "$here/check-modules.py" "$repo"'
     # WHY ordering and a completed result: an implementation agent must not count as the review. The
     # review is an agent whose input mentions review, started after the Codex usage-limit reply, with a result.
-    check "an independent reviewer agent ran after the Codex usage limit and returned" 'python3 "$here/check-reviewer-after-limit.py" "$out/events.jsonl"'
+    check "an independent reviewer agent ran after the Codex usage limit and returned" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --agent "$out/events.jsonl"'
     check "final report does not say the review was skipped" '! grep -qiE "\b(review|audit)\b[^.]{0,40}\bskipped\b|\bskipped\b[^.]{0,20}\b(review|audit)\b" "$out/session.txt"'
     check "final report does not say nothing was written or vetted" '! grep -qiE "no code was written|nothing is vetted|did not fall back|(changes?|work|plan|diff|code|implementation|modules) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
     exit $fail
   fi
-  check "a fallback reviewer ran on the actual diff or plan" 'grep -q "has_add=yes" "$SPY_LOG"'
-  check "the final fallback verdict was for a non-empty change that mentions add" 'tail -1 "$SPY_LOG" | grep -q "has_add=yes"'
-  # WHY not for tdd-execute-codex: its last review is the Claude code-reviewer agent, so the last spy call is the tests-only audit.
-  if [[ $FAKE_TARGET == code && $skill != tdd-execute-codex ]]; then check "the final fallback verdict saw the implementation" 'tail -1 "$SPY_LOG" | grep -q "impl=yes"'; fi
-  # WHY either: the final code review is a code-reviewer agent or, when the agent type is unavailable, a fallback reviewer that saw the implementation.
-  if [[ $skill == tdd-execute-codex ]]; then check "the final code review ran after the Codex usage limit (reviewer agent or fallback that saw the code)" 'python3 "$here/check-reviewer-after-limit.py" "$out/events.jsonl" "$SPY_LOG"'; fi
+  # WHY all of these read the wrapper log: the last spy execution after the quota hit is the final fallback review.
+  if [[ $skill == tdd-execute-codex ]]; then
+    # Its final review is a Claude code-reviewer agent (it cannot log to the wrapper): the agent must be given the implementation and be clean.
+    check "the final code review ran after the Codex usage limit, saw the implementation and was exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --agent "$out/events.jsonl"'
+  elif [[ $FAKE_TARGET == code ]]; then
+    check "the last fallback review after the quota hit was for the implementation and exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation'
+  else
+    check "the last fallback review after the quota hit was exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl"'
+  fi
   if [[ $FAKE_TARGET == code ]]; then check "the implementation really adds (behavioral)" 'python3 "$here/check-impl.py" "$repo/app.py"'; fi
-  check "the fallback returned a valid verdict" 'grep -qE "result=(APPROVED|WARNING|BLOCKED)$" "$SPY_LOG"'
-  check "the last fallback verdict is clean (APPROVED)" 'tail -1 "$SPY_LOG" | grep -q "result=APPROVED$"'
   check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|\b(review|audit)\b[^.]{0,40}\bskipped\b|\bskipped\b[^.]{0,20}\b(review|audit)\b|(changes?|work|plan|diff|code|implementation) (is|are|remains?|stays?|left|labell?ed|marked) (still )?[*_]*UNREVIEWED" "$out/session.txt"'
   exit $fail
 fi

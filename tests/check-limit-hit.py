@@ -1,6 +1,6 @@
-# Usage: check-limit-hit.py <events.jsonl>. Exit 0 when a real codex-call.sh execution (not quoted
-# documentation) got the usage-limit reply.
-import json, sys
-from evlib import first_limit_cmd_index
-ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-sys.exit(0 if first_limit_cmd_index(ev) is not None else 1)
+# Usage: check-limit-hit.py <wrapper.jsonl>. Exit 0 when a real Codex wrapper execution failed
+# with the usage-limit error (quoted documentation never reaches the wrapper).
+import sys
+import wlog
+evs = [e for e in wlog.load(sys.argv[1]) if e["wrapper"] in ("fake", "real")]
+sys.exit(0 if wlog.limit_index(evs) is not None else 1)

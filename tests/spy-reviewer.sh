@@ -9,6 +9,8 @@
 # review of the exact input file and logs what it was given (size, whether it holds the
 # task's `add` code) and the verdict it returned.
 set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+argv=("$@")
 # WHY tolerant of a missing tier: a workflow may call it as `spy <file>` instead of
 # `spy <tier> <file> <out>`; the spy's job is to review what it is handed, not to police usage.
 if [[ -f "${1:-}" ]]; then set -- unknown "$@"; fi
@@ -38,6 +40,10 @@ elif [[ $(grep -cE '^VERDICT:' "$tmp") == 1 && $(grep -cE '^VERDICT: ' "$tmp") =
   result="$(grep -E '^VERDICT: ' "$tmp" | sed 's/VERDICT: //')"
   if [[ $result == APPROVED ]] && ! [[ $(grep -cE '^(CRITICAL|HIGH|MEDIUM|LOW): none$' "$tmp") == 4 && $(grep -cE '^(CRITICAL|HIGH|MEDIUM|LOW):' "$tmp") == 4 && $(grep -E '^(CRITICAL|HIGH|MEDIUM|LOW):' "$tmp" | cut -d: -f1 | sort -u | wc -l | tr -d ' ') == 4 && $(grep -cE '[^[:space:]]' "$tmp") == 5 ]]; then result=APPROVED_WITH_FINDINGS; fi
 fi
+# WHY the event log line holds the exact reply and the phase taken from the file the spy actually
+# received: the checkers assert on this log (see evlog.py), not on spy.log text or the transcript.
+EVLOG="${EVLOG:-$(cd "$(git rev-parse --show-toplevel)/.." && pwd)/wrapper.jsonl}"
+python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$in" "$tmp" "$err" -- "${argv[@]+"${argv[@]}"}"
 printf 'reviewer tier=%s bytes=%s has_add=%s impl=%s result=%s\n' "$tier" "$(wc -c < "$in" | tr -d ' ')" "$has_add" "$impl" "$result" >> "$SPY_LOG"
 if [[ $result == FAILED ]]; then cat "$err" "$tmp" >&2; exit 1; fi
 cat "$tmp" > "$outf"

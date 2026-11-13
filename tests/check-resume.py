@@ -1,26 +1,22 @@
-# Usage: check-resume.py <events.jsonl>. Exit 0 when a --resume call (line continuations and quoted
-# ids allowed) actually EXECUTED codex-call.sh and returned, by its own tool_use_id, exactly the
-# thread id an EARLIER non-resume execution created, with exactly one VERDICT line, which is valid.
-import json, re, sys
-from evlib import wrapper_runs, resume_id
+# Usage: check-resume.py <wrapper.jsonl> [--no-verdict]. Exit 0 when the wrapper log holds a --resume
+# execution that exited 0, returned the same thread id it was asked to resume, and that id was
+# issued by the wrapper itself in an EARLIER non-resume execution of this run. Unless --no-verdict
+# (execute-codex: Codex implements, so a follow-up reply has no verdict), the reply must carry
+# exactly one valid VERDICT line. Quoted examples, `bash -n` and variable-held ids never matter:
+# only what the wrapper really executed is in the log.
+import re, sys
+import wlog
+evs = wlog.load(sys.argv[1])
 noverdict = "--no-verdict" in sys.argv
-ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-res = {e["id"]: (e["text"] if not e.get("error") else "") for e in ev if e["kind"] == "result"}
-initial, ok = set(), False
-for e in ev:
-    if e["kind"] != "cmd":
+for i, e in enumerate(evs):
+    if not e["resume"] or e["exit"] != 0 or e["wrapper"] not in ("fake", "real"):
         continue
-    runs = wrapper_runs(e["text"])
-    if len(runs) != 1:
+    tids = re.findall(r"^THREAD_ID: (\S+)", e["stdout"], re.M)
+    if tids != [e["resume"]] or e["resume"] not in wlog.issued_before(evs, i):
         continue
-    rid = resume_id(runs[0])
-    out = res.get(e["id"], "")
-    tids = re.findall(r"THREAD_ID: ([0-9a-f-]{8,})", out)
-    if rid is None:
-        initial.update(tids)
-        continue
-    verds = re.findall(r"^VERDICT:.*$", out, re.M)
-    valid = (len(verds) == 0 and bool(out.strip()) or len(verds) == 1 and bool(re.fullmatch(r"VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)\s*", verds[0]))) if noverdict else (len(verds) == 1 and re.fullmatch(r"VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)\s*", verds[0]))
-    if rid in initial and tids == [rid] and valid:
-        ok = True
-sys.exit(0 if ok else 1)
+    if noverdict:
+        if not wlog.verdict_lines(e) and wlog.verdict_block(e):
+            sys.exit(0)
+    elif wlog.valid_verdict(e):
+        sys.exit(0)
+sys.exit(1)

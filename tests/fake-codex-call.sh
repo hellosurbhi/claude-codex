@@ -15,6 +15,8 @@
 #      bad call) picks how: dead (exit 1), empty (exit 0, no text), noverdict
 #      (prose only), dup (two VERDICT lines), bad (VERDICT: MAYBE).
 set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+argv=("$@")
 dir="$PWD" resume=""
 while [[ $# -gt 1 ]]; do
   case "$1" in
@@ -24,6 +26,33 @@ while [[ $# -gt 1 ]]; do
     *) break ;;
   esac
 done
+prompt="${1:-}"
+# WHY every execution is logged by an EXIT trap: the checkers assert on this log (see evlog.py),
+# so a call that dies, limits or returns garbage must still leave exactly one line. stdout and
+# stderr are captured to files and replayed so the log holds the exact reply the model saw.
+EVLOG="${EVLOG:-$(cd "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || echo "$dir")/.." && pwd)/wrapper.jsonl}"
+[[ -f "$EVLOG" ]] || : > "$EVLOG"
+seq=$(( $(wc -l < "$EVLOG") + 1 ))
+tid="" ; [[ -n "$resume" ]] && tid="$resume"
+exec 3>&1 4>&2
+o="$(mktemp)"; e="$(mktemp)"; pf="$(mktemp)"; printf '%s' "$prompt" > "$pf"
+exec >"$o" 2>"$e"
+finish() {
+  local rc=$?
+  exec 1>&3 2>&4
+  python3 "$here/evlog.py" "$EVLOG" fake "$rc" "$resume" "$tid" "$pf" "$o" "$e" -- "${argv[@]+"${argv[@]}"}"
+  cat "$o"; cat "$e" >&2; rm -f "$o" "$e" "$pf"
+  exit "$rc"
+}
+trap finish EXIT
+# WHY a resume of an unknown thread dies: the real wrapper fails on a thread Codex never issued,
+# so a model that invents or mistypes a thread id must not get a quiet success.
+if [[ -n "$resume" ]] && ! python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; e = wlog.load(sys.argv[2]); sys.exit(0 if sys.argv[3] in wlog.issued_before(e, len(e)) else 1)' "$here" "$EVLOG" "$resume"; then
+  echo "codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED." >&2
+  echo "ERROR: no rollout found for thread id $resume" >&2
+  exit 1
+fi
+[[ -z "$resume" ]] && tid="fake-thread-$seq"
 # FAKE_LIMIT=1: every call fails the way Codex does when the account is over quota,
 # naming its reset time (the wrapper passes this text through on a dead call).
 if [[ -n "${FAKE_LIMIT:-}" ]]; then
@@ -46,9 +75,9 @@ if (( bad < ${FAKE_FAIL_FIRST:-0} )); then
   printf 'call=%s resume=%s result=MALFORMED mode=%s\n' "$n" "${resume:-new}" "$mode" >> "$FAKE_LOG"
   case "$mode" in
     empty) ;;
-    noverdict) echo "THREAD_ID: fake-thread"; echo "Looks fine to me overall, nothing stands out." ;;
-    dup) echo "THREAD_ID: fake-thread"; printf 'VERDICT: APPROVED\nVERDICT: BLOCKED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n' ;;
-    bad) echo "THREAD_ID: fake-thread"; printf 'VERDICT: MAYBE\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n' ;;
+    noverdict) echo "THREAD_ID: $tid"; echo "Looks fine to me overall, nothing stands out." ;;
+    dup) echo "THREAD_ID: $tid"; printf 'VERDICT: APPROVED\nVERDICT: BLOCKED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n' ;;
+    bad) echo "THREAD_ID: $tid"; printf 'VERDICT: MAYBE\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n' ;;
   esac
   exit 0
 fi
@@ -75,7 +104,7 @@ done
 # WHY the brace group with || true: an unmatched glob makes cat exit nonzero, which pipefail would turn into a dead fake.
 state="$({ cat "$dir"/app.py "$dir"/test*.py "$dir"/.claude/plan/*.md 2>/dev/null || true; } | shasum -a 256 | cut -c1-16)"
 impl=no; python3 "$(dirname "$0")/check-impl.py" "$dir/app.py" && impl=yes
-echo "THREAD_ID: fake-thread"
+echo "THREAD_ID: $tid"
 if [[ $next == 0 ]]; then
   printf 'call=%s resume=%s result=CLEAN state=%s impl=%s\n' "$n" "${resume:-new}" "$state" "$impl" >> "$FAKE_LOG"
   printf 'VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
