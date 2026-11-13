@@ -24,6 +24,15 @@ while [[ $# -gt 1 ]]; do
     *) break ;;
   esac
 done
+# FAKE_LIMIT=1: every call fails the way Codex does when the account is over quota,
+# naming its reset time (the wrapper passes this text through on a dead call).
+if [[ -n "${FAKE_LIMIT:-}" ]]; then
+  n=1; [[ -f "$FAKE_LOG" ]] && n=$(( $(wc -l < "$FAKE_LOG") + 1 ))
+  printf 'call=%s resume=%s result=LIMIT\n' "$n" "${resume:-new}" >> "$FAKE_LOG"
+  echo "codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED." >&2
+  echo "ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), or try again at 11:42 PM." >&2
+  exit 1
+fi
 n=1; [[ -f "$FAKE_LOG" ]] && n=$(( $(wc -l < "$FAKE_LOG") + 1 ))
 bad=0; [[ -f "$FAKE_LOG" ]] && bad=$(grep -cE 'result=(DEAD|MALFORMED)' "$FAKE_LOG" || true)
 if (( bad < ${FAKE_FAIL_FIRST:-0} )); then
@@ -43,14 +52,14 @@ if (( bad < ${FAKE_FAIL_FIRST:-0} )); then
   esac
   exit 0
 fi
-# FAKE_TARGET=code: the marker is a '#' comment line in app.py; FAKE_TARGET=plan: an
+# FAKE_TARGET=code: the marker is a '#' comment line in app.py or a test*.py file; FAKE_TARGET=plan: an
 # HTML comment line in the plan file. A heading or sentence that merely mentions
 # the marker does not count.
 marker_present() {
   if [[ ${FAKE_TARGET:-code} == plan ]]; then
     grep -Eqs -- "^[[:space:]]*<!--[[:space:]]*review-fix-${1}[[:space:]]*-->[[:space:]]*$" "$2"/.claude/plan/*.md
   else
-    grep -Eqs -- "^[[:space:]]*#[[:space:]]*review-fix-$1([^0-9].*)?$" "$2/app.py"
+    grep -Eqs -- "^[[:space:]]*#[[:space:]]*review-fix-$1([^0-9].*)?$" "$2"/app.py "$2"/test*.py
   fi
 }
 rounds=${FAKE_ROUNDS:-6}
