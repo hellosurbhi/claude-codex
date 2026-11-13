@@ -74,7 +74,7 @@ done
 # was given for the state the run ended in, and (for the tdd skills) after add() existed.
 # WHY the brace group with || true: an unmatched glob makes cat exit nonzero, which pipefail would turn into a dead fake.
 state="$({ cat "$dir"/app.py "$dir"/test*.py "$dir"/.claude/plan/*.md 2>/dev/null || true; } | shasum -a 256 | cut -c1-16)"
-impl=no; grep -q 'def add(a, b)' "$dir/app.py" 2>/dev/null && impl=yes
+impl=no; python3 "$(dirname "$0")/check-impl.py" "$dir/app.py" && impl=yes
 echo "THREAD_ID: fake-thread"
 if [[ $next == 0 ]]; then
   printf 'call=%s resume=%s result=CLEAN state=%s impl=%s\n' "$n" "${resume:-new}" "$state" "$impl" >> "$FAKE_LOG"

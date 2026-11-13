@@ -107,7 +107,12 @@ claude -p "$task" --model sonnet --setting-sources "$sources" \
   --append-system-prompt "$seam" --no-session-persistence --output-format stream-json --verbose > "$out/stream.jsonl" 2> "$out/session.err" && claude_rc=0 || claude_rc=$?
 python3 - "$out" <<'PY'
 import json, sys
-o = sys.argv[1]; res = ""; ev = []
+o = sys.argv[1]; res = ""; ev = []; jl = []
+def text(c):
+    # tool_result content is a string or a list of text blocks; keep real newlines either way
+    if isinstance(c, list):
+        return "\n".join(b.get("text", "") for b in c if isinstance(b, dict))
+    return str(c)
 for l in open(o + "/stream.jsonl"):
     try: e = json.loads(l)
     except ValueError: continue
@@ -116,10 +121,17 @@ for l in open(o + "/stream.jsonl"):
     if isinstance(m, dict) and isinstance(m.get("content"), list):
         for c in m["content"]:
             if not isinstance(c, dict): continue
-            if c.get("type") == "tool_use" and c.get("name") == "Bash": ev.append("CMD " + str(c["input"].get("command", ""))[:4000])
-            if c.get("type") == "tool_result": ev.append("OUT " + str(c.get("content"))[:20000])
+            if c.get("type") == "tool_use" and c.get("name") == "Bash":
+                cmd = str(c["input"].get("command", ""))[:4000]
+                ev.append("CMD " + cmd); jl.append({"kind": "cmd", "id": c.get("id"), "text": cmd})
+            elif c.get("type") == "tool_use" and c.get("name") in ("Task", "Agent"):
+                jl.append({"kind": "agent", "id": c.get("id"), "text": json.dumps(c.get("input", {}))[:4000]})
+            if c.get("type") == "tool_result":
+                t = text(c.get("content"))[:20000]
+                ev.append("OUT " + t); jl.append({"kind": "result", "id": c.get("tool_use_id"), "text": t})
 open(o + "/session.txt", "w").write(res)
 open(o + "/events.txt", "w").write("\n".join(ev))
+open(o + "/events.jsonl", "w").write("\n".join(json.dumps(x) for x in jl))
 PY
 echo "== $skill $scenario ($src) -> $out"
 cat "$FAKE_LOG"
@@ -156,8 +168,7 @@ if [[ $scenario == real ]]; then
   # with a verdict. The last real verdict is printed for the record.
   check "a real codex-call.sh call returned a THREAD_ID" 'grep -qE "THREAD_ID: [0-9a-f-]{8,}" "$out/events.txt"'
   check "a real Codex reply carried a VERDICT line" 'grep -qE "VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)" "$out/events.txt"'
-  check "the --resume follow-up returned on the same thread with a verdict" 'python3 "$here/check-resume.py" "$out/events.txt"'
-  check "a follow-up reached Codex through --resume" 'grep -qE "CMD .*codex-call.sh.* --resume " "$out/events.txt"'
+  check "the --resume follow-up returned on the same thread with a verdict" 'python3 "$here/check-resume.py" "$out/events.jsonl"'
   echo "RESUME_USED: $(grep -c -- '--resume' "$out/events.txt")"
   echo "LAST_VERDICT: $(grep -oE 'VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)' "$out/events.txt" | tail -1)"
   echo "THREAD_IDS: $(grep -oE 'THREAD_ID: [0-9a-f-]{8,}' "$out/events.txt" | sort -u | tr '\n' ' ')"
@@ -176,12 +187,16 @@ if [[ $scenario == usage-limit ]]; then
     # changes, so the spy is never the reviewer; what must hold is that the work still got
     # done and reviewed instead of being abandoned on the quota error.
     check "the Codex implementation call hit the usage limit" 'grep -q result=LIMIT "$FAKE_LOG"'
-    check "the change was still made (not abandoned on the quota error)" 'for f in mathops strops listops pkginfo; do grep -q "def " "$repo/$f.py" 2>/dev/null && python3 -m py_compile "$repo/$f.py" || exit 1; done'
-    check "the final report says the change was reviewed" 'grep -qi "review" "$out/session.txt"'
+    check "the change was still made (not abandoned on the quota error)" 'python3 "$here/check-modules.py" "$repo"'
+    check "an independent reviewer agent was run after the Codex attempt" 'grep -q "\"kind\": \"agent\"" "$out/events.jsonl" && grep -qi "review" "$out/session.txt"'
+    check "final report does not say the review was skipped" '! grep -qiE "review skipped|audit skipped|skipped the review" "$out/session.txt"'
     check "final report does not say nothing was written or vetted" '! grep -qiE "no code was written|nothing is vetted|did not fall back|UNREVIEWED" "$out/session.txt"'
     exit $fail
   fi
   check "a fallback reviewer ran on the actual diff or plan" 'grep -q "has_add=yes" "$SPY_LOG"'
+  check "the final fallback verdict was for a non-empty change that mentions add" 'tail -1 "$SPY_LOG" | grep -q "has_add=yes"'
+  # WHY not for tdd-execute-codex: its last review is the Claude code-reviewer agent, so the last spy call is the tests-only audit.
+  [[ $skill == tdd-execute-codex ]] || check "the final fallback verdict saw the implementation" 'tail -1 "$SPY_LOG" | grep -q "impl=yes"'
   check "the fallback returned a valid verdict" 'grep -qE "result=(APPROVED|WARNING|BLOCKED)$" "$SPY_LOG"'
   check "the last fallback verdict is clean (APPROVED)" 'tail -1 "$SPY_LOG" | grep -q "result=APPROVED$"'
   check "final report does not call the work skipped or UNREVIEWED" '! grep -qiE "audit skipped|review skipped|skipped|(is|are|remains?|stays?|labell?ed|marked) (still )?[*_]*UNREVIEWED|[:=] *[*_]*UNREVIEWED" "$out/session.txt"'

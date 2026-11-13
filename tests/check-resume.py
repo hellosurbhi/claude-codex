@@ -1,23 +1,21 @@
-# Usage: check-resume.py <events.txt>. Exit 0 when a --resume call returned on a thread an earlier
-# non-resume call created, with exactly that THREAD_ID and exactly one valid VERDICT line.
-import re, sys
-ev = re.split(r"\n(?=(?:CMD|OUT) )", open(sys.argv[1]).read())
-# pair each command with the next tool result; a backslash-newline continuation is joined first
-pairs = []
-for i, e in enumerate(ev):
-    if e.startswith("CMD "):
-        out = next((x for x in ev[i+1:] if x.startswith("OUT ")), "")
-        pairs.append((re.sub(r"\\\n\s*", " ", e), out))
-initial = set()
-for cmd, out in pairs:
-    if "codex-call.sh" in cmd and "--resume" not in cmd:
+# Usage: check-resume.py <events.jsonl>. Exit 0 when a --resume call (line continuations and quoted
+# ids allowed) returned, by its own tool_use_id, exactly the thread id an EARLIER non-resume
+# codex-call.sh call created, with exactly one VERDICT line in its reply and that verdict valid.
+import json, re, sys
+ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+res = {e["id"]: e["text"] for e in ev if e["kind"] == "result"}
+initial, ok = set(), False
+for e in ev:
+    if e["kind"] != "cmd" or "codex-call.sh" not in e["text"]:
+        continue
+    cmd = re.sub(r"\\\n\s*", " ", e["text"])
+    out = res.get(e["id"], "")
+    m = re.search(r"--resume[ =][\"']?([0-9a-f-]{8,})", cmd)
+    if not m:
         initial.update(re.findall(r"THREAD_ID: ([0-9a-f-]{8,})", out))
-ok = False
-for cmd, out in pairs:
-    m = re.search(r"codex-call\.sh.* --resume ([0-9a-f-]{8,})", cmd)
-    if not m or m.group(1) not in initial: continue
+        continue
     tids = re.findall(r"THREAD_ID: ([0-9a-f-]{8,})", out)
-    verds = re.findall(r"^VERDICT: ([A-Z]+)\s*$", out, re.M)
-    if tids == [m.group(1)] and len(verds) == 1 and verds[0] in ("APPROVED","WARNING","BLOCKED","CLEAN","FINDINGS"):
+    verds = re.findall(r"^VERDICT:.*$", out, re.M)
+    if m.group(1) in initial and tids == [m.group(1)] and len(verds) == 1 and re.fullmatch(r"VERDICT: (APPROVED|WARNING|BLOCKED|CLEAN|FINDINGS)\s*", verds[0]):
         ok = True
 sys.exit(0 if ok else 1)

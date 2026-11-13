@@ -18,7 +18,9 @@ tier="${1:-}" in="${2:-}" outf="${3:-/dev/stdout}"
 SPY_LOG="${SPY_LOG:-$(cd "$(git rev-parse --show-toplevel)/.." && pwd)/spy.log}"
 [[ -f "$in" ]] || { echo "spy-reviewer: input file missing: $in" >&2; exit 1; }
 # WHY the function signature or body, not the word: unrelated text containing "add" must not count as the change.
-has_add=no; grep -qE 'def add\(a, b\)|a \+ b' "$in" && has_add=yes
+has_add=no; grep -qE '(^|[^A-Za-z_])add\(|a \+ b' "$in" && has_add=yes
+# WHY a separate impl flag: a tests-only diff mentions add( in assertions, which is a real change under review but not the implementation.
+impl=no; grep -qE 'def add\(|return [a-z_]+ \+ [a-z_]+' "$in" && impl=yes
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
 prompt="You are an independent code reviewer. Review the diff or plan below. Reply with exactly one line 'VERDICT: APPROVED' or 'VERDICT: WARNING' or 'VERDICT: BLOCKED', then four lines 'CRITICAL:', 'HIGH:', 'MEDIUM:', 'LOW:' each listing every finding at that severity or 'none'. The change is meant to add a function add(a, b) returning a + b. REVIEW.md in this repo requires a tracking comment 'review-fix-N' only if a finding names one; otherwise report only real defects. If the input is a tests-only diff written before the implementation exists (the TDD red phase), the missing add function is expected, not a defect; judge the tests themselves.
 
@@ -32,11 +34,11 @@ rc=0; env -u CLAUDECODE claude -p "$prompt" --model sonnet --setting-sources pro
 result=NOVERDICT
 if (( rc != 0 )); then
   result=FAILED
-elif [[ $(grep -cE '^VERDICT: ' "$tmp") == 1 && $(grep -cE '^VERDICT: (APPROVED|WARNING|BLOCKED)$' "$tmp") == 1 ]]; then
-  result="$(grep -E '^VERDICT:' "$tmp" | sed 's/VERDICT: //')"
+elif [[ $(grep -cE '^VERDICT:' "$tmp") == 1 && $(grep -cE '^VERDICT: ' "$tmp") == 1 && $(grep -cE '^VERDICT: (APPROVED|WARNING|BLOCKED)$' "$tmp") == 1 ]]; then
+  result="$(grep -E '^VERDICT: ' "$tmp" | sed 's/VERDICT: //')"
   if [[ $result == APPROVED ]] && ! [[ $(grep -cE '^(CRITICAL|HIGH|MEDIUM|LOW): none$' "$tmp") == 4 && $(grep -cE '^(CRITICAL|HIGH|MEDIUM|LOW):' "$tmp") == 4 && $(grep -E '^(CRITICAL|HIGH|MEDIUM|LOW):' "$tmp" | cut -d: -f1 | sort -u | wc -l | tr -d ' ') == 4 ]]; then result=APPROVED_WITH_FINDINGS; fi
 fi
-printf 'reviewer tier=%s bytes=%s has_add=%s result=%s\n' "$tier" "$(wc -c < "$in" | tr -d ' ')" "$has_add" "$result" >> "$SPY_LOG"
+printf 'reviewer tier=%s bytes=%s has_add=%s impl=%s result=%s\n' "$tier" "$(wc -c < "$in" | tr -d ' ')" "$has_add" "$impl" "$result" >> "$SPY_LOG"
 if [[ $result == FAILED ]]; then cat "$err" >&2; exit 1; fi
 cat "$tmp" > "$outf"
 [[ "$outf" == /dev/stdout ]] || cat "$tmp"
