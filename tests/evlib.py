@@ -51,6 +51,8 @@ def wrapper_runs(cmd):
                 # a variable assigned the wrapper path and later used as the command word counts as that wrapper
                 if a.group(2).endswith("codex-call.sh"):
                     wrapper_vars.add(a.group(1))
+                else:
+                    wrapper_vars.discard(a.group(1))  # reassigned to something else: no longer the wrapper
                 words = words[1:]
             elif base in _PREFIXES:
                 words = words[2:] if base == "timeout" and len(words) > 1 else words[1:]
@@ -90,7 +92,3 @@ def first_limit_cmd_index(ev):
             if r and "usage limit" in r["text"].lower():
                 return ev.index(r)  # the reply's position: a reviewer must start after the quota reply, not after the command
     return None
-
-def good_reply(r):
-    """A reply usable as evidence: present and not a failed tool result."""
-    return bool(r) and not r.get("error")

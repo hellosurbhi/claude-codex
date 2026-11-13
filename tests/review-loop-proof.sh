@@ -203,7 +203,7 @@ if [[ $scenario == usage-limit ]]; then
   # WHY not for tdd-execute-codex: its last review is the Claude code-reviewer agent, so the last spy call is the tests-only audit.
   if [[ $FAKE_TARGET == code && $skill != tdd-execute-codex ]]; then check "the final fallback verdict saw the implementation" 'tail -1 "$SPY_LOG" | grep -q "impl=yes"'; fi
   # WHY either: the final code review is a code-reviewer agent or, when the agent type is unavailable, a fallback reviewer that saw the implementation.
-  if [[ $skill == tdd-execute-codex ]]; then check "the final code review ran after the Codex usage limit (reviewer agent or fallback that saw the code)" 'python3 "$here/check-reviewer-after-limit.py" "$out/events.jsonl" || tail -1 "$SPY_LOG" | grep -q "impl=yes"'; fi
+  if [[ $skill == tdd-execute-codex ]]; then check "the final code review ran after the Codex usage limit (reviewer agent or fallback that saw the code)" 'python3 "$here/check-reviewer-after-limit.py" "$out/events.jsonl" "$SPY_LOG"'; fi
   if [[ $FAKE_TARGET == code ]]; then check "the implementation really adds (behavioral)" 'python3 "$here/check-impl.py" "$repo/app.py"'; fi
   check "the fallback returned a valid verdict" 'grep -qE "result=(APPROVED|WARNING|BLOCKED)$" "$SPY_LOG"'
   check "the last fallback verdict is clean (APPROVED)" 'tail -1 "$SPY_LOG" | grep -q "result=APPROVED$"'

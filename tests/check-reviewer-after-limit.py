@@ -1,4 +1,4 @@
-# Usage: check-reviewer-after-limit.py <events.jsonl>. Exit 0 when, AFTER the reply of a
+# Usage: check-reviewer-after-limit.py <events.jsonl> [spy.log]. Exit 0 when, AFTER the reply of a
 # codex-call.sh execution that reported the usage limit, a review-typed agent (subagent_type naming
 # a reviewer) was started and the LAST such review came back clean: a non-error reply with exactly
 # one valid verdict line, APPROVED, and CRITICAL/HIGH/MEDIUM/LOW all "none". An earlier approval
@@ -10,6 +10,7 @@ limit_at = first_limit_cmd_index(ev)
 if limit_at is None:
     sys.exit(1)
 last_ok = None
+spy = sys.argv[2] if len(sys.argv) > 2 and sys.argv[1:2] and sys.argv[2] else None
 for i, e in enumerate(ev):
     if i > limit_at and e["kind"] == "agent":
         try:
@@ -27,4 +28,11 @@ for i, e in enumerate(ev):
                 allsev = re.findall(r"^\s*(?:CRITICAL|HIGH|MEDIUM|LOW)\b.*$", t, re.M | re.I)
                 ok = len(allsev) == 4 and len(lines) == 1 and re.fullmatch(r"VERDICT: APPROVED\s*", lines[0]) is not None and sorted(sev) == ["CRITICAL", "HIGH", "LOW", "MEDIUM"]
         last_ok = ok
+if last_ok is None and spy:
+    # WHY the fallback only when NO reviewer agent ran: an agent verdict (even BLOCKED) is the final review and a spy line cannot override it.
+    try:
+        last = [l for l in open(spy).read().splitlines() if l.strip()][-1]
+    except (OSError, IndexError):
+        sys.exit(1)
+    sys.exit(0 if "impl=yes" in last and last.endswith("result=APPROVED") else 1)
 sys.exit(0 if last_ok else 1)

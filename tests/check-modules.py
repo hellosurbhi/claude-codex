@@ -2,13 +2,13 @@
 # mathops.add/sub, strops.shout, listops.first, pkginfo.VERSION and describe(), and each module's
 # own doctests pass and exist. Behavioral on purpose, so stubs and comment-only markers fail.
 # WHY a subprocess: the files are model-written code and must not run inside the harness.
-import subprocess, sys, os
+import subprocess, sys
 repo = sys.argv[1]
 code = r'''
-import importlib.util as u, sys, doctest, os
-def load(n):
-    s = u.spec_from_file_location(n, os.path.join(sys.argv[1], n + ".py")); m = u.module_from_spec(s); s.loader.exec_module(m); return m
-mo, so, lo, pk = load("mathops"), load("strops"), load("listops"), load("pkginfo")
+import importlib, sys, doctest
+# WHY the repo on sys.path and real imports: doctests and sibling imports must work as under normal execution.
+sys.path.insert(0, sys.argv[1])
+mo, so, lo, pk = (importlib.import_module(n) for n in ("mathops", "strops", "listops", "pkginfo"))
 assert mo.add(2, 3) == 5 and mo.sub(9, 4) == 5
 assert so.shout("hi").startswith("HI")
 assert lo.first([7, 8]) == 7
