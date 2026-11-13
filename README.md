@@ -167,7 +167,7 @@ Or for a direct task:
 Claude implements using the active model (default: Sonnet; override with `/model opus` for heavier tasks). Codex reviews the uncommitted diff via `codex exec`, returning a structured verdict (APPROVED / WARNING / BLOCKED):
 - **Any accepted finding at any severity** (CRITICAL, HIGH, MEDIUM or LOW, under any verdict): Claude fixes it, verifies with tests/lint and Codex re-reviews
 - **Done** only when a round lists no accepted findings; there is no round cap, so round 6 and beyond continue while findings remain
-- **Failed review** (error, timeout, no verdict): retried once, then the changes are reported UNREVIEWED, never approved
+- **Failed review** (error, timeout, no verdict): never an approval. Claude fixes the cause and retries, or switches to another reviewer, until a verdict arrives. The changes are reported UNREVIEWED only for a named blocker it cannot clear (missing credentials, every reviewer unavailable)
 
 ### Model Override
 
@@ -225,7 +225,7 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
     └── fake-codex-call.sh   # the scripted reviewer: one finding per round, tied to repo state
 ```
 
-`tests/review-loop-proof.sh <skills-dir|installed> <claude-codex|plan-codex> <round6|high-only|medium-only|low-only|failed>` proves the loop has no round cap and no severity floor: it passes only when every scripted round is fixed, round 6 is reached in the `round6` scenario, the run ends on a clean re-review and a dead reviewer is reported UNREVIEWED. Each run is a real Claude session, so it uses API quota.
+`tests/review-loop-proof.sh <skills-dir|installed> <claude-codex|plan-codex> <round6|high-only|medium-only|low-only|failed>` proves the loop has no round cap and no severity floor: it passes only when every scripted round is fixed, round 6 is reached in the `round6` scenario, the run ends on a clean re-review, and in the `failed` scenario two calls with no verdict are followed by more calls until a verdict arrives. The output directory must be empty. Each run is a real Claude session, so it uses API quota.
 
 The `prompts/codex/` files are passed via `--role` on each Codex call to shape its behaviour per phase.
 

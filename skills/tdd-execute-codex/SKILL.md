@@ -109,7 +109,7 @@ LOW: <list or 'none'>
 
 Save the returned `THREAD_ID` (separate from the implementation review THREAD_ID).
 
-**Failed audit**: a Codex call that errors, times out, or exits without a final message (`codex-call.sh` exits non-zero with "UNREVIEWED") is NOT an approval. Retry once; if it fails again, report "test audit incomplete, the tests are UNREVIEWED" in the delivery report and proceed to Phase 4.
+**Failed audit**: a Codex call that errors, times out, exits without a final message (`codex-call.sh` exits non-zero with "UNREVIEWED") or replies without a `VERDICT:` line is NOT an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (CodeRabbit CLI via `~/.claude/config/scripts/reviewer.sh`, or a fresh Codex thread without `--resume`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). Stop and report "test audit incomplete, the tests are UNREVIEWED: <blocker>" only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable, and name the blocker when you do. Phase 4 starts only after a clean audit, or after that named blocker with the tests labeled UNREVIEWED in the delivery report and in your final message.
 
 **Parse response**: every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
 - **Any findings at any severity** (BLOCKED, WARNING, or APPROVED with MEDIUM/LOW findings listed) → critically evaluate each one (see below), fix the accepted ones in the test files, re-verify RED, and re-audit.
@@ -124,15 +124,15 @@ Before fixing any issues, critically evaluate each finding, at every severity:
 3. **Verify applicability**: Does the suggestion improve test quality, or is it a preference / false positive?
 
 **If a finding seems incorrect or questionable:**
-- Do NOT fix it or count it as an iteration. Instead, reply to the reviewer with your technical reasoning.
+- Do NOT fix it yet. Instead, reply to the reviewer with your technical reasoning.
 - Call `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) explaining why the finding appears incorrect, with specific test code references.
 - If the reviewer provides additional justification that is convincing, accept the finding.
-- If the reviewer concedes or cannot justify further, drop the finding.
-- Discussion replies do NOT increment the iteration counter — only fix-and-re-review cycles count.
+- Drop the finding only when the reviewer explicitly concedes it in writing. If it maintains the finding or gives no clear answer, accept it and fix it; your own disagreement never drops a finding.
+- A discussion reply never ends the loop by itself: the loop ends only when a round has no accepted findings.
 
 **If findings are accepted:** Claude fixes every accepted finding (CRITICAL, HIGH, MEDIUM or LOW) in the test files, re-verifies RED, and re-calls `codex-call.sh --resume <THREAD_ID>` to re-audit.
 
-There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict is NOT an approval: retry it once, and if it fails again stop and tell the user the changes are UNREVIEWED.
+There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict (including a nonempty reply with no `VERDICT:` line) is never an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (CodeRabbit CLI via `~/.claude/config/scripts/reviewer.sh`, or a fresh Codex thread without `--resume`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). Stop and report the work as UNREVIEWED only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable, and name the blocker when you do.
 
 ### Phase 4: Route by Change Size
 
@@ -176,9 +176,9 @@ After all tasks complete (either path):
    - **Assess correctness**: Is it technically accurate? Check actual code and project conventions.
    - **Check context**: Does the reviewer have full context, or is it flagging intentional design?
    - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
-   - **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count as review rounds.
+   - **If a finding seems incorrect**: Do NOT fix it yet. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count as review rounds.
 9. Any accepted finding at any severity (CRITICAL, HIGH, MEDIUM or LOW) → fix every accepted finding in one batch with Edit/Write, re-run the full test suite (must stay GREEN), run `git add -N .`, then re-run the code-reviewer from step 7 on the new `git diff $START_SHA`.
-10. Repeat steps 7 to 9 until a round has no accepted findings. There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict is NOT an approval: retry it once, and if it fails again stop and tell the user the changes are UNREVIEWED.
+10. Repeat steps 7 to 9 until a round has no accepted findings. There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict (including a nonempty reply with no `VERDICT:` line) is never an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (CodeRabbit CLI via `~/.claude/config/scripts/reviewer.sh`, or a fresh Codex thread without `--resume`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). Stop and report the work as UNREVIEWED only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable, and name the blocker when you do.
 11. Go to Phase 5
 
 ---
@@ -289,14 +289,14 @@ Parse reviewer response:
 - **Assess correctness**: Is it technically accurate? Check actual code and project conventions.
 - **Check context**: Does the reviewer have full context, or is it flagging intentional design?
 - **Verify applicability**: Does it improve correctness/security, or is it a style preference / false positive?
-- **If a finding seems incorrect**: Do NOT fix it or count it as an iteration. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count as review rounds.
+- **If a finding seems incorrect**: Do NOT fix it yet. Launch a new code-reviewer agent with the original diff, the contested findings, and your technical reasoning. Ask it to re-evaluate only the contested items. Accept confirmed findings; drop withdrawn ones. Discussion rounds do NOT count as review rounds.
 
 After evaluation, every round with accepted findings (CRITICAL, HIGH, MEDIUM or LOW) applies the fixes and re-reviews:
 - 3+ task path → dispatch a Claude subagent per affected task with the accepted reviewer feedback verbatim; there is no shared `THREAD_ID` to reply to, so do not call `codex-call.sh --resume <THREAD_ID>`.
 - Single Codex session path → call `codex-call.sh --resume <THREAD_ID> --sandbox workspace-write` with the accepted reviewer feedback verbatim.
 - Route B's no-Edit/Write rule holds either way. Verify with the test suite (must stay GREEN), run `git add -N .`, then re-run `code-reviewer` on the new `git diff $START_SHA`.
 
-There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict is NOT an approval: retry it once, and if it fails again stop and tell the user the changes are UNREVIEWED.
+There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity (owner mandate 2026-11-12: "keep going till there are no bugs remaining. period."). A round with only HIGH, only MEDIUM or only LOW findings is fixed and re-reviewed exactly like a CRITICAL round. What ends the loop on preferences and false positives is the discussion path, never a round count. A review that errors, times out or returns no verdict (including a nonempty reply with no `VERDICT:` line) is never an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (CodeRabbit CLI via `~/.claude/config/scripts/reviewer.sh`, or a fresh Codex thread without `--resume`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). Stop and report the work as UNREVIEWED only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable, and name the blocker when you do.
 
 ---
 

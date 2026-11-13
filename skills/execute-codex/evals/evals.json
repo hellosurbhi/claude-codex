@@ -80,12 +80,24 @@
     },
     {
       "id": 7,
-      "prompt": "[execute-codex] The review call times out, and the single retry also returns no VERDICT line.",
-      "expected_output": "Claude labels the work UNREVIEWED and never reports it as approved.",
+      "prompt": "[execute-codex] The review call times out twice in a row, then a fresh call returns HIGH findings.",
+      "expected_output": "Claude keeps going past both failed calls, fixes the findings from the call that answers and re-reviews until a round is clean. The failed calls are never treated as approval.",
       "files": [],
       "expectations": [
-        "Claude retries the failed review exactly once",
-        "Claude tells the user the work is UNREVIEWED",
+        "Claude reads each error and keeps retrying or switches to another independent reviewer, with no retry count",
+        "After the fresh call returns findings, Claude fixes them and re-reviews until a round is clean",
+        "Claude never treats a failed call as an approval or as a clean round",
+        "Claude does not stop after the second failure or ask the user whether to continue"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "[execute-codex] Every review call fails: codex-call.sh reports Codex is not logged in, and reviewer.sh reports the CodeRabbit CLI is not installed.",
+      "expected_output": "Claude names the blocker it cannot clear itself and labels the work UNREVIEWED.",
+      "files": [],
+      "expectations": [
+        "Claude tries another independent reviewer before giving up",
+        "Claude tells the user the work is UNREVIEWED and names the blocker (missing Codex login, no CodeRabbit CLI)",
         "Claude does not describe the work as approved or reviewed"
       ]
     }

@@ -10,7 +10,8 @@
 #
 # Env: FAKE_LOG (required) call log; FAKE_ROUNDS rounds that carry a finding;
 #      FAKE_SEVERITIES space-separated severity per round, cycled (default HIGH);
-#      FAKE_FAIL=1 makes every call die like a dead Codex turn.
+#      FAKE_FAIL_FIRST=N makes the first N calls die like a dead Codex turn (no
+#      verdict), after which calls behave normally.
 set -euo pipefail
 dir="$PWD" resume=""
 while [[ $# -gt 1 ]]; do
@@ -22,7 +23,8 @@ while [[ $# -gt 1 ]]; do
   esac
 done
 n=1; [[ -f "$FAKE_LOG" ]] && n=$(( $(wc -l < "$FAKE_LOG") + 1 ))
-if [[ "${FAKE_FAIL:-0}" == 1 ]]; then
+dead=0; [[ -f "$FAKE_LOG" ]] && dead=$(grep -c result=DEAD "$FAKE_LOG" || true)
+if (( dead < ${FAKE_FAIL_FIRST:-0} )); then
   printf 'call=%s resume=%s result=DEAD\n' "$n" "${resume:-new}" >> "$FAKE_LOG"
   echo "codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED." >&2
   exit 1

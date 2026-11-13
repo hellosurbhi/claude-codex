@@ -45,7 +45,7 @@ Pass the same `--sandbox` and `--cd` as the first call: the wrapper applies them
 | Plan review | A Codex round lists no accepted findings at any severity | Codex verdict plus Claude's evaluation gate |
 | Execute review | A reviewer round lists no accepted findings at any severity | Reviewer plus Claude's evaluation gate |
 
-There is no iteration cap and no severity floor: keep fixing and re-reviewing while any accepted CRITICAL, HIGH, MEDIUM or LOW finding remains, in round 6 and beyond. Disputed findings are settled through discussion with `--resume`, never by stopping after N rounds. A review that errors, times out or returns no verdict is retried once; if it fails again, report the work as UNREVIEWED.
+There is no iteration cap and no severity floor: keep fixing and re-reviewing while any accepted CRITICAL, HIGH, MEDIUM or LOW finding remains, in round 6 and beyond. Disputed findings are settled through discussion with `--resume`, never by stopping after N rounds. A review that errors, times out or returns no verdict (including a nonempty reply with no `VERDICT:` line) is never an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (CodeRabbit CLI via `~/.claude/config/scripts/reviewer.sh`, or a fresh Codex thread without `--resume`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). Stop and report the work as UNREVIEWED only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable, and name the blocker when you do.
 
 ## Anti-Patterns
 
@@ -54,7 +54,7 @@ There is no iteration cap and no severity floor: keep fixing and re-reviewing wh
 - **Don't use `danger-full-access`**: `workspace-write` is sufficient for implementation
 - **Don't skip `--role`**: the role file shapes response quality significantly
 - **Don't omit the conciseness instruction**: Codex may include lengthy reasoning that wastes context tokens
-- **Don't treat a non-zero exit as an answer**: the wrapper prints "UNREVIEWED" when the turn died; retry once, then report the review as not run
+- **Don't treat a non-zero exit as an answer**: the wrapper prints "UNREVIEWED" when the turn died; read the error, fix the cause and retry or switch reviewer until a verdict arrives; report the review as not run (UNREVIEWED) only for a named blocker Claude cannot clear
 
 ## Parameter Quick Reference
 

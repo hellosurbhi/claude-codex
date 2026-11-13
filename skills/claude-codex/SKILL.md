@@ -91,7 +91,7 @@ LOW: <list or 'none'>
 
 Save the returned `THREAD_ID` for follow-up replies.
 
-**Failed review**: a Codex call that errors, times out, or exits without a final message (`codex-call.sh` exits non-zero with "UNREVIEWED") is NOT an approval. Retry the same call once. If it fails again, stop and tell the user: "Codex review incomplete. The changes are UNREVIEWED." Never deliver the changes as reviewed.
+**Failed review**: a Codex call that errors, times out, exits without a final message (`codex-call.sh` exits non-zero with "UNREVIEWED") or replies without a `VERDICT:` line is NOT an approval. Read the error, fix the cause, then retry, or switch to another independent reviewer (CodeRabbit CLI via `~/.claude/config/scripts/reviewer.sh`, or a fresh Codex thread without `--resume`). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). Stop and tell the user: "Codex review incomplete. The changes are UNREVIEWED: <blocker>." only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable, and name the blocker when you do. Never deliver the changes as reviewed.
 
 Classify the verdict. Every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
 - **Any findings at any severity** (BLOCKED, WARNING, or APPROVED with MEDIUM/LOW findings listed) → critically evaluate each one (R1.5), then fix and re-review (R2).
@@ -106,11 +106,11 @@ Before fixing any issues, critically evaluate each finding, at every severity:
 3. **Verify applicability**: Does the suggestion improve correctness/security, or is it a style preference / false positive?
 
 **If a finding seems incorrect or questionable:**
-- Do NOT fix it or count it as an iteration. Instead, reply to the reviewer with your technical reasoning.
+- Do NOT fix it yet. Instead, reply to the reviewer with your technical reasoning.
 - Call `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) explaining why the finding appears incorrect, with specific code references.
 - If the reviewer provides additional justification that is convincing, accept the finding and include it in the fix batch.
-- If the reviewer concedes or cannot justify further, drop the finding.
-- Discussion replies do NOT increment the iteration counter — only fix-and-re-review cycles count.
+- Drop the finding only when the reviewer explicitly concedes it in writing. If it maintains the finding or gives no clear answer, accept it and fix it; your own disagreement never drops a finding.
+- A discussion reply never ends the loop by itself: the loop ends only when a round has no accepted findings.
 
 **If all findings appear correct:** proceed directly to Step R2.
 
