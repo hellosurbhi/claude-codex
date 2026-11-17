@@ -24,12 +24,13 @@ case "$name" in
     echo "ERROR: You've hit your usage limit. Upgrade to Pro, or try again at 4:04 AM." > "$errf"; rc=1 ;;
   coderabbit)
     # `coderabbit review -t committed --base <ref>` reviews COMMITTED repository state, not the input file.
-    ref=""; prev=""; for a in "$@"; do [[ $prev == --base ]] && ref="$a"; prev="$a"; done
+    ref=""; kind=""; prev=""; for a in "$@"; do [[ $prev == --base ]] && ref="$a"; [[ $prev == -t ]] && kind="$a"; prev="$a"; done
     base="$(git rev-parse -q --verify "refs/heads/$ref" 2>/dev/null || true)"
     head="$(git rev-parse HEAD 2>/dev/null || true)"
-    # WHY untracked .py counts as dirty: committed-state review never sees a file that is not in a commit (r39).
-    if [[ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" || -n "$(git ls-files --others --exclude-standard -- '*.py' 2>/dev/null)" ]]; then dirty=1; else dirty=0; fi
-    [[ -n "$base" ]] && git diff --no-color "$base" HEAD > "$inf" 2>/dev/null
+    # WHY ignored files count too (r40): an ignored .py module is still code the committed diff never shows. Untracked .py counts as dirty: committed-state review never sees a file that is not in a commit (r39).
+    if [[ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" || -n "$(git status --porcelain --ignored -uall -- '*.py' 2>/dev/null | grep -E '^(\?\?|!!) ' | grep -vE '(^|/)(node_modules|\.claude|__pycache__|\.pytest_cache)/' 2>/dev/null)" ]]; then dirty=1; else dirty=0; fi
+    # WHY only -t committed reads the diff: any other review type did not review committed code, so no content is recorded for it (r40).
+    [[ -n "$base" && "$kind" == committed ]] && git diff --no-color "$base" HEAD > "$inf" 2>/dev/null
     { echo "Review complete"; if [[ -n "${FAKE_CODERABBIT_FINDING:-}" ]]; then printf 'major [bug]\n  app.py:1\n  %s\n' "$FAKE_CODERABBIT_FINDING"; fi; } > "$outf" ;;
   claude)
     # reviewer.sh run_sonnet: claude --model M -p --setting-sources "" --settings F "<prompt with the whole input>"

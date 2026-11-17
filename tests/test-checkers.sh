@@ -294,6 +294,7 @@ expect pass "and it counts as the usage limit" env EXPECT_CODEX="$tmp/bin/stderr
 # r20 to r33: the spy matches reviewer.sh's output contract (reviewer.sh:3,9,398): the reply is written to the output path once and
 # nowhere else, and the event records that one reply. No alias detection: a caller wanting a file redirects the spy itself.
 evalias() { python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); sp=[e for e in es if e["wrapper"]=="spy"]; print(len(sp)==1 and wlog.reply_text(sp[0]).count("VERDICT")<=1)' "$here" "$EVLOG"; }
+evcount() { python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); sp=[e for e in es if e["wrapper"]=="spy"]; print(wlog.reply_text(sp[-1]).count("VERDICT") if len(sp)==1 else -1)' "$here" "$EVLOG"; }
 evone() { python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); sp=[e for e in es if e["wrapper"]=="spy"]; md=[e for e in es if e["wrapper"]=="model"]; print(len(sp)==1 and len(md)==1 and wlog.reply_text(sp[0]).count("VERDICT")==1)' "$here" "$EVLOG"; }
 spyrun() { bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$@"; }
 for op in /dev/stdout /dev/fd/1; do
@@ -315,17 +316,19 @@ expect pass "and the event logs no verdict for /dev/stderr" test "$(evalias)" = 
 mkrun; cd "$tmp/run/repo"
 got3="$(spyrun /dev/fd/3 3>&1 2>/dev/null)"
 expect pass "r31: /dev/fd/3 as a dup of stdout delivers once" test "$(printf '%s\n' "$got3" | grep -c '^VERDICT')" = 1
-expect pass "r31: one launcher event and at most one reply logged" test "$(evalias)" = True
+# WHY 0 (r40): a pipe behind an alias cannot be read without consuming it, so no reply is logged and the checker fails closed.
+expect pass "r31: the unobservable pipe delivery is not logged as a reply" test "$(evcount)" = 0
 for n in 5 6; do
   mkrun; cd "$tmp/run/repo"; rm -f "$tmp/fd$n.txt"
   eval "spyrun /dev/fd/$n $n>\"$tmp/fd$n.txt\" >/dev/null 2>/dev/null"
   expect pass "r32: /dev/fd/$n lands once in the file behind that descriptor" test "$(grep -c '^VERDICT' "$tmp/fd$n.txt")" = 1
-  expect pass "r32: one launcher event and at most one reply logged for fd $n" test "$(evalias)" = True
+  # WHY 0 (r40): production reads the output back and macOS denies reading /dev/fd/N behind a write-only descriptor, so reviewer.sh itself exits 1; the log must not claim a clean review.
+  expect pass "r32: production fails on the fd $n alias and no reply is logged" test "$(evcount)" = 0
 done
 mkrun; cd "$tmp/run/repo"
 got0="$(spyrun /dev/fd/0 0>&1 2>/dev/null)"
 expect pass "r33: /dev/fd/0 with 0>&1 delivers once" test "$(printf '%s\n' "$got0" | grep -c '^VERDICT')" = 1
-expect pass "r33: one launcher event and at most one reply logged" test "$(evalias)" = True
+expect pass "r33: the unobservable pipe delivery is not logged as a reply" test "$(evcount)" = 0
 
 # r20: the reviewed patch must reproduce the final files from the baseline (hunk locations and context included).
 commitbase() { (cd "$tmp/run/repo" && git add -A >/dev/null 2>&1 && git update-ref HEAD "$(echo base | git commit-tree "$(git write-tree)")"); }
@@ -637,6 +640,20 @@ rrun; printf 'def sneaky():\n    return 1\n' > "$tmp/run/repo/new_untracked.py";
 expect pass "the CodeRabbit fake records an untracked .py as dirty" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print([e for e in wlog.load(sys.argv[2]) if e["wrapper"]=="model"][-1]["meta"]["dirty"])' "$here" "$EVLOG")" = 1
 orderfake "$EVLOG"
 expect fail "an untracked .py present at review time is rejected by the checker (r39)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+# r40: the review type must be committed, and an IGNORED .py module counts as unreviewed code too
+rrun; REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
+python3 - "$EVLOG" "$tmp/evU.jsonl" <<'PYU'
+import json, sys
+out = open(sys.argv[2], "w")
+for l in open(sys.argv[1]):
+    e = json.loads(l)
+    if e["wrapper"] == "model" and "-t" in e["argv"]: e["argv"][e["argv"].index("-t") + 1] = "uncommitted"
+    out.write(json.dumps(e) + "\n")
+PYU
+expect fail "a CodeRabbit run of -t uncommitted does not validate committed code (r40)" python3 "$here/check-reviewer-after-limit.py" "$tmp/evU.jsonl" --repo "$tmp/run/repo"
+rrun; printf 'node_modules\nsecret_mod.py\n' > "$tmp/run/repo/.gitignore"; printf 'def hidden():\n    return 2\n' > "$tmp/run/repo/secret_mod.py"
+REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
+expect fail "an ignored untracked .py module present at review time is rejected (r40)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 rrun; bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
 expect pass "production rejects tier R without REVIEW_BASE_SHA (exit 2, no clean review)" test "$rc" = 2
 orderfake "$EVLOG"
@@ -651,6 +668,7 @@ mkrun; cd "$tmp/run/repo"; rm -f "$tmp/ff"; mkfifo "$tmp/ff"; printf 'plan\n' > 
 ( timeout 20 cat "$tmp/ff" > "$tmp/ff.out" ) & rd=$!
 timeout 60 bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/ff" >/dev/null 2>&1; frc=$?; wait $rd
 expect pass "r37 FIFO: the launcher finishes against a one-shot FIFO reader which gets the reply exactly once" test "$frc:$(grep -c '^VERDICT' "$tmp/ff.out")" = "0:1"
+expect pass "and the unobservable FIFO delivery is not logged as a reply" test "$(evcount)" = 0
 # fidelity link: a change to PRODUCTION reviewer.sh validation changes what the suite sees, with the launcher untouched.
 mkdir -p "$tmp/cfg/scripts"; cp "$HOME/.claude/config/scripts/reviewer.sh" "$tmp/cfg/scripts/"; cp -R "$HOME/.claude/config/scripts/lib" "$tmp/cfg/scripts/lib"
 sed -i.bak 's/^  E|R|S|diagnose) ;;$/  E|R|diagnose) ;;/' "$tmp/cfg/scripts/reviewer.sh"

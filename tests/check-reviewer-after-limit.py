@@ -152,13 +152,19 @@ if repo is not None:
             out = subprocess.run(["git", "diff", "--no-index", "--no-color", "--no-ext-diff", "-U0", a, b], capture_output=True).stdout.decode("utf-8", "surrogateescape")
         expected[name] = changes(out.split("\n"))
     if mm["bin"] == "coderabbit":
+        # WHY the logged argv (r40): the fake models whatever it is asked for, so the mode must be proven from what production passed:
+        # `review -t committed --base <ref>`. Any other review type (uncommitted, all) leaves the committed code unreviewed.
+        av = model.get("argv") or []
+        kind = av[av.index("-t") + 1] if "-t" in av[:-1] else None
+        if "review" not in av or kind != "committed" or "--base" not in av:
+            sys.exit(1)
         # WHY committed state (r38): production tier R/E reviewed `git diff <base> HEAD`, never the input file. It must have run on a
         # clean tracked tree, at the repo's current HEAD, against a base that adds no .py change beyond the root commit's.
         head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         rootc = root[0] if root else ""
         # WHY re-checked here and not only in the fake: an untracked or modified .py file now is code no commit holds, so the
         # committed diff cannot have covered it (r39).
-        if subprocess.run(["git", "-C", repo, "ls-files", "--others", "--exclude-standard", "--", "*.py"], capture_output=True, text=True).stdout.strip() or \
+        if [l for l in subprocess.run(["git", "-C", repo, "status", "--porcelain", "--ignored", "-uall", "--", "*.py"], capture_output=True, text=True).stdout.splitlines() if l[:2] in ("??", "!!") and not re.search(r"(^|/)(node_modules|\.claude|__pycache__|\.pytest_cache)/", l[3:])] or \
            subprocess.run(["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True).stdout.strip():
             sys.exit(1)
         if mm.get("dirty") != "0" or mm.get("head") != head or mm.get("base") in (None, "none", "") or not rootc:
