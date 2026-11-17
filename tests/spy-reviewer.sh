@@ -1,96 +1,31 @@
 #!/usr/bin/env bash
-# spy-reviewer.sh: stands in for ~/.claude/config/scripts/reviewer.sh in the
-# usage-limit scenario of tests/review-loop-proof.sh. Usage: spy-reviewer.sh <tier> <input-file> [output-file]
+# spy-reviewer.sh: stands in for ~/.claude/config/scripts/reviewer.sh in the usage-limit scenario of tests/review-loop-proof.sh.
+# Usage: spy-reviewer.sh <tier> <input-file> <output-file>   (the arguments reviewer.sh takes, passed through untouched)
 #
-# WHY a spy that runs a REAL reviewer instead of scripting one: the point of the
-# scenario is that, when Codex is over quota, the workflow gets a genuine independent
-# review of the actual diff or plan. The real reviewer.sh writes queue and cache files
-# under ~/.claude/state, which a test must not touch, so this runs a fresh Sonnet
-# review of the exact input file and logs what it was given (size, whether it holds the
-# task's `add` code) and the verdict it returned.
-set -euo pipefail
+# WHY this is only a launcher (r38): seven rounds (r32 to r38) found fidelity gaps between a hand-written spy and the real reviewer
+# (tier rules, REVIEW_BASE_SHA, committed-state review, output aliasing). Now the INSTALLED reviewer.sh runs unchanged and does all
+# validation; only the model CLIs it calls (codex, coderabbit, claude, gemini) are fakes on a PATH prefix (tests/fake-models). Nothing
+# here knows a tier, a base rule or an output path rule, and the reply is written by production exactly once to the path it was given.
+# What this adds is observation only: a private HOME (reviewer.sh keeps its cache and retry queue under $HOME/.claude/state, which a
+# test must not touch), the run id that ties the fake model events to this call, the tree digest at start, and one `spy` event.
+set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-argv=("$@")
 EVSTART="$(python3 -c 'import time; print(time.time())')"
-tmp="$(mktemp)"; err="$(mktemp)"; snap="$(mktemp)"; dout="$(mktemp)"; derr="$(mktemp)"; delivered=""; tree=""
-# WHY tolerant of a missing tier: a workflow may call it as `spy <file>` instead of
-# `spy <tier> <file> <out>`; the spy's job is to review what it is handed, not to police usage.
-if [[ -f "${1:-}" ]]; then set -- unknown "$@"; fi
-tier="${1:-}" in="${2:-}" outf="${3:-/dev/stdout}"
-# WHY a fallback log path: the Bash tool of a headless run may not pass SPY_LOG through,
-# and the run's repo sits directly inside the out dir the harness reads spy.log from.
-SPY_LOG="${SPY_LOG:-$(cd "$(git rev-parse --show-toplevel)/.." && pwd)/spy.log}"
-# WHY the event log is written by an EXIT trap: it must record the FINAL status and the reply actually delivered, including
-# a missing input file or a failed output write, which a log line written mid-script would miss (r12).
-EVLOG="${EVLOG:-$(cd "$(git rev-parse --show-toplevel)/.." && pwd)/wrapper.jsonl}"
-finish() {
-  local rc=$?
-  # WHY the event holds what the delivery step actually produced ($dout and $derr, captured while delivering): the reply
-  # may go to stdout, to stderr or to a file depending on the output path, and a log built from assumptions can disagree
-  # with what the caller received (r20). Before delivery (a failed run) the streams are the diagnostics replayed to the caller.
-  local o="$dout" errall="$derr"
-  if [[ -z "$delivered" ]]; then
-    o=/dev/null; errall="$err.all"; cp "$err" "$errall"; [[ $rc -eq 0 || -z "${replayed:-}" ]] || cat "$tmp" >> "$errall"
-  fi
-  # WHY the SNAPSHOT is logged and hashed, not the live path: the file may change while the reviewer runs, and the
-  # event must describe exactly what was reviewed (r14).
-  local src="$snap"; [[ -s "$snap" || -f "$in" ]] || src=/dev/null
-  TREE_SHA256="$tree" EVSTART="$EVSTART" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$src" "$o" "$errall" -- "${argv[@]+"${argv[@]}"}"
-  rm -f "$tmp" "$err" "$err.all" "$snap" "$dout" "$derr"
-}
-trap finish EXIT
-# WHY only the tiers and the argument shape production reviewer.sh takes (r29): `diagnose` is a failure-diagnosis tool, not a
-# review, and a call without tier, input and output is not the invocation the skills send, so neither may stand in for a review.
-case "$tier" in E|R|S) ;; *) echo "spy-reviewer: Unknown tier: $tier (valid: E R S)" | tee "$err" >&2; exit 2 ;; esac
-[[ $# -ge 3 ]] || { echo "spy-reviewer: usage: <tier> <input-file> <output-file>" | tee "$err" >&2; exit 2; }
-[[ -f "$in" ]] || { echo "spy-reviewer: input file missing: $in" | tee "$err" >&2; exit 1; }
-cp "$in" "$snap"
-# WHY the code-state digest is taken at review START: it pins which code this review covered, so code changed afterwards is detectable.
-tree="$(python3 "$here/treehash.py" "$(git rev-parse --show-toplevel)")"
-in_live="$in"; in="$snap"
-# WHY the function signature or body, not the word: unrelated text containing "add" must not count as the change.
-has_add=no; grep -qE '(^|[^A-Za-z_])add[[:space:]]*\(|[a-z_]+[[:space:]]*\+[[:space:]]*[a-z_]+' "$in" && has_add=yes
-# WHY a separate impl flag: a tests-only diff mentions add( in assertions, which is a real change under review but not the implementation.
-impl=no; grep -qE 'def[[:space:]]+add[[:space:]]*\(|return[[:space:]]*\(?[[:space:]]*[a-z_]+[[:space:]]*\+[[:space:]]*[a-z_]+' "$in" && impl=yes
-prompt="You are an independent code reviewer. Review the diff or plan below. Reply in the reviewer.sh format: a first line 'VERDICT: APPROVED' or 'VERDICT: WARNING' or 'VERDICT: BLOCKED', then one line per severity that has findings ('CRITICAL:', 'HIGH:', 'MEDIUM:', 'LOW:'). OMIT severity lines with no findings and never write 'none'. A fully clean review is exactly the one line 'VERDICT: APPROVED'. The change is meant to add a function add(a, b) returning a + b. REVIEW.md in this repo requires a tracking comment 'review-fix-N' only if a finding names one; otherwise report only real defects. If the input is a tests-only diff written before the implementation exists (the TDD red phase), the missing add function is expected, not a defect; judge the tests themselves.
-
-$(cat "$in")"
-# WHY --no-session-persistence: a test reviewer must not write transcripts under ~/.claude/projects.
-# WHY failures are kept: a crashed or unauthenticated reviewer must read as FAILED, never as a verdict.
-rc=0; env -u CLAUDECODE claude -p "$prompt" --model sonnet --setting-sources project --permission-mode default --no-session-persistence > "$tmp" 2> "$err" || rc=$?
-# WHY strict grammar: like the real reviewer.sh, APPROVED only counts as clean when it is the ONLY non-blank line;
-# an APPROVED that still lists findings or prose is a finding round.
-result=NOVERDICT
-if (( rc != 0 )); then
-  result=FAILED
-elif [[ $(grep -cE '^VERDICT:' "$tmp") == 1 && $(grep -cE '^VERDICT: ' "$tmp") == 1 && $(grep -cE '^VERDICT: (APPROVED|WARNING|BLOCKED)$' "$tmp") == 1 ]]; then
-  result="$(grep -E '^VERDICT: ' "$tmp" | sed 's/VERDICT: //')"
-  if [[ $result == APPROVED ]] && ! [[ $(grep -cE '[^[:space:]]' "$tmp") == 1 ]]; then result=APPROVED_WITH_FINDINGS; fi
-fi
-printf 'reviewer tier=%s bytes=%s has_add=%s impl=%s result=%s\n' "$tier" "$(wc -c < "$in" | tr -d ' ')" "$has_add" "$impl" "$result" >> "$SPY_LOG"
-if [[ $result == FAILED ]]; then replayed=1; cat "$err" "$tmp" >&2; exit 1; fi
-# WHY the reply goes to the output path ONCE and nowhere else (r31 to r33): production reviewer.sh takes <tier> <input> <output>
-# with OUTPUT_FILE defaulting to /dev/stdout (reviewer.sh:3,9) and writes the reply with a single `cat "$_msg" > "$OUTPUT_FILE"`
-# (reviewer.sh:398, :651, :686). It never echoes the reply a second time, so the spy does the same. Three rounds of alias detection
-# (/dev/fd/N probing, descriptor reservation, replay) were a workaround for the spy echoing too; a caller that wants the reply in a
-# file redirects the spy's stdout itself. What the event log records is the reply written, which is the same single copy.
-delivered=1
-# WHY the event copy is made only after the write succeeds (r34): a failed write delivered nothing, so the log must not show an approval.
-# WHY one python open-and-write, not a shell redirect (r35, r37): the shell gives no way to capture the diagnostic of a failed open of
-# "$outf" without redirecting stderr, which would make an output path of /dev/stderr resolve to the capture; and a probe open followed
-# by the real open is two open/close sessions, so a named FIFO reader can see EOF from the empty first session and exit before the
-# real write, blocking the spy. Python opens the destination exactly once with stderr untouched, writes the reply, and on failure
-# prints the diagnostic to the caller's stderr and appends the same text to the captured stderr for the event log.
-python3 -I -c '
-import sys
-out, reply, errlog = sys.argv[1:4]
-try:
-    with open(out, "wb") as f:
-        f.write(open(reply, "rb").read())
-except OSError as e:
-    msg = "spy-reviewer: cannot write output %s: %s\n" % (out, e)
-    sys.stderr.write(msg); sys.stderr.flush()
-    open(errlog, "a").write(msg)
-    sys.exit(1)
-' "$outf" "$tmp" "$derr" || exit 1
-cp "$tmp" "$dout"
+CONFIG="${SPY_CONFIG_DIR:-$HOME/.claude/config}"
+REVIEWER_SH="$CONFIG/scripts/reviewer.sh"
+top="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+EVLOG="${EVLOG:-$(cd "$top/.." && pwd)/wrapper.jsonl}"
+priv="$(mktemp -d)"; snap="$(mktemp)"; cap_o="$(mktemp)"; cap_e="$(mktemp)"
+trap 'rm -rf "$priv" "$snap" "$cap_o" "$cap_e"' EXIT
+in="${2:-}"; [[ -f "$in" ]] && cp "$in" "$snap"
+# WHY the digest is taken at call start: it pins which code state this review covered, so code changed afterwards is detectable.
+tree="$(python3 "$here/treehash.py" "$top" 2>/dev/null || true)"
+run="$$-$RANDOM"
+# WHY HOME is private only for this child: the skill's own shell keeps the real HOME (keychain logins follow it), while the
+# reviewer's cache and queue go to a directory that is deleted afterwards. CLAUDE_CONFIG_DIR keeps reviewer.sh's own lib sourcing.
+HOME="$priv" CLAUDE_CONFIG_DIR="$CONFIG" PATH="$here/fake-models:$PATH" EVLOG="$EVLOG" REVIEW_RUN="$run" REVIEWER_TIER="${1:-}" \
+  bash "$REVIEWER_SH" "$@" > "$cap_o" 2> "$cap_e"
+rc=$?
+TREE_SHA256="$tree" EVSTART="$EVSTART" EV_META="run=$run" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$snap" "$cap_o" "$cap_e" -- "$@"
+cat "$cap_o"; cat "$cap_e" >&2
+exit "$rc"

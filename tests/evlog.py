@@ -57,7 +57,7 @@ def main(a):
               "phase": phase_of(phase_text), "stdout": rd(out_file), "stderr": rd(err_file),
               # WHY raw bytes: the plan checker hashes the file as written, so CRLF or odd bytes must not change the digest (r14).
               "input_sha256": hashlib.sha256(phase_raw).hexdigest(), "input_bytes": len(phase_raw),
-              "input_text": phase_text if wrapper == "spy" else None,
+              "input_text": phase_text if wrapper in ("spy", "model") else None,
               "prov": json.loads(os.environ["EV_PROV"]) if os.environ.get("EV_PROV") else None,
               "tree_sha256": os.environ.get("TREE_SHA256") or None,
               "meta": dict(kv.split("=", 1) for kv in (os.environ.get("EV_META") or "").split() if "=" in kv),
