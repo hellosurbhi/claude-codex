@@ -10,7 +10,7 @@ ok()  { echo "PASS: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
 expect() { local want="$1" name="$2"; shift 2; "$@" >/dev/null 2>&1; local rc=$?; if { [[ $want == pass && $rc -eq 0 ]] || [[ $want == fail && $rc -ne 0 ]]; }; then ok "$name"; else bad "$name (rc=$rc, wanted $want)"; fi; }
 gdiff() { local f; for f in "$@"; do git diff --no-index --no-color /dev/null "$f"; done; }
-mkrun() { cd "$tmp"; rm -rf "$tmp/run"; mkdir -p "$tmp/run/repo"; (cd "$tmp/run/repo" && git init -q && printf 'x=1\n' > app.py); cd "$tmp/run/repo"; export EVLOG="$tmp/run/wrapper.jsonl" FAKE_LOG="$tmp/run/calls.log"; : > "$EVLOG"; : > "$FAKE_LOG"; unset FAKE_LIMIT FAKE_FAIL_FIRST; export FAKE_ROUNDS=0; }
+mkrun() { cd "$tmp"; rm -rf "$tmp/run"; mkdir -p "$tmp/run/repo"; (cd "$tmp/run/repo" && git init -q && git remote add origin https://example.invalid/t/r.git && printf 'x=1\n' > app.py); cd "$tmp/run/repo"; export EVLOG="$tmp/run/wrapper.jsonl" FAKE_LOG="$tmp/run/calls.log"; : > "$EVLOG"; : > "$FAKE_LOG"; unset FAKE_LIMIT FAKE_FAIL_FIRST; export FAKE_ROUNDS=0; }
 fake="$here/fake-codex-call.sh"
 # viawrap runs the shim from a script named codex-call.sh, the way the installed wrapper does (shim provenance, r28)
 mkdir -p "$tmp/wrap"; printf '#!/usr/bin/env bash\nbash "%s/shim/codex" "$@"\nrc=$?\nexit $rc\n' "$here" > "$tmp/wrap/codex-call.sh"
@@ -25,7 +25,14 @@ log, wrapper, code, phase, out = sys.argv[1:6]
 n = sum(1 for _ in open(log))
 import os
 prov = {"argv_ok": True, "nonce": os.environ["EVNONCE"], "wrapper_sha256": os.environ["WRAPPER_SHA256"], "codex": os.path.realpath(os.environ["EXPECT_CODEX"])} if wrapper == "real" else None
-open(log, "a").write(json.dumps({"seq": n + 1, "wrapper": wrapper, "prov": prov, "argv": ["S", "in", "out"] if wrapper == "spy" else [], "exit": int(code), "resume": None, "thread_id": None, "phase": phase, "stdout": out.replace("\\n", "\n"), "stderr": "", "ts": n + 1}) + "\n")
+ev = {"seq": n + 1, "wrapper": wrapper, "prov": prov, "argv": ["S", "in", "out"] if wrapper == "spy" else [], "exit": int(code), "resume": None, "thread_id": None, "phase": phase, "stdout": out.replace("\\n", "\n"), "stderr": "", "ts": n + 1}
+if wrapper == "spy":
+    # a hand-built launcher event comes with the fake model production called for it (same run id), as the real launcher does (r38)
+    ev["meta"] = {"run": "r%d" % (n + 1)}; ev["input_text"] = "in"
+with open(log, "a") as f:
+    f.write(json.dumps(ev) + "\n")
+    if wrapper == "spy":
+        f.write(json.dumps({"seq": n + 2, "wrapper": "model", "prov": None, "argv": ["claude"], "exit": 0, "resume": None, "thread_id": None, "phase": phase, "stdout": "VERDICT: APPROVED\n", "stderr": "", "meta": {"bin": "claude", "tier": "S", "run": "r%d" % (n + 1)}, "input_text": "prompt in", "ts": n + 1}) + "\n")
 PY
 }
 CLEAN='VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
@@ -97,7 +104,7 @@ printf 'the plan\n' > "$tmp/plan.md"
 expect fail "a plan that differs from the reviewed input is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 # a real spy run on the plan file logs its sha, which then matches.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
-printf 'the plan\n' > "$tmp/plan.md"; PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+printf 'the plan\n' > "$tmp/plan.md"; bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "spy logs the reviewed plan sha (event carries input_sha256 of the file)" test "$(python3 -c 'import sys,hashlib,json; sys.path.insert(0,sys.argv[1]); import wlog; e=[x for x in wlog.load(sys.argv[2]) if x["wrapper"]=="spy"]; print(bool(e) and e[-1]["input_sha256"]==hashlib.sha256(open(sys.argv[3],"rb").read()).hexdigest())' "$here" "$EVLOG" "$tmp/plan.md")" = "True"
 # an id only counts for resume when the earlier reply printed it; a verdict is optional on a follow-up.
 mkrun; line fake 0 unknown "no thread line here"
@@ -134,11 +141,11 @@ expect fail "an older approval that finished later does not override a newer blo
 # a failed spy call (missing input) is logged and, being the latest review, defeats an earlier approval.
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; cd "$tmp/run/repo"
 bash "$here/spy-reviewer.sh" S "$tmp/no-such-input" "$tmp/o.txt" >/dev/null 2>&1
-expect pass "the failed spy call with a missing input is logged" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2]); print(len(e)==3 and e[-1]["exit"]!=0)' "$here" "$EVLOG")" = "True"
+expect pass "the failed spy call with a missing input is logged" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2]); print(len(e)==4 and e[-1]["exit"]!=0)' "$here" "$EVLOG")" = "True"
 expect fail "a later failed review means the last review is not clean" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 # an unchanged CRLF plan hashes by raw bytes and matches.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan line\r\nsecond\r\n' > "$tmp/plan.md"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "an unchanged CRLF plan matches the reviewed digest" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 # r37: a tier R review is of committed repository state, so it never validates a plan file
 python3 - "$EVLOG" "$tmp/evR.jsonl" <<'PYR'
@@ -152,13 +159,13 @@ PYR
 expect fail "a tier R spy review does not validate the plan file" python3 "$here/check-reviewer-after-limit.py" "$tmp/evR.jsonl" --plan-file "$tmp/plan.md"
 # the event describes the snapshot, so a plan edited DURING the review no longer matches.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan v1\n' > "$tmp/plan.md"
-EDIT_DURING="$tmp/plan.md" PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+EDIT_DURING="$tmp/plan.md" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect fail "a plan edited while it was being reviewed is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 # the clean review is bound to the exact final .py state (paths, bytes, indentation, other modules, deletions).
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
 printf 'x=1\ndef add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > other.py
 gdiff app.py other.py > "$tmp/diff.txt"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 cp "$tmp/run/repo/app.py" "$tmp/app.good"
 expect pass "reviewed final code state is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 printf 'def evil():\n    pass\n' >> app.py
@@ -203,39 +210,38 @@ expect pass "a caller-set FAKE_LOG cannot divert the call log" test "$(wc -l < "
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
 printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > other.py
 gdiff app.py > "$tmp/diff.txt"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect fail "a partial diff that omits another current module is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
-# a failed spy run logs the stdout it replays to the caller too.
+# a failing model binary: production rejects it, the launcher exits non-zero and the model event keeps what the binary printed.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
-printf '#!/usr/bin/env bash\necho "partial reply on stdout"\nexit 3\n' > "$tmp/bin2claude"; mkdir -p "$tmp/bin2"; cp "$tmp/bin2claude" "$tmp/bin2/claude"; chmod +x "$tmp/bin2/claude"
-PATH="$tmp/bin2:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
-expect pass "a failed reviewer's stdout is kept in the logged diagnostics" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["exit"]!=0 and "partial reply on stdout" in e["stderr"])' "$here" "$EVLOG")" = "True"
+FAKE_CLAUDE_MODE=fail bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "a failed model run fails the launcher and its output stays in the model event" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); m=[e for e in es if e["wrapper"]=="model"][-1]; print(es[-1]["wrapper"]=="spy" and es[-1]["exit"]!=0 and m["exit"]==3 and "partial reply on stdout" in m["stdout"])' "$here" "$EVLOG")" = "True"
 
 # r17: the reviewed diff must match the remaining change exactly (whitespace, operators, the file set).
 rv() { mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; }
 rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py
 gdiff app.py other.py > "$tmp/diff.txt"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "an exact git diff of every changed module is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py
 gdiff app.py > "$tmp/diff.txt"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect fail "a diff omitting a module whose lines duplicate reviewed ones is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 rv; printf 'def add(a, b):\n        return a + b\n' > app.py
 gdiff app.py | sed 's/^+        return/+    return/' > "$tmp/diff.txt"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect fail "a diff line with different indentation than the final code is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 rv; printf 'def add(a, b):\n    return a + b\n-x\n' > app.py
 gdiff app.py | sed 's/^+-x$/+x/' > "$tmp/diff.txt"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect fail "a source operator dropped from a diff line is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 rv; printf 'def add(a, b):\n    return a + b\n-x\n' > app.py
 gdiff app.py > "$tmp/diff.txt"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "a line that starts with an operator is accepted when it is diffed exactly" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 # a spy whose output file cannot be written logs the shell diagnostic, not reviewer text the caller never saw.
 rv; printf 'plan\n' > "$tmp/plan.md"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/nodir/out.txt" >/dev/null 2>"$tmp/spyerr.txt"
+bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/nodir/out.txt" >/dev/null 2>"$tmp/spyerr.txt"
 expect pass "an unwritable output file logs the shell diagnostic" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["exit"]!=0 and "nodir" in e["stderr"] and "VERDICT" not in e["stderr"])' "$here" "$EVLOG")" = "True"
 
 # r17: the scripted scenarios are judged from the wrapper log, not calls.log.
@@ -258,10 +264,10 @@ expect fail "scripted: a bad call after the first verdict fails failfirst" pytho
 # r18: nested modules, start-time order, spy success stderr, shim header.
 rv; mkdir -p pkg; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > pkg/mod.py
 gdiff app.py > "$tmp/diff.txt"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect fail "a diff omitting a nested module is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 gdiff app.py pkg/mod.py > "$tmp/diff.txt"; : > "$EVLOG"; line fake 1 unknown "$LIMIT"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "a complete diff including a nested module is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 mkrun; python3 - "$EVLOG" <<'PY'
 import json, sys
@@ -287,14 +293,13 @@ expect pass "and it counts as the usage limit" env EXPECT_CODEX="$tmp/bin/stderr
 
 # r20 to r33: the spy matches reviewer.sh's output contract (reviewer.sh:3,9,398): the reply is written to the output path once and
 # nowhere else, and the event records that one reply. No alias detection: a caller wanting a file redirects the spy itself.
-evone() { python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print(len(es)==1 and wlog.reply_text(es[-1]).count("VERDICT")==1)' "$here" "$EVLOG"; }
-spyrun() { PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$@"; }
+evone() { python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); sp=[e for e in es if e["wrapper"]=="spy"]; md=[e for e in es if e["wrapper"]=="model"]; print(len(sp)==1 and len(md)==1 and wlog.reply_text(sp[0]).count("VERDICT")==1)' "$here" "$EVLOG"; }
+spyrun() { bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$@"; }
 for op in /dev/stdout /dev/fd/1; do
   mkrun; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
   got="$(spyrun "$op" 2>/dev/null)"
   expect pass "the reply appears once on stdout for output path $op" test "$(printf '%s\n' "$got" | grep -c '^VERDICT')" = 1
   expect pass "one event with one reply for $op" test "$(evone)" = True
-  expect pass "one spy log line for $op" test "$(grep -c '^reviewer' "$tmp/run/spy.log")" = 1
 done
 mkrun; cd "$tmp/run/repo"; rm -f "$tmp/o.txt"
 got="$(spyrun "$tmp/o.txt" 2>/dev/null)"
@@ -325,7 +330,7 @@ commitbase() { (cd "$tmp/run/repo" && git add -A >/dev/null 2>&1 && git update-r
 mkrun; cd "$tmp/run/repo"; printf 'k\nk\nk\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
 printf 'k\nNEW\nk\nk\ndef add(a, b):\n    return a + b\n' > app.py
 git diff --no-color HEAD -- app.py > "$tmp/good.diff"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/good.diff" "$tmp/out.txt" >/dev/null 2>&1; : > "$tmp/x"
+bash "$here/spy-reviewer.sh" S "$tmp/good.diff" "$tmp/out.txt" >/dev/null 2>&1; : > "$tmp/x"
 line fake 1 unknown "$LIMIT" ; python3 - "$EVLOG" <<'PY'
 import json,sys
 rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
@@ -349,7 +354,7 @@ diff --git a/app.py b/app.py
  def add(a, b):
      return a + b
 D
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/stale.diff" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/stale.diff" "$tmp/out.txt" >/dev/null 2>&1
 line fake 1 unknown "$LIMIT"; python3 - "$EVLOG" <<'PY'
 import json,sys
 rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
@@ -372,7 +377,7 @@ expect pass "every skill and command carries identical mirrored instructions" py
 
 # r21: reviewed-patch hardening, CRLF, single stderr delivery, mirror clause equality, codex-mcp scoping
 limit_then_spy() { # diff-file : runs the spy on it from the repo, then orders a quota event before it
-  PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$1" "$tmp/out.txt" >/dev/null 2>&1
+  bash "$here/spy-reviewer.sh" S "$1" "$tmp/out.txt" >/dev/null 2>&1
   line fake 1 unknown "$LIMIT"; python3 - "$EVLOG" <<'PY'
 import json,sys
 rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
@@ -392,7 +397,7 @@ printf 'k\r\nNEW\r\ndef add(a, b):\r\n    return a + b\r\n' > app.py
 git diff --no-color HEAD -- app.py > "$tmp/crlf.diff"
 limit_then_spy "$tmp/crlf.diff"
 expect pass "a correctly reviewed CRLF file is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
-mkrun; PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" /dev/stderr >"$tmp/so.txt" 2>"$tmp/se.txt"
+mkrun; bash "$here/spy-reviewer.sh" S "$tmp/plan.md" /dev/stderr >"$tmp/so.txt" 2>"$tmp/se.txt"
 expect pass "a reply sent to /dev/stderr reaches the caller exactly once across both streams" test "$(cat "$tmp/so.txt" "$tmp/se.txt" | grep -c '^VERDICT')" = 1
 rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
 python3 - "$tmp/mir/commands/claude-codex.md" <<'PY'
@@ -407,9 +412,8 @@ expect pass "every audit-status assertion in the proof is skipped for the codex-
 
 # r22: formatting-independent phase, resume reply that repeats its thread id, whole quota paragraphs mirrored
 mkrun; cd "$tmp/run/repo"; printf 'def add (a, b): return (a + b)\n' > "$tmp/fmt.py"; git diff --no-index --no-color /dev/null "$tmp/fmt.py" > "$tmp/fmt.diff"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/fmt.diff" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/fmt.diff" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "an implementation formatted as def add (a, b): return (a + b) is phase implementation" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = implementation
-grep -q "has_add=yes" "$tmp/run/spy.log"; expect pass "the spy marks the oddly formatted add as implemented" grep -q "impl=yes" "$tmp/run/spy.log"
 mkrun
 python3 - "$EVLOG" <<'PY'
 import json, sys
@@ -436,7 +440,7 @@ expect pass "a valid review beside an unchanged empty baseline file is accepted"
 mkrun; cd "$tmp/run/repo"; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
 printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py
 git diff --no-color HEAD -- app.py > "$tmp/err.diff"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/err.diff" /dev/stderr >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/err.diff" /dev/stderr >/dev/null 2>&1
 line fake 1 unknown "$LIMIT"; python3 - "$EVLOG" <<'PY'
 import json,sys
 rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
@@ -449,10 +453,10 @@ expect fail "a report whose last non-blank line is a closing fence after the sta
 # r24: structural phase, no-stop clause mirrored, shim subcommand parsing, git add -N never adds every untracked file
 mkrun; cd "$tmp/run/repo"
 printf 'add = lambda a, b: a + b\n' > "$tmp/lam.py"; git diff --no-index --no-color /dev/null "$tmp/lam.py" > "$tmp/lam.diff"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/lam.diff" "$tmp/out.txt" >/dev/null 2>&1
+bash "$here/spy-reviewer.sh" S "$tmp/lam.diff" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "a lambda implementation is phase implementation" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = implementation
 mkdir -p "$tmp/tt"; printf 'def test_x():\n    def helper(a, b):\n        return a + b\n    assert helper(1, 2) == 3\n' > "$tmp/tt/test_app.py"; git diff --no-index --no-color /dev/null "$tmp/tt/test_app.py" > "$tmp/tt.diff"
-mkrun; cd "$tmp/run/repo"; PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" S "$tmp/tt.diff" "$tmp/out.txt" >/dev/null 2>&1
+mkrun; cd "$tmp/run/repo"; bash "$here/spy-reviewer.sh" S "$tmp/tt.diff" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "a tests-only diff containing return a + b is phase tests" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = tests
 cat > "$tmp/bin/stubok" <<'SH'
 #!/usr/bin/env bash
@@ -572,7 +576,7 @@ expect pass "a real quota sentence is a quota error" python3 "$here/check-limit-
 # r29: diagnose is not a review, and the fallback must carry the production argument vector
 mkrun; cd "$tmp/run/repo"; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
 printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py; git diff --no-color HEAD -- app.py > "$tmp/d.diff"
-PATH="$tmp/bin:$PATH" SPY_LOG="$tmp/run/spy.log" bash "$here/spy-reviewer.sh" diagnose "$tmp/d.diff" "$tmp/out.txt" >/dev/null 2>&1; src=$?
+bash "$here/spy-reviewer.sh" diagnose "$tmp/d.diff" "$tmp/out.txt" >/dev/null 2>&1; src=$?
 expect pass "the spy refuses the diagnose tier" test "$src" -ne 0
 mkrun; cd "$tmp/run/repo"; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
 printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py
@@ -594,12 +598,62 @@ expect fail "the forged argv[0] does not satisfy the real thread check" python3 
 mkdir -p "$tmp/sh3"; printf 'import helper\n' > "$tmp/sh3/app.py"; printf 'X=1\n' > "$tmp/sh3/helper.py"; before="$(python3 "$here/state-hash.py" "$tmp/sh3")"; rm "$tmp/sh3/helper.py"
 expect pass "deleting an imported helper module changes the state hash" test "$before" != "$(python3 "$here/state-hash.py" "$tmp/sh3")"
 
+# r38: the launcher runs the REAL reviewer.sh, so production decides tier, base and committed-state rules; the checker asserts what ran.
+commit2() { (cd "$tmp/run/repo" && git add -A >/dev/null 2>&1 && git update-ref HEAD "$(echo next | git commit-tree "$(git write-tree)" -p HEAD)"); }
+orderfake() { python3 - "$1" <<'PY'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1])]
+fake = [r for r in rows if r["wrapper"] == "fake"]; rest = [r for r in rows if r["wrapper"] != "fake"]
+fake[0]["ts"] = rest[0]["ts_start"] - 5; fake[0]["ts_start"] = fake[0]["ts"] - 1
+open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in fake + rest) + "\n")
+open(sys.argv[1] + ".trunc", "w").write("\n".join(json.dumps(dict(r, input_text=(r["input_text"] or "").replace("plan line two", "")) if r["wrapper"] == "model" else r) for r in fake + rest) + "\n")
+PY
+}
+rrun() { # committed edit on top of the root commit; REVIEW_BASE_SHA is R0 = the root commit
+  mkrun; cd "$tmp/run/repo"; printf 'x=1\n' > app.py; commitbase; R0="$(git rev-parse HEAD)"; line fake 1 unknown "$LIMIT"
+  printf 'x=1\ndef add(a, b):\n    return a + b\n' > app.py; commit2; printf 'in\n' > "$tmp/rin.txt"
+}
+rrun; REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "production accepts tier R with a base and the CodeRabbit fake ran on committed state" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); m=[e for e in es if e["wrapper"]=="model"][-1]; print(m["meta"]["bin"], m["meta"]["tier"], m["meta"]["dirty"], m["meta"]["base"]==sys.argv[3])' "$here" "$EVLOG" "$R0")" = "coderabbit R 0 True"
+orderfake "$EVLOG"
+expect pass "a clean tier R review of committed state is accepted for the code" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+expect fail "a tier R review never validates a plan file" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/rin.txt"
+printf 'x=1\ndef add(a, b):\n    return a - b\n' > app.py
+expect fail "code edited after the R review is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+rrun; printf 'x=1\ndef add(a, b):\n    return a - b\n' > app.py
+REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "production lets tier R review while uncommitted changes exist (the fake records dirty=1)" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print([e for e in es if e["wrapper"]=="model"][-1]["meta"]["dirty"])' "$here" "$EVLOG")" = 1
+orderfake "$EVLOG"
+expect fail "a tier R review with uncommitted changes is rejected by the checker" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+rrun; bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
+expect pass "production rejects tier R without REVIEW_BASE_SHA (exit 2, no clean review)" test "$rc" = 2
+orderfake "$EVLOG"
+expect fail "and the checker finds no clean fallback review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG"
+mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan line one\nplan line two\n' > "$tmp/plan.md"
+bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+orderfake "$EVLOG"
+expect pass "a tier S plan review with the full file in the model prompt is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+expect fail "a model prompt missing part of the plan is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG.trunc" --plan-file "$tmp/plan.md"
+# FIFO evidence (r37): the launcher opens the caller's output path once, so a one-shot reader gets the reply and nothing hangs.
+mkrun; cd "$tmp/run/repo"; rm -f "$tmp/ff"; mkfifo "$tmp/ff"; printf 'plan\n' > "$tmp/plan.md"
+( timeout 20 cat "$tmp/ff" > "$tmp/ff.out" ) & rd=$!
+timeout 60 bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/ff" >/dev/null 2>&1; frc=$?; wait $rd
+expect pass "r37 FIFO: the launcher finishes against a one-shot FIFO reader which gets the reply exactly once" test "$frc:$(grep -c '^VERDICT' "$tmp/ff.out")" = "0:1"
+# fidelity link: a change to PRODUCTION reviewer.sh validation changes what the suite sees, with the launcher untouched.
+mkdir -p "$tmp/cfg/scripts"; cp "$HOME/.claude/config/scripts/reviewer.sh" "$tmp/cfg/scripts/"; cp -R "$HOME/.claude/config/scripts/lib" "$tmp/cfg/scripts/lib"
+sed -i.bak 's/^  E|R|S|diagnose) ;;$/  E|R|diagnose) ;;/' "$tmp/cfg/scripts/reviewer.sh"
+mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
+SPY_CONFIG_DIR="$tmp/cfg" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
+expect pass "with production validation changed to reject tier S the unchanged launcher fails" test "$rc" = 1
+orderfake "$EVLOG"
+expect fail "and the checker sees no clean fallback review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+
 # r34: an unwritable output path delivers nothing and the event must not log the reply
 mkrun; cd "$tmp/run/repo"
 spyrun "$tmp/no-such-dir/o.txt" >/dev/null 2>&1; rc=$?
 expect pass "an unwritable output path fails the spy" test "$rc" != 0
-expect pass "and the event stderr holds the open failure once" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stderr"].count("cannot write output"))' "$here" "$EVLOG")" = 1
-expect pass "and the event logs no reply" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print(len(es)==1 and "VERDICT" not in wlog.reply_text(es[-1]))' "$here" "$EVLOG")" = True
+expect pass "and the event stderr holds the open failure once" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stderr"].count("no-such-dir"))' "$here" "$EVLOG")" = 1
+expect pass "and the event logs no reply" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print(len([x for x in es if x["wrapper"]=="spy"])==1 and "VERDICT" not in wlog.reply_text(es[-1]))' "$here" "$EVLOG")" = True
 
 # r36: a quota reply from a bare direct codex call does not anchor the after-limit ordering, and a missing clause in a command is caught
 mkrun; line direct 1 unknown "$LIMIT"; line spy 0 implementation "$CLEAN"

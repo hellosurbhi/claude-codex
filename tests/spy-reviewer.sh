@@ -15,17 +15,29 @@ CONFIG="${SPY_CONFIG_DIR:-$HOME/.claude/config}"
 REVIEWER_SH="$CONFIG/scripts/reviewer.sh"
 top="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 EVLOG="${EVLOG:-$(cd "$top/.." && pwd)/wrapper.jsonl}"
-priv="$(mktemp -d)"; snap="$(mktemp)"; cap_o="$(mktemp)"; cap_e="$(mktemp)"
-trap 'rm -rf "$priv" "$snap" "$cap_o" "$cap_e"' EXIT
+logo=""; priv="$(mktemp -d)"; snap="$(mktemp)"; cap_o="$(mktemp)"; cap_e="$(mktemp)"; derr="$(mktemp)"
+trap 'rm -rf "$priv" "$snap" "$cap_o" "$cap_e" "$derr" "$logo"' EXIT
 in="${2:-}"; [[ -f "$in" ]] && cp "$in" "$snap"
 # WHY the digest is taken at call start: it pins which code state this review covered, so code changed afterwards is detectable.
 tree="$(python3 "$here/treehash.py" "$top" 2>/dev/null || true)"
 run="$$-$RANDOM"
+# WHY production gets a private output file and this launcher delivers it once: the caller's output path may be /dev/stdout, a
+# /dev/fd/N alias or a FIFO, and the event has to record exactly the reply the caller receives. Production still validates and
+# writes the verdict once (reviewer.sh `cat "$_msg" > "$OUTPUT_FILE"`); the launcher then opens the caller's path ONCE (FIFO safe).
 # WHY HOME is private only for this child: the skill's own shell keeps the real HOME (keychain logins follow it), while the
 # reviewer's cache and queue go to a directory that is deleted afterwards. CLAUDE_CONFIG_DIR keeps reviewer.sh's own lib sourcing.
+reply="$priv/reply"; args=("$@"); [[ ${#args[@]} -ge 3 ]] && args[2]="$reply"
 HOME="$priv" CLAUDE_CONFIG_DIR="$CONFIG" PATH="$here/fake-models:$PATH" EVLOG="$EVLOG" REVIEW_RUN="$run" REVIEWER_TIER="${1:-}" \
-  bash "$REVIEWER_SH" "$@" > "$cap_o" 2> "$cap_e"
+  bash "$REVIEWER_SH" "${args[@]+"${args[@]}"}" > "$cap_o" 2> "$cap_e"
 rc=$?
-TREE_SHA256="$tree" EVSTART="$EVSTART" EV_META="run=$run" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$snap" "$cap_o" "$cap_e" -- "$@"
-cat "$cap_o"; cat "$cap_e" >&2
+out="${3:-}"
+if [[ $rc -eq 0 && -n "$out" && -f "$reply" ]]; then
+  # WHY stderr of the delivery is its own file: when $out is /dev/stderr the reply itself lands there, and it is the delivery, not a
+  # diagnostic, so the log must not count it twice; any other text there (a failed open) is a real diagnostic and is logged.
+  { cat "$reply" > "$out"; } 2> "$derr" || rc=$?
+  cmp -s "$derr" "$reply" || cat "$derr" >> "$cap_e"
+fi
+logo="$(mktemp)"; cat "$cap_o" > "$logo"; [[ -f "$reply" && $rc -eq 0 ]] && cat "$reply" >> "$logo"
+TREE_SHA256="$tree" EVSTART="$EVSTART" EV_META="run=$run" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$snap" "$logo" "$cap_e" -- "$@"
+cat "$cap_o"; cat "$cap_e" >&2; [[ -s "$derr" ]] && cmp -s "$derr" "$reply" && cat "$derr" >&2
 exit "$rc"

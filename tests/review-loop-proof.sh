@@ -45,7 +45,7 @@ case "$scenario" in
   low-only)    export FAKE_ROUNDS=2 FAKE_SEVERITIES=LOW ;;
   failed)      export FAKE_ROUNDS=1 FAKE_FAIL_FIRST=2 FAKE_FAIL_MODES="dead dead" FAKE_SEVERITIES=HIGH ;;
   malformed)   export FAKE_ROUNDS=1 FAKE_FAIL_FIRST=4 FAKE_FAIL_MODES="empty noverdict dup bad" FAKE_SEVERITIES=HIGH ;;
-  usage-limit) export FAKE_ROUNDS=0 FAKE_LIMIT=1 SPY_LOG="$out/spy.log"; : > "$SPY_LOG" ;;
+  usage-limit) export FAKE_ROUNDS=0 FAKE_LIMIT=1 ;;
   real)        export FAKE_ROUNDS=0 ;;
   *) echo "unknown scenario: $scenario" >&2; exit 2 ;;
 esac
@@ -65,6 +65,8 @@ case "$skill:$scenario" in execute-codex:usage-limit|tdd-execute-codex:usage-lim
 esac
 cd "$repo"
 git init -q
+# WHY an origin: the REAL reviewer.sh the spy launches derives its retry-queue slug from `git remote get-url origin` and exits without one.
+git remote add origin https://example.invalid/proof/repo.git
 printf 'def greet(name):\n    return "hi " + name\n' > app.py
 cat > REVIEW.md <<'MD'
 # Review rules
@@ -149,7 +151,6 @@ open(o + "/events.jsonl", "w").write("\n".join(json.dumps(x) for x in jl))
 PY
 echo "== $skill $scenario ($src) -> $out"
 cat "$FAKE_LOG"
-[[ -f "$out/spy.log" ]] && cat "$out/spy.log"
 fail=0
 check() { if eval "$2"; then echo "PASS: $1"; else echo "FAIL: $1"; fail=1; fi; }
 all_markers() {

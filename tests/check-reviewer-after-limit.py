@@ -91,14 +91,32 @@ if not spies or not wlog.is_clean(spies[-1]):
     sys.exit(1)
 if phase is not None and spies[-1]["phase"] != phase:
     sys.exit(1)
+# WHY production decides validity (r38): the launcher ran the REAL reviewer.sh, which already rejected a bad tier, a missing
+# base, an unusable input or an outage (non-zero exit, no clean verdict). This checker only joins the launcher event to the fake
+# model binaries production called (same run id) and asserts WHICH model accepted, with which tier, base and reviewed content.
+run = (spies[-1].get("meta") or {}).get("run")
+models = [e for e in evs if e["wrapper"] == "model" and run and (e.get("meta") or {}).get("run") == run and e["exit"] == 0 and (e.get("meta") or {}).get("bin") in ("claude", "coderabbit")]
+if len(models) != 1:
+    sys.exit(1)
+model = models[0]
+mm = model.get("meta") or {}
+tier = spies[-1]["argv"][0]
+spy_in = spies[-1].get("input_text") or ""
+if mm.get("tier") != tier:
+    sys.exit(1)
+if mm["bin"] == "claude":
+    # Sonnet reviewed the input file itself, so its prompt must carry the whole input verbatim.
+    # WHY rstrip: reviewer.sh builds the prompt with command substitution, which drops trailing newlines.
+    if not spy_in.strip() or spy_in.rstrip("\n") not in (model.get("input_text") or ""):
+        sys.exit(1)
 if plan is not None:
-    # WHY tier S only (r37): production tier R reviews committed repository state (REVIEW_BASE_SHA), not a plan file; a plan fallback is
-    # a fresh Codex thread (not a spy) or reviewer.sh S, so an R spy review does not validate a plan.
-    if spies[-1]["argv"][0] != "S":
+    # WHY tier S and the full file content: production tier R reviews committed repository state, not a plan file.
+    if tier != "S" or mm["bin"] != "claude":
         sys.exit(1)
     if not os.path.isfile(plan) or os.path.getsize(plan) == 0:
         sys.exit(1)
-    if hashlib.sha256(open(plan, "rb").read()).hexdigest() != spies[-1].get("input_sha256"):
+    data = open(plan, "rb").read()
+    if hashlib.sha256(data).hexdigest() != spies[-1].get("input_sha256") or data.decode("utf-8", "surrogateescape").rstrip("\n") not in (model.get("input_text") or ""):
         sys.exit(1)
 if repo is not None:
     # WHY an exact digest of the final .py files: the review must cover exactly the code that remains (all modules, paths,
@@ -133,6 +151,19 @@ if repo is not None:
             open(a, "wb").write(base); open(b, "wb").write(cur)
             out = subprocess.run(["git", "diff", "--no-index", "--no-color", "--no-ext-diff", "-U0", a, b], capture_output=True).stdout.decode("utf-8", "surrogateescape")
         expected[name] = changes(out.split("\n"))
+    if mm["bin"] == "coderabbit":
+        # WHY committed state (r38): production tier R/E reviewed `git diff <base> HEAD`, never the input file. It must have run on a
+        # clean tracked tree, at the repo's current HEAD, against a base that adds no .py change beyond the root commit's.
+        head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        rootc = root[0] if root else ""
+        if mm.get("dirty") != "0" or mm.get("head") != head or mm.get("base") in (None, "none", "") or not rootc:
+            sys.exit(1)
+        if subprocess.run(["git", "-C", repo, "diff", "--quiet", rootc, mm["base"], "--", "*.py"]).returncode != 0:
+            sys.exit(1)
+        want = subprocess.run(["git", "-C", repo, "diff", "--no-color", mm["base"], head], capture_output=True, text=True).stdout
+        if want != (model.get("input_text") or ""):
+            sys.exit(1)
+        sys.exit(0)
     got = reviewed_changes((spies[-1].get("input_text") or "").split("\n"))
     if set(got) != set(expected) or any(got[n] != expected[n] for n in expected):
         sys.exit(1)
