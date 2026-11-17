@@ -27,7 +27,8 @@ case "$name" in
     ref=""; prev=""; for a in "$@"; do [[ $prev == --base ]] && ref="$a"; prev="$a"; done
     base="$(git rev-parse -q --verify "refs/heads/$ref" 2>/dev/null || true)"
     head="$(git rev-parse HEAD 2>/dev/null || true)"
-    if [[ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]]; then dirty=1; else dirty=0; fi
+    # WHY untracked .py counts as dirty: committed-state review never sees a file that is not in a commit (r39).
+    if [[ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" || -n "$(git ls-files --others --exclude-standard -- '*.py' 2>/dev/null)" ]]; then dirty=1; else dirty=0; fi
     [[ -n "$base" ]] && git diff --no-color "$base" HEAD > "$inf" 2>/dev/null
     { echo "Review complete"; if [[ -n "${FAKE_CODERABBIT_FINDING:-}" ]]; then printf 'major [bug]\n  app.py:1\n  %s\n' "$FAKE_CODERABBIT_FINDING"; fi; } > "$outf" ;;
   claude)

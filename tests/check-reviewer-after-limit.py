@@ -156,6 +156,11 @@ if repo is not None:
         # clean tracked tree, at the repo's current HEAD, against a base that adds no .py change beyond the root commit's.
         head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         rootc = root[0] if root else ""
+        # WHY re-checked here and not only in the fake: an untracked or modified .py file now is code no commit holds, so the
+        # committed diff cannot have covered it (r39).
+        if subprocess.run(["git", "-C", repo, "ls-files", "--others", "--exclude-standard", "--", "*.py"], capture_output=True, text=True).stdout.strip() or \
+           subprocess.run(["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True).stdout.strip():
+            sys.exit(1)
         if mm.get("dirty") != "0" or mm.get("head") != head or mm.get("base") in (None, "none", "") or not rootc:
             sys.exit(1)
         if subprocess.run(["git", "-C", repo, "diff", "--quiet", rootc, mm["base"], "--", "*.py"]).returncode != 0:
