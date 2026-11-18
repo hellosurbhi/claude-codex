@@ -17,7 +17,7 @@ def prose(path):
         if not fence:
             out.append((i, l))
     return out
-CLAUSE = "`git add -N <each file this task created>` in your own shell first (never `.`, so credentials, keys and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way)"
+CLAUSE = "`git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way)"
 # a line that (re)calls a reviewer on a diff or on test files must carry the clause itself
 CALL = re.compile(r"^\s*(- )?(Run `git diff|Re-call Codex via|Call Codex via)|re-calls? `codex-call\.sh --resume|re-run (the )?`?code-reviewer`?|re-audits? via", re.I)
 # (regex, workflows that must contain it); every snippet must also appear equally often in a skill and its command

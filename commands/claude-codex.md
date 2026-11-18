@@ -60,7 +60,7 @@ After all tasks complete (either path):
 
 **Step R1 — Run Codex Review via codex-call.sh**
 
-Before the call, run `git add -N <each file this task created>` in your own shell first (never `.`, so credentials, keys and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way). Call Codex via `codex-call.sh` with:
+Before the call, run `git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way). Call Codex via `codex-call.sh` with:
 - append to prompt: `"Be concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
@@ -91,7 +91,7 @@ Address ALL accepted findings before re-reviewing:
 - Collect every accepted CRITICAL, HIGH, MEDIUM and LOW finding from the last review
 - Fix them all with Edit/Write in one batch
 - Run available tests/lint to verify
-- Before re-calling, run `git add -N <each file this task created>` in your own shell first (never `.`, so credentials, keys and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way); then re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
+- Before re-calling, run `git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way); then re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
 Run `git diff HEAD` again to see the updated changes after fixes, then re-review.

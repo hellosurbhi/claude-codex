@@ -6,8 +6,11 @@ code = (
     "import importlib.util as u, sys\n"
     "s = u.spec_from_file_location('app_under_test', sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)\n"
     "assert m.add(2, 3) == 5 and m.add(-4, 4) == 0 and m.add(10, 7) == 17\n"
+    "print('CHECKS-DONE')\n"
 )
 try:
-    sys.exit(subprocess.run([sys.executable, "-I", "-c", code, sys.argv[1]], timeout=10, capture_output=True).returncode)
+    # WHY the sentinel (CodeRabbit r42): exit 0 alone is not proof the asserts ran, since module code may call os._exit(0) or sys.exit(0) on import.
+    r = subprocess.run([sys.executable, "-I", "-c", code, sys.argv[1]], timeout=10, capture_output=True)
+    sys.exit(0 if r.returncode == 0 and r.stdout.rstrip().endswith(b"CHECKS-DONE") else 1)
 except (subprocess.TimeoutExpired, OSError):
     sys.exit(1)

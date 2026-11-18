@@ -49,7 +49,10 @@ def verdict_block(ev):
 def is_clean(ev):
     """Clean means the block is EXACTLY a clean reply and nothing else: the Codex form (APPROVED plus four `none`
     lines) or the reviewer.sh form (APPROVED alone: it omits empty severity lines and rejects `none` placeholders)."""
-    return ev["exit"] == 0 and verdict_block(ev) in (["VERDICT: APPROVED"], ["VERDICT: APPROVED"] + [s + ": none" for s in SEVS])
+    # WHY per wrapper (CodeRabbit r42): each wrapper has exactly one clean form, so the other wrapper's form must not pass.
+    block = verdict_block(ev)
+    want = ["VERDICT: APPROVED"] if ev["wrapper"] in ("spy", "model") else ["VERDICT: APPROVED"] + [s + ": none" for s in SEVS]
+    return ev["exit"] == 0 and block == want
 
 def issued_before(evs, i):
     """Thread ids the wrapper itself issued (new, non-resume, successful calls) before event i."""

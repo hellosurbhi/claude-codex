@@ -36,14 +36,15 @@ with open(log, "a") as f:
 PY
 }
 CLEAN='VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
+CLEANR='VERDICT: APPROVED\n'
 LIMIT='codex-call: Codex turn did not complete\nERROR: You have hit your usage limit.\n'
 
 # (r11 a) a tests-only review after the quota hit is not the implementation review.
-mkrun; line fake 1 unknown "$LIMIT"; line spy 0 tests "$CLEAN"
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 tests "$CLEANR"
 expect fail "tests-only reviewer after the quota hit is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
-line spy 0 implementation "$CLEAN"
+line spy 0 implementation "$CLEANR"
 expect pass "a later clean implementation review is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
-mkrun; line spy 0 implementation "$CLEAN"; line fake 1 unknown "$LIMIT"
+mkrun; line spy 0 implementation "$CLEANR"; line fake 1 unknown "$LIMIT"
 expect fail "a review that ran BEFORE the quota hit does not count" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 
 # (r11 e) extra finding text after the five clean lines is not clean.
@@ -97,7 +98,7 @@ expect fail "a review that started before the quota reply but finished after is 
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "THREAD_ID: abc\n$CLEAN"
 expect fail "a THREAD_ID line inside a reviewer reply breaks clean" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 # plan-codex: the clean review must be of the current non-empty plan file.
-mkrun; line fake 1 unknown "$LIMIT"; line spy 0 plan "$CLEAN"
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 plan "$CLEANR"
 : > "$tmp/plan.md"
 expect fail "an empty plan file never satisfies the plan review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 printf 'the plan\n' > "$tmp/plan.md"
@@ -705,7 +706,7 @@ expect pass "and the event stderr holds the outage message once" test "$(python3
 expect pass "and the event logs no reply" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print(len([x for x in es if x["wrapper"]=="spy"])==1 and "VERDICT" not in wlog.reply_text(es[-1]))' "$here" "$EVLOG")" = True
 
 # r36: a quota reply from a bare direct codex call does not anchor the after-limit ordering, and a missing clause in a command is caught
-mkrun; line direct 1 unknown "$LIMIT"; line spy 0 implementation "$CLEAN"
+mkrun; line direct 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"
 expect fail "a direct (non-wrapper) quota event is not a usage limit anchor" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 expect fail "and check-limit-hit does not count it" python3 "$here/check-limit-hit.py" "$EVLOG"
 rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
@@ -733,5 +734,12 @@ PYF
 frc=$?; kill "$rpid" 2>/dev/null; wait "$rpid" 2>/dev/null
 expect pass "the spy completes against a named FIFO reader" test "$frc" = 0
 expect pass "and the reader got the reply once" test "$(grep -c '^VERDICT' "$tmp/ff.got")" = 1
+
+# r42 (CodeRabbit): check-impl needs proof the asserts ran, a rename counts its new path, and each wrapper has one clean form
+printf 'import os\nos._exit(0)\n' > "$tmp/exit0.py"; printf 'def add(a, b):\n    return a + b\n' > "$tmp/good.py"
+expect fail "a module that exits 0 on import is not a passing implementation" python3 "$here/check-impl.py" "$tmp/exit0.py"
+expect pass "a real add passes check-impl" python3 "$here/check-impl.py" "$tmp/good.py"
+expect pass "a rename from test_app.py to app.py is the implementation phase" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import evlog; print(evlog.phase_of("diff --git a/test_app.py b/app.py\nsimilarity index 90%\nrename from test_app.py\nrename to app.py\n"))' "$here")" = implementation
+expect fail "the Codex-form clean reply is not a clean reviewer.sh spy reply" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"spy","exit":0,"stdout":"VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n","stderr":""}) else 1)' "$here"
 
 exit $fail

@@ -106,6 +106,8 @@ cp scripts/codex-call.sh ~/.claude/config/scripts/codex-call.sh
 chmod +x ~/.claude/config/scripts/codex-call.sh
 ```
 
+The usage-limit fallback also needs the shared reviewer script `~/.claude/config/scripts/reviewer.sh` (it is not shipped in this repo, and it needs its own `claude` or `coderabbit` CLI). Without it a Codex quota error leaves the review unreviewed instead of falling back.
+
 Without it, each skill's availability check fails: `/plan-codex`, `/claude-codex` and the final review in `/tdd-claude-codex` stop and say Codex is unavailable, while `/execute-codex` and `/tdd-execute-codex` fall back to Claude implementing directly. Both TDD skills skip the Codex test audit.
 
 Put the model in a `review` profile at `~/.codex/review.config.toml` (one file per profile in Codex 0.164+):

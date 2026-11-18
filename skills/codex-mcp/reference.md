@@ -8,7 +8,8 @@ All calls run through `~/.claude/config/scripts/codex-call.sh` with Bash. The re
 ~/.claude/config/scripts/codex-call.sh --sandbox read-only --cd "$PWD" \
   --role ~/.claude/skills/plan-codex/codex-analyzer-role.md \
   "Review the plan at .claude/plan/<feature>.md for correctness, completeness,
-security and edge cases. Reply APPROVED if solid, or list specific issues to fix.
+security and edge cases. Return exactly one line VERDICT: APPROVED | WARNING | BLOCKED,
+then severity-prefixed findings (CRITICAL, HIGH, MEDIUM, LOW), or none.
 Be concise. Output result only, no reasoning process."
 ```
 

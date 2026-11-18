@@ -20,7 +20,8 @@ def phase_of(text):
     # WHY the changed paths decide for a diff, not code text: a diff that touches a non-test .py file is the implementation
     # phase however the function is written (`def add (a, b)`, a lambda, ...), and a diff of test files only is the tests
     # phase even when a test body contains `return a + b` (r24).
-    paths = re.findall(r"^diff --git a/(\S+\.py) b/", text, re.M)
+    # WHY both sides (CodeRabbit r42): a rename test_app.py -> app.py has a test old path but an implementation new path.
+    paths = [p for pair in re.findall(r"^diff --git a/(\S+) b/(\S+)$", text, re.M) for p in pair if p.endswith(".py")]
     if paths:
         return "implementation" if any(not _is_test_path(x) for x in paths) else "tests"
     if re.search(r"def\s+add\s*\(", text):
