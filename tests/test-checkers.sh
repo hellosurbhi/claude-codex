@@ -742,4 +742,12 @@ expect fail "the Codex-form clean reply is not a clean reviewer.sh spy reply" py
 mkdir -p "$tmp/em"; for m in mathops strops listops pkginfo; do printf 'import os\nos._exit(0)\n' > "$tmp/em/$m.py"; done
 expect fail "four modules that exit 0 on import do not pass check-modules" python3 "$here/check-modules.py" "$tmp/em"
 
+# r44: a clean review followed by a malformed review attempt is not approved
+rrun; REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
+expect pass "the clean tier R review is accepted before a malformed call" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+sleep 1; bash "$here/spy-reviewer.sh" Z "$tmp/rin.txt" "$tmp/out2.txt" >/dev/null 2>&1
+expect fail "a malformed review call after the clean one is the final event and is rejected (r44)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+bash "$here/spy-reviewer.sh" diagnose "$tmp/rin.txt" "$tmp/out3.txt" >/dev/null 2>&1
+expect fail "a diagnose call does not rescue it" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+
 exit $fail

@@ -86,8 +86,10 @@ limit_done = non_spy[li]["ts"]
 # review that blocked or failed (r14).
 # WHY only the production argument vector (tier E/R/S, input, output): `diagnose` or a malformed call is not a review (r29).
 valid_spy = lambda e: len(e["argv"]) >= 3 and e["argv"][0] in ("E", "R", "S") and bool(e["argv"][1]) and bool(e["argv"][2])
-spies = sorted((e for e in evs if e["wrapper"] == "spy" and valid_spy(e) and e.get("ts_start", e["ts"]) >= limit_done), key=lambda e: e.get("ts_start", e["ts"]))
-if not spies or not wlog.is_clean(spies[-1]):
+# WHY only `diagnose` is dropped before choosing the last call (r44): a malformed review attempt after a clean one is a newer failed
+# review, so it must stay in the list and decide; filtering it out let the older approval pass without a retry.
+spies = sorted((e for e in evs if e["wrapper"] == "spy" and (e["argv"] or [""])[0] != "diagnose" and e.get("ts_start", e["ts"]) >= limit_done), key=lambda e: e.get("ts_start", e["ts"]))
+if not spies or not valid_spy(spies[-1]) or not wlog.is_clean(spies[-1]):
     sys.exit(1)
 if phase is not None and spies[-1]["phase"] != phase:
     sys.exit(1)
