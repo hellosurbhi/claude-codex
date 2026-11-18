@@ -38,6 +38,11 @@ case "$name" in
     printf '%s' "$prompt" > "$inf"
     shown=("${@:1:$#-1}" "<prompt>")
     [[ -n "${EDIT_DURING:-}" ]] && printf 'edited while reviewing\n' >> "$EDIT_DURING"
+    [[ -n "${FAKE_CLAUDE_NOISE:-}" ]] && echo "$FAKE_CLAUDE_NOISE" > "$errf"
+    # WHY (r41): only a real `claude -p` review may answer. --version/--help or a missing -p is not a review, so it must not return the canned approval.
+    nonreview=1; for a in "${@:1:$#-1}"; do [[ $a == -p ]] && nonreview=0; done
+    for a in "$@"; do [[ $a == --version || $a == -v || $a == --help || $a == -h ]] && nonreview=1; done
+    if [[ $nonreview == 1 ]]; then echo "fake-model: not a review invocation" > "$errf"; rc=2; log; exit "$rc"; fi
     case "${FAKE_CLAUDE_MODE:-clean}" in
       fail) echo "partial reply on stdout" > "$outf"; rc=3 ;;
       findings) printf 'VERDICT: APPROVED\nMEDIUM: rename x\n' > "$outf" ;;

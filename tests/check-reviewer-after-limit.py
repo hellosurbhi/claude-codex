@@ -104,6 +104,10 @@ tier = spies[-1]["argv"][0]
 spy_in = spies[-1].get("input_text") or ""
 if mm.get("tier") != tier:
     sys.exit(1)
+# WHY argv (r41): the fake answers whatever it is called with, so a non-review call must be rejected from what production passed.
+margv = model.get("argv") or []
+if any(a in ("--version", "-v", "--help", "-h") for a in margv) or (mm["bin"] == "claude" and "-p" not in margv):
+    sys.exit(1)
 if mm["bin"] == "claude":
     # Sonnet reviewed the input file itself, so its prompt must carry the whole input verbatim.
     # WHY rstrip: reviewer.sh builds the prompt with command substitution, which drops trailing newlines.
@@ -171,7 +175,8 @@ if repo is not None:
             sys.exit(1)
         if subprocess.run(["git", "-C", repo, "diff", "--quiet", rootc, mm["base"], "--", "*.py"]).returncode != 0:
             sys.exit(1)
-        want = subprocess.run(["git", "-C", repo, "diff", "--no-color", mm["base"], head], capture_output=True, text=True).stdout
+        # WHY bytes (r41): text=True would turn CRLF into LF while the model event keeps the carriage returns.
+        want = subprocess.run(["git", "-C", repo, "diff", "--no-color", mm["base"], head], capture_output=True).stdout.decode("utf-8", "surrogateescape")
         if want != (model.get("input_text") or ""):
             sys.exit(1)
         sys.exit(0)
