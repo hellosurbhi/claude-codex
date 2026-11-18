@@ -15,8 +15,11 @@ CONFIG="${SPY_CONFIG_DIR:-$HOME/.claude/config}"
 REVIEWER_SH="$CONFIG/scripts/reviewer.sh"
 top="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 EVLOG="${EVLOG:-$(cd "$top/.." && pwd)/wrapper.jsonl}"
-logo=""; priv="$(mktemp -d)"; snap="$(mktemp)"; cap_o="$(mktemp)"; cap_e="$(mktemp)"
-trap 'rm -rf "$priv" "$snap" "$cap_o" "$cap_e" "$logo"' EXIT
+# WHY the private HOME lives next to the event log and is kept for the whole run (r45): production caches a verdict by input hash under
+# $HOME/.claude/state, so a fresh HOME per call hid cache hits that the real script would return without any model running.
+priv="$(dirname "$EVLOG")/spy-home"; mkdir -p "$priv"
+logo=""; snap="$(mktemp)"; cap_o="$(mktemp)"; cap_e="$(mktemp)"
+trap 'rm -rf "$snap" "$cap_o" "$cap_e" "$logo"' EXIT
 in="${2:-}"; [[ -f "$in" ]] && cp "$in" "$snap"
 # WHY the digest is taken at call start: it pins which code state this review covered, so code changed afterwards is detectable.
 tree="$(python3 "$here/treehash.py" "$top" 2>/dev/null || true)"
