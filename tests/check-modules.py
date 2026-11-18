@@ -17,8 +17,11 @@ assert pk.describe() is not None
 for m in (mo, so, lo, pk):
     r = doctest.testmod(m)
     assert r.attempted > 0 and r.failed == 0, (m.__name__, r)
+print('CHECKS-DONE')
 '''
 try:
-    sys.exit(subprocess.run([sys.executable, "-I", "-c", code, repo], timeout=30, capture_output=True).returncode)
+    # WHY the sentinel (CodeRabbit r43): exit 0 alone is not proof the checks ran (a module may exit 0 on import).
+    r = subprocess.run([sys.executable, "-I", "-c", code, repo], timeout=30, capture_output=True)
+    sys.exit(0 if r.returncode == 0 and r.stdout.rstrip().endswith(b"CHECKS-DONE") else 1)
 except (subprocess.TimeoutExpired, OSError):
     sys.exit(1)

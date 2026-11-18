@@ -334,17 +334,23 @@ expect pass "r33: /dev/fd/0 with 0>&1 delivers once" test "$(printf '%s\n' "$got
 expect pass "r33: the unobservable pipe delivery is not logged as a reply" test "$(evcount)" = 0
 
 # r20: the reviewed patch must reproduce the final files from the baseline (hunk locations and context included).
+orderfake() { python3 - "$1" <<'PY'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1])]
+fake = [r for r in rows if r["wrapper"] == "fake"]; rest = [r for r in rows if r["wrapper"] != "fake"]
+fake[0]["ts"] = rest[0]["ts_start"] - 5; fake[0]["ts_start"] = fake[0]["ts"] - 1
+open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in fake + rest) + "\n")
+open(sys.argv[1] + ".trunc", "w").write("\n".join(json.dumps(dict(r, input_text=(r["input_text"] or "").replace("plan line two", "")) if r["wrapper"] == "model" else r) for r in fake + rest) + "\n")
+PY
+}
+# WHY fixed identities (CodeRabbit r43): commit-tree fails on a host with no git user configured.
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
 commitbase() { (cd "$tmp/run/repo" && git add -A >/dev/null 2>&1 && git update-ref HEAD "$(echo base | git commit-tree "$(git write-tree)")"); }
 mkrun; cd "$tmp/run/repo"; printf 'k\nk\nk\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
 printf 'k\nNEW\nk\nk\ndef add(a, b):\n    return a + b\n' > app.py
 git diff --no-color HEAD -- app.py > "$tmp/good.diff"
 bash "$here/spy-reviewer.sh" S "$tmp/good.diff" "$tmp/out.txt" >/dev/null 2>&1; : > "$tmp/x"
-line fake 1 unknown "$LIMIT" ; python3 - "$EVLOG" <<'PY'
-import json,sys
-rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
-fake[0]["ts"]=spy[0]["ts_start"]-5; fake[0]["ts_start"]=fake[0]["ts"]-1
-open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in fake+spy)+"\n")
-PY
+line fake 1 unknown "$LIMIT"; orderfake "$EVLOG"
 expect pass "a reviewed patch that reproduces the final file is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 # same added line, wrong location: the patch inserts NEW after the second k
 sed -e 's/^@@.*/@@ -1,4 +1,5 @@/' "$tmp/good.diff" > /dev/null
@@ -608,15 +614,6 @@ expect pass "deleting an imported helper module changes the state hash" test "$b
 
 # r38: the launcher runs the REAL reviewer.sh, so production decides tier, base and committed-state rules; the checker asserts what ran.
 commit2() { (cd "$tmp/run/repo" && git add -A >/dev/null 2>&1 && git update-ref HEAD "$(echo next | git commit-tree "$(git write-tree)" -p HEAD)"); }
-orderfake() { python3 - "$1" <<'PY'
-import json, sys
-rows = [json.loads(l) for l in open(sys.argv[1])]
-fake = [r for r in rows if r["wrapper"] == "fake"]; rest = [r for r in rows if r["wrapper"] != "fake"]
-fake[0]["ts"] = rest[0]["ts_start"] - 5; fake[0]["ts_start"] = fake[0]["ts"] - 1
-open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in fake + rest) + "\n")
-open(sys.argv[1] + ".trunc", "w").write("\n".join(json.dumps(dict(r, input_text=(r["input_text"] or "").replace("plan line two", "")) if r["wrapper"] == "model" else r) for r in fake + rest) + "\n")
-PY
-}
 rrun() { # committed edit on top of the root commit; REVIEW_BASE_SHA is R0 = the root commit
   mkrun; cd "$tmp/run/repo"; printf 'x=1\n' > app.py; commitbase; R0="$(git rev-parse HEAD)"; line fake 1 unknown "$LIMIT"
   printf 'x=1\ndef add(a, b):\n    return a + b\n' > app.py; commit2; printf 'in\n' > "$tmp/rin.txt"
@@ -741,5 +738,8 @@ expect fail "a module that exits 0 on import is not a passing implementation" py
 expect pass "a real add passes check-impl" python3 "$here/check-impl.py" "$tmp/good.py"
 expect pass "a rename from test_app.py to app.py is the implementation phase" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import evlog; print(evlog.phase_of("diff --git a/test_app.py b/app.py\nsimilarity index 90%\nrename from test_app.py\nrename to app.py\n"))' "$here")" = implementation
 expect fail "the Codex-form clean reply is not a clean reviewer.sh spy reply" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"spy","exit":0,"stdout":"VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n","stderr":""}) else 1)' "$here"
+
+mkdir -p "$tmp/em"; for m in mathops strops listops pkginfo; do printf 'import os\nos._exit(0)\n' > "$tmp/em/$m.py"; done
+expect fail "four modules that exit 0 on import do not pass check-modules" python3 "$here/check-modules.py" "$tmp/em"
 
 exit $fail
