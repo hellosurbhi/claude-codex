@@ -173,6 +173,9 @@ if repo is not None:
         if [l for l in subprocess.run(["git", "-C", repo, "status", "--porcelain", "--ignored", "-uall", "--", "*.py"], capture_output=True, text=True).stdout.splitlines() if l[:2] in ("??", "!!") and not re.search(r"(^|/)(node_modules|\.claude|__pycache__|\.pytest_cache)/", l[3:])] or \
            subprocess.run(["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True).stdout.strip():
             sys.exit(1)
+        # WHY the model-time digest (CodeRabbit r47): the launcher digest is taken at call start, so the code state CodeRabbit really saw must match it too.
+        if mm.get("tree") in (None, "none", "") or mm.get("tree") != spies[-1].get("tree_sha256"):
+            sys.exit(1)
         if mm.get("dirty") != "0" or mm.get("head") != head or mm.get("base") in (None, "none", "") or not rootc:
             sys.exit(1)
         if subprocess.run(["git", "-C", repo, "diff", "--quiet", rootc, mm["base"], "--", "*.py"]).returncode != 0:

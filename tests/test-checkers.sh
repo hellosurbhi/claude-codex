@@ -6,6 +6,9 @@ set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 fail=0
+# WHY a hard prerequisite (CodeRabbit r47): the launcher cases run the REAL installed reviewer.sh (~/.claude/config/scripts/reviewer.sh, or
+# SPY_CONFIG_DIR); without it they would fail in confusing ways, so stop with one clear line.
+[[ -f "${SPY_CONFIG_DIR:-$HOME/.claude/config}/scripts/reviewer.sh" ]] || { echo "FAIL: installed reviewer.sh not found under ${SPY_CONFIG_DIR:-$HOME/.claude/config}/scripts (required by this suite)"; exit 1; }
 ok()  { echo "PASS: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
 expect() { local want="$1" name="$2"; shift 2; "$@" >/dev/null 2>&1; local rc=$?; if { [[ $want == pass && $rc -eq 0 ]] || [[ $want == fail && $rc -ne 0 ]]; }; then ok "$name"; else bad "$name (rc=$rc, wanted $want)"; fi; }
@@ -392,12 +395,7 @@ expect pass "every skill and command carries identical mirrored instructions" py
 # r21: reviewed-patch hardening, CRLF, single stderr delivery, mirror clause equality, codex-mcp scoping
 limit_then_spy() { # diff-file : runs the spy on it from the repo, then orders a quota event before it
   bash "$here/spy-reviewer.sh" S "$1" "$tmp/out.txt" >/dev/null 2>&1
-  line fake 1 unknown "$LIMIT"; python3 - "$EVLOG" <<'PY'
-import json,sys
-rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
-fake[0]["ts"]=spy[0]["ts_start"]-5; fake[0]["ts_start"]=fake[0]["ts"]-1
-open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in fake+spy)+"\n")
-PY
+  line fake 1 unknown "$LIMIT"; orderfake "$EVLOG"
 }
 mkrun; cd "$tmp/run/repo"; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
 printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py
@@ -767,5 +765,19 @@ for op in /dev/stdout /dev/fd/1 /dev/stderr; do
   s_out="$(spyrun "$op" 2>/dev/null)"; s_rc=$?
   expect pass "direct production and the launcher agree on rc and stdout for $op (r46)" test "$d_rc:$d_out" = "$s_rc:$s_out"
 done
+
+# r47 (CodeRabbit): model-time tree digest must match, the suite names its prerequisite, ordering keeps model events after the quota
+rrun; REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
+python3 - "$EVLOG" "$tmp/evT.jsonl" <<'PYT'
+import json, sys
+out = open(sys.argv[2], "w")
+for l in open(sys.argv[1]):
+    e = json.loads(l)
+    if e["wrapper"] == "model": e["meta"]["tree"] = "0" * 64
+    out.write(json.dumps(e) + "\n")
+PYT
+expect fail "a CodeRabbit review whose model-time tree digest differs from the launcher's is rejected (r47)" python3 "$here/check-reviewer-after-limit.py" "$tmp/evT.jsonl" --repo "$tmp/run/repo"
+expect pass "a model event keeps its place after the quota event once the quota is ordered" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); q=[e for e in es if e["wrapper"]=="fake"][0]; print(all(e["ts"]>q["ts"] for e in es if e["wrapper"]=="model"))' "$here" "$EVLOG")" = True
+expect fail "the suite stops with a clear line when the installed reviewer.sh is missing" env SPY_CONFIG_DIR="$tmp/no-such-config" bash "$here/test-checkers.sh"
 
 exit $fail
