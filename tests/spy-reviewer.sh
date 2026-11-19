@@ -27,15 +27,18 @@ run="$$-$RANDOM"
 # WHY production gets the caller's arguments UNCHANGED (r39): the output path is part of the contract production implements. For example
 # reviewer.sh runs `run_sonnet 2>/dev/null`, so a reply sent to /dev/stderr is lost in production; a launcher that substituted its own
 # output file would deliver (and log) a verdict the real script never delivers. Only what production really emitted is observed:
-# its stdout, its stderr and, for a regular-file output path, the file it wrote. Both streams are replayed once, nothing is re-written.
+# its stdout, its stderr and, for a regular-file output path, the file it wrote. Both streams are passed through live by tee and logged once, nothing is re-written.
 # WHY HOME is private only for this child: the skill's own shell keeps the real HOME (keychain logins follow it), while the
 # reviewer's cache and queue go to a directory that is deleted afterwards. CLAUDE_CONFIG_DIR keeps reviewer.sh's own lib sourcing.
-HOME="$priv" CLAUDE_CONFIG_DIR="$CONFIG" PATH="$here/fake-models:$PATH" EVLOG="$EVLOG" REVIEW_RUN="$run" REVIEWER_TIER="${1:-}" \
-  bash "$REVIEWER_SH" "$@" > "$cap_o" 2> "$cap_e"
-rc=$?
+# WHY both streams stay PIPES through tee, not files (r46): production decides from the kind of /dev/stdout it sees (save_cache tests `-f`
+# and reads it back), so redirecting stdout to a regular file made `/dev/stdout` behave differently from a caller's pipe. fd 9 (not 3) carries
+# stdout past the stderr tee so a caller's own fd 3 alias is left untouched.
+rcf="$(mktemp)"
+{ { HOME="$priv" CLAUDE_CONFIG_DIR="$CONFIG" PATH="$here/fake-models:$PATH" EVLOG="$EVLOG" REVIEW_RUN="$run" REVIEWER_TIER="${1:-}" \
+      bash "$REVIEWER_SH" "$@"; echo $? > "$rcf"; } 2>&1 1>&9 9>&- | tee "$cap_e" >&2; } 9>&1 | tee "$cap_o"
+rc="$(cat "$rcf" 2>/dev/null || echo 1)"; rm -f "$rcf"
 out="${3:-}"
 logo="$(mktemp)"; cat "$cap_o" > "$logo"
 [[ $rc -eq 0 && -n "$out" && "$out" != /dev/* && -f "$out" ]] && cat "$out" >> "$logo"
 TREE_SHA256="$tree" EVSTART="$EVSTART" EV_META="run=$run" python3 "$here/evlog.py" "$EVLOG" spy "$rc" "" "" "$snap" "$logo" "$cap_e" -- "$@"
-cat "$cap_o"; cat "$cap_e" >&2
 exit "$rc"

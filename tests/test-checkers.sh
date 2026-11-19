@@ -758,4 +758,14 @@ expect pass "the repeat review on unchanged input runs through the same private 
 orderfake "$EVLOG"
 expect fail "a cached approval with no model run behind it is rejected for the new commit (r45)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 
+# r46: the launcher must behave like a direct production call for stream aliases (pipes stay pipes)
+for op in /dev/stdout /dev/fd/1 /dev/stderr; do
+  mkrun; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"; mkdir -p "$tmp/dh"
+  # WHY the real config path is fixed first: in one assignment list `HOME=... CLAUDE_CONFIG_DIR=$HOME/...` would expand against the NEW HOME.
+  cfg="$HOME/.claude/config"
+  d_out="$(HOME="$tmp/dh" CLAUDE_CONFIG_DIR="$cfg" PATH="$here/fake-models:$PATH" EVLOG="$tmp/direct.jsonl" bash "$cfg/scripts/reviewer.sh" S "$tmp/plan.md" "$op" 2>/dev/null)"; d_rc=$?
+  s_out="$(spyrun "$op" 2>/dev/null)"; s_rc=$?
+  expect pass "direct production and the launcher agree on rc and stdout for $op (r46)" test "$d_rc:$d_out" = "$s_rc:$s_out"
+done
+
 exit $fail
