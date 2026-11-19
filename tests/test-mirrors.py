@@ -107,5 +107,12 @@ for n in NAMES:
         for m in re.finditer(r"(?:Run |output of )`git diff (?:HEAD|\$START_SHA)([^`]*)`", open(f, encoding="utf-8").read()):
             if EXCL not in m.group(0):
                 bad.append("%s: reviewer diff command lacks the secret exclude pathspec: %s" % (os.path.relpath(f, root), m.group(0)))
+# WHY (P3 matrix on 134faf7): codex-mcp's no-cap paragraph offered only tier R (committed changes) as a reviewer fallback, so in 2 of 7
+# usage-limit runs the model sent an uncommitted tree to tier R, which answers "Review complete" on an empty diff and is not a review.
+# Both codex-mcp copies must also offer tier S and say an uncommitted tree is never sent to tier R.
+for f in (os.path.join(root, "skills", "codex-mcp", "SKILL.md"), os.path.join(root, "skills", "codex-mcp", "reference.md")):
+    t = open(f, encoding="utf-8").read()
+    if "reviewer.sh S <diff-file> <out-file>" not in t or "never an uncommitted tree" not in t:
+        bad.append("%s: no-cap paragraph lacks the tier S fallback or the uncommitted-tree-never-tier-R rule" % os.path.relpath(f, root))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)
