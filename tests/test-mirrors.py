@@ -100,5 +100,12 @@ for n in NAMES:
         # clauses are already compared clause by clause above; the other paragraphs are compared whole
         if x != y and (n, a) not in [(m, b) for m in ("claude-codex", "tdd-claude-codex", "tdd-execute-codex") for b in ("**Failed review**", "**Failed audit**")]:
             bad.append("%s: paragraph %r differs between skill and command" % (n, a[:40]))
+# WHY (CodeRabbit r48): the reviewer must not read tracked secret files either, so every reviewer diff command carries the exclude pathspec.
+EXCL = "-- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'"
+for n in NAMES:
+    for f in files(n):
+        for m in re.finditer(r"(?:Run |output of )`git diff (?:HEAD|\$START_SHA)([^`]*)`", open(f, encoding="utf-8").read()):
+            if EXCL not in m.group(0):
+                bad.append("%s: reviewer diff command lacks the secret exclude pathspec: %s" % (os.path.relpath(f, root), m.group(0)))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)

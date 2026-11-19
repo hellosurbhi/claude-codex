@@ -61,7 +61,7 @@ Pass the installed path `~/.claude/skills/plan-codex/codex-analyzer-role.md` as 
 
 Save the returned `THREAD_ID`.
 
-**Parse the exact `VERDICT:` line** (line-anchored; exactly one must be present, with the value APPROVED, WARNING or BLOCKED; anything else is a failed call handled by the mid-call failure rules above):
+**Parse the exact `VERDICT:` line** (line-anchored; exactly one must be present, with the value APPROVED, WARNING or BLOCKED; anything else is a failed call handled by the mid-call failure rules above). From Codex, a verdict line that is not followed by the CRITICAL, HIGH, MEDIUM and LOW lines (`none` when empty) is also malformed; the reviewer.sh fallback is the one reviewer whose clean reply is `VERDICT: APPROVED` alone:
 Every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
 - **Any findings at any severity** (BLOCKED, WARNING or APPROVED with MEDIUM/LOW findings listed) → critically evaluate each one (see below), fix every accepted finding in the plan, update `.claude/plan/<feature-name>.md`, and re-audit.
 - **Done** → a round that lists no findings, or whose every finding was dropped through the discussion path below. Only then go to Phase 3.

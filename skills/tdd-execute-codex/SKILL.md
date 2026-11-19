@@ -89,7 +89,7 @@ Before the audit, run `git add -N <each file this task created>` in your own she
 - `prompt`:
 
 ```
-Run `git diff $START_SHA` to see newly created test files. Review the tests ONLY (no implementation exists yet).
+Run `git diff $START_SHA -- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'` to see newly created test files. Review the tests ONLY (no implementation exists yet).
 
 Evaluate:
 1. Do the tests cover the described task requirements comprehensively?

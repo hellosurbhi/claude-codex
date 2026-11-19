@@ -91,7 +91,7 @@ Pass the installed path `~/.claude/skills/tdd-claude-codex/codex-analyzer-role.m
 - `prompt`:
 
 ```
-Run `git diff $START_SHA` to see newly created test files. Review the tests ONLY (no implementation exists yet).
+Run `git diff $START_SHA -- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'` to see newly created test files. Review the tests ONLY (no implementation exists yet).
 
 Evaluate:
 1. Do the tests cover the described task requirements comprehensively?
@@ -178,7 +178,7 @@ Call `codex-call.sh` with:
 - `prompt`:
 
 ```
-Run `git diff $START_SHA` to see all changes made during this session, then review them.
+Run `git diff $START_SHA -- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'` to see all changes made during this session, then review them.
 
 Return ONLY a structured verdict in this exact format — no explanations, no prose:
 
@@ -224,7 +224,7 @@ Address ALL accepted findings before re-reviewing:
 - Before re-calling, run `git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'`); then re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
-Run `git diff $START_SHA` again to see the updated changes, then re-review.
+Run `git diff $START_SHA -- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'` again to see the updated changes, then re-review.
 
 Return ONLY the structured verdict in the same format.
 ```

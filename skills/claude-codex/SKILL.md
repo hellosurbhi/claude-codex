@@ -77,7 +77,7 @@ Before the call, run `git add -N <each file this task created>` in your own shel
 - `prompt`:
 
 ```
-Run `git diff HEAD` to see all uncommitted changes, then review them.
+Run `git diff HEAD -- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'` to see all uncommitted changes, then review them.
 
 Return ONLY a structured verdict in this exact format — no explanations, no prose:
 
@@ -123,7 +123,7 @@ Address ALL accepted findings before re-reviewing:
 - Before re-calling, run `git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'`); then re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
-Run `git diff HEAD` again to see the updated changes after fixes, then re-review.
+Run `git diff HEAD -- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'` again to see the updated changes after fixes, then re-review.
 
 Return ONLY the structured verdict in the same format.
 ```
