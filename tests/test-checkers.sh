@@ -2342,6 +2342,26 @@ expect pass "hook: command substitution and an unquoted heredoc are denied" test
 x
 EOF' | cut -d' ' -f1)" = denydeny
 expect pass "hook: malformed input and a missing scratch root fail closed" test "$(echo '{bad' | PROOF_SCRATCH_ROOT="$hr" python3 "$hk" | grep -c '"deny"')$(echo '{}' | env -u PROOF_SCRATCH_ROOT python3 "$hk" | grep -c '"deny"')" = 11
+hdeny() { test "$(hbash "$1" | cut -d' ' -f1)" = deny; }
+expect pass "hook: python3 running a file inside the repo is denied" hdeny 'python3 app.py'
+expect pass "hook: python3 -m unittest is denied" hdeny 'python3 -m unittest'
+expect pass "hook: python3 -c is denied" hdeny 'python3 -c "print(1)"'
+for c in 'bash app.sh' 'sh -c "id"' 'node x.js' 'make' 'pytest' 'env ls' 'xargs ls' 'find . -exec ls {} +' 'PATH=/tmp ls' 'time ls'; do
+  expect pass "hook: runner or interpreter denied: $c" hdeny "$c"
+done
+for c in 'git -c core.pager=id log' 'git log -c' 'git diff --output=/tmp/x' 'git diff -o x' 'git branch newbranch' 'git branch -D main' 'git config --list' 'git commit -m x' 'git push' 'git -C / status' 'git log --exec-path=/tmp' 'git alias.x'; do
+  expect pass "hook: git form denied: $c" hdeny "$c"
+done
+for c in 'git status' 'git log --oneline -3' 'git diff HEAD' 'git branch --show-current' 'git rev-parse HEAD'; do
+  expect pass "hook: read-only git allowed: $c" test "$(hbash "$c")" = "allow "
+done
+expect pass "hook: cd outside the repo is denied" hdeny 'cd /tmp && ls'
+expect pass "hook: cd through a symlink out of the repo is denied" hdeny 'cd link && ls'
+expect pass "hook: cd inside the repo is allowed" test "$(hbash 'cd .claude/plan && ls')" = "allow "
+expect pass "hook: writing .git/config by Write is denied" test "$(hook Write "{\"file_path\":\"$hr/.git/config\"}" | cut -d' ' -f1)" = deny
+expect pass "hook: writing .git/config by redirect is denied" hdeny 'echo x > .git/config'
+expect pass "hook: a redirect into the read-only skills dir is denied" hdeny 'echo x > ~/.claude/skills/plan-codex/SKILL.md'
+expect pass "hook: Agent is allowed (a subagent's own calls reach this hook, probed)" test "$(hook Agent '{"prompt":"x"}')" = "allow "
 expect pass "the real task puts the confirmation follow-up before the final review (or asks for the bare verdict) so the last call stays clean" grep -q "so the last Codex call of the run is still the skill's own final review" "$here/review-loop-proof.sh"
 
 # Round 23: an early exit of the REAL codex-call.sh (bad arguments, missing prompt or role file) never reaches the codex shim, so it used to leave no event and an earlier clean review stood

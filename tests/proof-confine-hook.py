@@ -6,7 +6,9 @@
 # WHY this exists (cc11 bypass review): a headless `claude -p` run denies edits to an existing .claude/plan file in every other permission mode, so the proof runs with
 # prompts off (bypassPermissions). Probed with claude 2.1.323: a PreToolUse hook still runs, and still denies, under bypassPermissions. This hook is then the ONLY
 # gate, so it allows exactly what the skills and the proof need and nothing else: reads and edits whose resolved real path is inside the scratch repo, whole Bash
-# commands made of the prescribed wrapper scripts and a few read-only helpers, and the Skill/Task/Agent tools. What breaks if it is loosened: the agent runs unprompted
+# commands made of the prescribed wrapper scripts and a few read-only helpers, and the Skill/Task/Agent tools (no interpreter or runner such as python, bash <file>, node, make, env, xargs or find -exec).
+# WHY Agent/Task are allowed: probed with claude 2.1.323 under bypassPermissions that a subagent's own Read and Bash calls reach this hook (payload carries agent_id and
+# agent_type; evidence review-work/cc11-allow-probe/agentprobe/hook.log), so a subagent is confined exactly like the main session. If a CLI update stops that, deny Agent/Task here. What breaks if it is loosened: the agent runs unprompted
 # on the owner's machine with nothing between it and the home directory. The start-up probe in review-loop-proof.sh feeds an out-of-bounds call straight to this file.
 import json, os, re, sys
 
@@ -34,6 +36,12 @@ def inside(p, base):
 
 def in_root(p):
     return bool(ROOT) and inside(real(p), ROOT)
+
+def writable(p):
+    # WHY not under .git: git status/diff/log read .git/config and may run programs it names (core.fsmonitor, diff.<driver>.textconv, core.pager), so a config the
+    # agent wrote there would turn the allowed read-only git commands into unconfined code execution.
+    r = real(p)
+    return inside(r, ROOT) and not inside(r, os.path.join(ROOT, ".git")) and ".git" not in os.path.relpath(r, ROOT).split(os.sep)[:1]
 
 def readable(p):
     r = real(p)
@@ -168,8 +176,8 @@ def check_simple(argv, reds):
         if op in (">", ">>"):
             if target == "/dev/null":
                 continue
-            if not in_root(target):
-                raise Deny("redirect target outside the scratch repo: " + target)
+            if not writable(target):
+                raise Deny("redirect target outside the scratch repo or inside .git: " + target)
         elif op == "<":
             if not readable(target):
                 raise Deny("redirect source outside the scratch repo: " + target)
@@ -194,8 +202,8 @@ def check_simple(argv, reds):
         return
     if prog == "mkdir":
         for a in args:
-            if not a.startswith("-") and not in_root(a):
-                raise Deny("mkdir outside the scratch repo")
+            if not a.startswith("-") and not writable(a):
+                raise Deny("mkdir outside the scratch repo or inside .git")
         if any(a.startswith("-") and a != "-p" for a in args):
             raise Deny("mkdir option not allowed")
         return
@@ -217,8 +225,10 @@ def check_simple(argv, reds):
     if prog == "git":
         if not args or args[0] not in GIT_READ:
             raise Deny("git subcommand not allowed: " + (args[0] if args else ""))
+        if args[0] == "branch" and any(not a.startswith("-") or a not in ("-a", "-r", "-v", "-vv", "--list", "--show-current") for a in args[1:]):
+            raise Deny("git branch may only list")
         for a in args[1:]:
-            if a.startswith(("--output", "--git-dir", "--work-tree", "-C", "--exec-path", "--ext-diff", "--no-index")) or a in ("-c",):
+            if a in ("-c", "-o", "-C") or a.startswith(("--output", "--git-dir", "--work-tree", "-C", "-c", "-o", "--exec-path", "--ext-diff", "--no-index", "--upload-pack", "--config", "--textconv", "--open-files-in-pager", "--paginate", "-O")):
                 raise Deny("git option not allowed: " + a)
             if not a.startswith("-") and (a.startswith(("/", "~")) or ".." in a.split("/")) and not in_root(a):
                 raise Deny("git path outside the scratch repo: " + a)
@@ -227,12 +237,6 @@ def check_simple(argv, reds):
         if args == ["--version"]:
             return
         raise Deny("only `codex --version` may be run directly")
-    if prog == "python3":
-        if len(args) >= 2 and args[0] == "-m" and args[1] in ("unittest", "doctest"):
-            return
-        if len(args) >= 1 and not args[0].startswith("-") and args[0].endswith(".py") and in_root(args[0]):
-            return
-        raise Deny("python3 may only run unittest, doctest or a .py file inside the scratch repo")
     raise Deny("command not allowed: " + prog)
 
 def check_bash(cmd):
@@ -245,7 +249,7 @@ def decide(d):
         raise Deny("PROOF_SCRATCH_ROOT is not set")
     CWD = d.get("cwd") or ROOT
     tool, ti = d.get("tool_name", ""), d.get("tool_input") or {}
-    if tool in ("Skill", "Task", "Agent", "TodoWrite", "TaskOutput", "SendMessage"):
+    if tool in ("Skill", "Task", "Agent", "TaskOutput", "TodoWrite"):
         return
     if tool in ("Read", "Glob", "Grep"):
         p = ti.get("file_path") or ti.get("path") or CWD
@@ -254,8 +258,8 @@ def decide(d):
         return
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
         p = ti.get("file_path") or ti.get("notebook_path")
-        if not p or not in_root(p):
-            raise Deny(tool + " target outside the scratch repo: " + str(p))
+        if not p or not writable(p):
+            raise Deny(tool + " target outside the scratch repo or inside .git: " + str(p))
         return
     if tool == "Bash":
         if ti.get("run_in_background"):
@@ -271,7 +275,7 @@ def main():
     tool = "?"
     try:
         d = json.load(sys.stdin)
-        tool = d.get("tool_name", "?")
+        tool = d.get("tool_name", "?") + (" [subagent %s]" % d["agent_id"] if d.get("agent_id") else "")
         decide(d)
         verdict, why = "allow", ""
     except Deny as e:
