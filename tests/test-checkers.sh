@@ -89,13 +89,21 @@ mkdir -p "$tmp/bin"
 printf '#!/usr/bin/env bash\n[[ -n "${EDIT_DURING:-}" ]] && printf "edited while reviewing\\n" >> "$EDIT_DURING"\nprintf "VERDICT: APPROVED\\n"\n' > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"
 # (r12) cases. Each was red against the r11 checkers.
 # WHY start time: a review that BEGAN before the quota reply (even if it finished after) is not a reaction to it.
-mkrun; python3 - "$EVLOG" <<'PY'
+# WHY the fixture is built with `line` (a valid launcher event plus its fake model event) and only then retimed: every other check in
+# the checker passes, so ONLY the start-time rule decides these cases. The earlier hand-built rows failed on missing model events first,
+# so removing the start-time rule left the test green (CodeRabbit/Codex cc11-main-r1).
+retime() { python3 - "$EVLOG" "$@" <<'PYT'
 import json, sys
-clean = "VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n"
-ev = lambda seq, w, code, st, ts, out, ph: {"seq": seq, "wrapper": w, "argv": [], "exit": code, "resume": None, "thread_id": None, "phase": ph, "stdout": out, "stderr": "", "ts_start": st, "ts": ts}
-lim = "ERROR: You have hit your usage limit.\n"
-open(sys.argv[1], "w").write("\n".join(json.dumps(e) for e in [ev(1, "spy", 0, 5, 20, clean, "implementation"), ev(2, "fake", 1, 9, 10, lim, "unknown")]) + "\n")
-PY
+rows = [json.loads(l) for l in open(sys.argv[1])]
+for spec in sys.argv[2:]:
+    i, st, ts = spec.split(":")
+    rows[int(i)]["ts_start"] = float(st); rows[int(i)]["ts"] = float(ts)
+open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PYT
+}
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; retime 0:9:10 1:11:20
+expect pass "control: a review that started after the quota reply and finished later is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; retime 0:9:10 1:5:20
 expect fail "a review that started before the quota reply but finished after is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 # THREAD_ID text inside a spy reply is extra text, not a transport line.
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "THREAD_ID: abc\n$CLEAN"
@@ -134,13 +142,17 @@ expect pass "the one-line reviewer.sh approval counts as clean" python3 "$here/c
 mkrun; line fake 0 unknown 'THREAD_ID: t\nVERDICT: CLEAN\n'
 expect fail "VERDICT: CLEAN is not a valid verdict" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.valid_verdict(wlog.load(sys.argv[2])[0]) else 1)' "$here" "$EVLOG"
 # the LAST review by start time decides, even when an older review finished later.
-mkrun; python3 - "$EVLOG" <<'PY'
+# WHY a valid approval plus a valid-shaped blocked review: only the ordering (start time vs finish time) decides the verdict here.
+addblocked() { python3 - "$EVLOG" <<'PYB'
 import json, sys
-ev = lambda seq, w, code, st, ts, out: {"seq": seq, "wrapper": w, "argv": [], "exit": code, "resume": None, "thread_id": None, "phase": "implementation", "stdout": out, "stderr": "", "ts_start": st, "ts": ts}
-lim = "ERROR: You have hit your usage limit.\n"
-rows = [ev(1, "fake", 1, 0.5, 1, lim), ev(2, "spy", 0, 5, 30, "VERDICT: APPROVED\n"), ev(3, "spy", 0, 10, 15, "VERDICT: BLOCKED\nCRITICAL: bad\n")]
+rows = [json.loads(l) for l in open(sys.argv[1])]
+rows.append({"seq": 9, "wrapper": "spy", "prov": None, "argv": ["S", "in", "out"], "exit": 0, "resume": None, "thread_id": None, "phase": "implementation", "stdout": "VERDICT: BLOCKED\nCRITICAL: bad\n", "stderr": "", "ts_start": 10, "ts": 15, "meta": {"run": "r9"}, "input_text": "in"})
 open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
-PY
+PYB
+}
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; retime 0:0.5:1 1:5:30
+expect pass "control: the same approval with no newer review is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+addblocked
 expect fail "an older approval that finished later does not override a newer blocked review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 # a failed spy call (missing input) is logged and, being the latest review, defeats an earlier approval.
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; cd "$tmp/run/repo"
