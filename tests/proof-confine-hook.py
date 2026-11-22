@@ -45,7 +45,14 @@ def writable(p):
 
 def readable(p):
     r = real(p)
-    return inside(r, ROOT) or any(inside(r, real(x)) for x in READ_ONLY_EXTRA)
+    if inside(r, ROOT) or any(inside(r, real(x)) for x in READ_ONLY_EXTRA):
+        return True
+    # WHY the lexical path under the skills dir too: each ~/.claude/skills/<name> is a symlink into the owner's checkout of the skills (here a worktree), so its real path
+    # is outside the skills dir and the check above refused the skill's own role file. normpath collapses `..` first, so skills/../x is not accepted. Read-only, owner-installed.
+    ex = os.path.expanduser(p)
+    if not os.path.isabs(ex):
+        ex = os.path.join(CWD, ex)
+    return inside(os.path.normpath(ex), os.path.join(HOME, ".claude", "skills"))
 
 def lex(cmd):
     """Split a bash command into simple commands. Returns [(argv, redirects)] and raises Deny on anything not understood.
@@ -75,10 +82,12 @@ def lex(cmd):
         elif c == '"':
             j = i + 1; buf = ""
             while j < n and cmd[j] != '"':
-                if cmd[j] == "\\" and j + 1 < n and cmd[j + 1] in '"\\$`':
+                if cmd[j] == "\\" and j + 1 < n and cmd[j + 1] in '"\\':
                     buf += cmd[j + 1]; j += 2; continue
-                if cmd[j] == "`" or cmd.startswith("$(", j) or cmd.startswith("${", j):
-                    raise Deny("command or variable substitution inside double quotes")
+                if cmd[j] == "\\":
+                    raise Deny("backslash escape inside double quotes")
+                if cmd[j] == "`" or (cmd[j] == "$" and not cmd.startswith("$?", j)):
+                    raise Deny("command, parameter or variable expansion inside double quotes")
                 buf += cmd[j]; j += 1
             if j >= n:
                 raise Deny("unterminated double quote")
@@ -135,6 +144,7 @@ def lex(cmd):
                 if not m:
                     raise Deny("heredoc delimiter must be quoted so its body is plain data")
                 pending_heredocs.append(m.group(1) or m.group(2)); i += m.end()
+                reds.append(("<<", ""))
                 continue
             end_word()
             op = c; i += 1
@@ -152,24 +162,79 @@ def lex(cmd):
                 i += 1
             tw, th = "", False
             while i < n and cmd[i] not in " \t\n;&|()<>":
-                if cmd[i] in "'\"":
-                    q = cmd[i]; j = cmd.find(q, i + 1)
+                if cmd[i] == "'":
+                    j = cmd.find("'", i + 1)
                     if j < 0:
                         raise Deny("unterminated quote")
                     tw += cmd[i + 1:j]; th = True; i = j + 1
-                elif cmd[i] in "$`\\":
-                    raise Deny("substitution in a redirect target")
+                elif cmd[i] == '"':
+                    j = cmd.find('"', i + 1)
+                    if j < 0:
+                        raise Deny("unterminated quote")
+                    inner = cmd[i + 1:j]
+                    # WHY the same rule as a double-quoted word (cc11 r36 CRITICAL): bash still expands $( ), ${ }, $NAME and backticks inside double quotes, so a target
+                    # like "$(touch /tmp/x)" is not the literal file name the path check would see.
+                    if "`" in inner or "\\" in inner or re.search(r"\$(?!\?)", inner):
+                        raise Deny("expansion in a double-quoted redirect target")
+                    tw += inner; th = True; i = j + 1
+                elif cmd[i] in "$`\\*?{}":
+                    raise Deny("substitution, escape or glob in a redirect target")
                 else:
                     tw += cmd[i]; th = True; i += 1
             if not th:
                 raise Deny("redirect without a target")
             reds.append((op, tw))
+        elif c in "*?{}":
+            raise Deny("unquoted glob or brace expansion")
         else:
             word += c; have = True; i += 1
     if pending_heredocs:
         raise Deny("heredoc without its terminator")
     end_cmd()
     return cmds
+
+TILDE_OK = ("~/.claude/skills/", "~/.claude/config/scripts/")
+
+def check_wrapper(name, args):
+    # WHY the wrapper's own option grammar (cc11 r36 CRITICAL): codex-call.sh forwards --sandbox and --cd straight to `codex exec`, so an allowed call could pick
+    # workspace-write or an outside directory. Each wrapper is parsed exactly as its script parses it (codex-call.sh v3: options while more than one argument is left,
+    # then the one prompt; verified sandbox default is read-only) and anything the script would treat differently from the hook (unknown option, `--`, a repeated option,
+    # `--opt=value`, extra arguments) is denied. Re-check this if the script's option set changes.
+    if name == "codex-call.sh":
+        a, seen = list(args), set()
+        while len(a) > 1:
+            o = a[0]
+            if o not in ("--sandbox", "--role", "--resume", "--cd"):
+                break
+            if o in seen:
+                raise Deny("codex-call.sh option given twice: " + o)
+            seen.add(o)
+            v = a[1]
+            if o == "--sandbox" and v != "read-only":
+                raise Deny("codex-call.sh --sandbox must be read-only, got " + v)
+            if o == "--role" and not readable(v):
+                raise Deny("codex-call.sh --role file outside the scratch repo and the skills dir: " + v)
+            if o == "--resume" and not re.fullmatch(r"[A-Za-z0-9-]{8,64}", v):
+                raise Deny("codex-call.sh --resume is not a thread id: " + v)
+            if o == "--cd" and not in_root(v):
+                raise Deny("codex-call.sh --cd outside the scratch repo: " + v)
+            a = a[2:]
+        if len(a) != 1 or a[0].startswith("-") or not a[0]:
+            raise Deny("codex-call.sh needs known options then exactly one prompt (an option-looking, extra or missing argument is refused)")
+        return
+    if name == "reviewer.sh":
+        if len(args) != 3 or args[0] not in ("E", "R", "S") or not readable(args[1]) or not writable(args[2]):
+            raise Deny("reviewer.sh must be: <tier E|R|S> <input inside the repo> <output inside the repo>")
+        return
+    if name == "review-snapshot.sh":
+        if args not in ([], ["HEAD"]):
+            raise Deny("review-snapshot.sh takes no argument or HEAD")
+        return
+    if name == "redact-diff.sh":
+        if args not in ([], ["--text"]):
+            raise Deny("redact-diff.sh takes no argument or --text")
+        return
+    raise Deny("unknown wrapper: " + name)
 
 def check_simple(argv, reds):
     for op, target in reds:
@@ -181,14 +246,22 @@ def check_simple(argv, reds):
         elif op == "<":
             if not readable(target):
                 raise Deny("redirect source outside the scratch repo: " + target)
+        elif op == "<<":
+            if not argv or argv[0] != "cat":
+                raise Deny("a heredoc may only feed cat")
     if not argv:
         return
     prog, args = argv[0], argv[1:]
     if "=" in prog.split("/")[0] and not prog.startswith("/"):
         raise Deny("environment assignment before a command")
+    for a in argv:
+        if a.startswith("~") and not (a.startswith(TILDE_OK) or a == "~"):
+            raise Deny("~ expansion other than the two read-only prefixes: " + a)
     if prog.startswith("~") or prog.startswith("/") or "/" in prog:
-        if real(prog) in {real(w) for w in WRAPPERS}:
-            return
+        for w in WRAPPERS:
+            if real(prog) == real(w):
+                check_wrapper(os.path.basename(w), args)
+                return
         raise Deny("program is not one of the prescribed wrapper scripts: " + prog)
     if prog == "cd":
         if len(args) != 1 or not in_root(args[0]):

@@ -135,6 +135,7 @@ if [[ $scenario == real ]]; then
   # WHY the wrapper logs its early exits into the shim's log (r23): a call that fails before it reaches codex (bad arguments, a missing prompt file) never touches the shim, so without this an earlier clean review stood as the last word.
   export CODEX_CALL_EVENT_LOG="$EVLOG"
 fi
+# WHY claude -p below takes < /dev/null (cc11 r36): it reads stdin, and an open terminal or pipe makes it wait before it starts.
 if [[ $scenario == real ]]; then
   hook="$here/proof-confine-hook.py"
   if [[ ! -f "$hook" || ! -x "$hook" ]]; then echo "REJECT: the confinement hook is missing or not executable: $hook" >&2; exit 2; fi
@@ -150,7 +151,7 @@ else
   perm=(--permission-mode acceptEdits --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill Edit(./.claude/plan/**) Edit(.claude/plan/**)")
 fi
 claude -p "$task" --model sonnet --setting-sources "$sources" "${perm[@]}" \
-  --append-system-prompt "$seam" --no-session-persistence --output-format stream-json --verbose > "$out/stream.jsonl" 2> "$out/session.err" && claude_rc=0 || claude_rc=$?
+  --append-system-prompt "$seam" --no-session-persistence --output-format stream-json --verbose > "$out/stream.jsonl" 2> "$out/session.err" < /dev/null && claude_rc=0 || claude_rc=$?
 python3 - "$out" <<'PY'
 import json, sys
 o = sys.argv[1]; res = ""; ev = []; jl = []

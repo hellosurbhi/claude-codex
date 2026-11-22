@@ -15,7 +15,7 @@ mkdir -p "$home/.claude/config/scripts/lib" "$work/bin"
 trip() { printf '#!/bin/sh\necho "$0 $*" >> "%s"\nexit 99\n' "$mark" > "$1"; chmod +x "$1"; }
 for f in reviewer.sh codex-call.sh redact-diff.sh review-snapshot.sh; do trip "$home/.claude/config/scripts/$f"; done
 for b in codex gemini coderabbit claude; do trip "$work/bin/$b"; done
-env -u SPY_CONFIG_DIR HOME="$home" PATH="$work/bin:$PATH" CHECKERS_NO_SPY=1 bash "$here/test-checkers.sh" > "$work/log" 2>&1; rc=$?
+env -u SPY_CONFIG_DIR HOME="$home" PATH="$work/bin:$PATH" CHECKERS_NO_SPY=1 bash "$here/test-checkers.sh" > "$work/log" 2>&1 < /dev/null; rc=$?  # WHY < /dev/null (cc11 r36): the suite must never wait on the caller's stdin
 tail -n 3 "$work/log"
 if [ -s "$mark" ]; then echo "FAIL: a NO_SPY run executed code outside the repo:"; sort -u "$mark" | head -n 5; exit 1; fi
 if [ "$rc" -ne 0 ] || grep -q '^FAIL' "$work/log"; then echo "FAIL: the NO_SPY suite did not pass in the tripwire home (rc=$rc)"; grep '^FAIL' "$work/log" | head -n 5; exit 1; fi

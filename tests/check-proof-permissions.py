@@ -1,9 +1,9 @@
-# Usage: check-proof-permissions.py <review-loop-proof.sh>
+# Usage: check-proof-permissions.py <review-loop-proof.sh> [hook-file]   (hook-file defaults to proof-confine-hook.py next to the script)
 # Exit 0 only when the proof's headless `claude -p` call can rewrite an existing plan file under .claude/ AND is confined while doing so.
 # WHY (cc11): claude 2.1.323 -p denies Edit, Write and a Bash redirect on an existing .claude/ file in acceptEdits whatever allow rules are given, so the real scenario
 # runs with prompts off (bypassPermissions). That is only acceptable with the deny-by-default PreToolUse hook (tests/proof-confine-hook.py) wired in, a start-up probe
 # that must see the hook deny an out-of-bounds call, and a fresh out dir. Each missing piece has its own REJECT line so a test can assert the exact cause.
-import re, sys
+import os, re, sys
 src = open(sys.argv[1]).read()
 def reject(why):
     print("REJECT: " + why, file=sys.stderr); sys.exit(1)
@@ -29,3 +29,13 @@ if "-e \"$4\"" not in src or "exit 2" not in src[src.index('-e "$4"'):src.index(
     reject("the real scenario does not insist on creating its own fresh out dir")
 if "the confinement hook ran" not in src:
     reject("no check that the hook logged at least one decision")
+hook = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), "proof-confine-hook.py")
+try:
+    h = open(hook).read()
+except OSError:
+    reject("the confinement hook file is missing: " + hook)
+# WHY these markers (cc11 r36): the two guard classes the review found missing, expansion in any quoting but single quotes and the wrapper's own option grammar.
+for marker, what in (("def check_wrapper(", "the wrapper option-grammar check"), ("expansion inside double quotes", "the denial of expansion inside double quotes"),
+                     ("expansion in a double-quoted redirect target", "the denial of expansion in a quoted redirect target"), ('must be read-only', "the read-only sandbox requirement")):
+    if marker not in h:
+        reject("the confinement hook lacks " + what)

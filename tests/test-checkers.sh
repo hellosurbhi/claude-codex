@@ -6,6 +6,9 @@ set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 fail=0
+# WHY the whole suite runs with stdin from /dev/null (cc11 r36): no case may inherit the caller's stdin. A fake or checker that reads it (the `cat` redactor fake did) hangs
+# forever under a terminal, an open pipe or a backgrounded launcher, in CI or on a user's machine. Cases that need input pipe it in explicitly.
+exec 0</dev/null
 # shellcheck source=tests/hermetic-git.sh
 . "$here/hermetic-git.sh"
 # WHY a hard prerequisite (CodeRabbit r47): the launcher cases run the REAL installed reviewer.sh (~/.claude/config/scripts/reviewer.sh, or
@@ -766,7 +769,9 @@ i
 
 OPEN FINDINGS:
 none}" > .claude/review/requirements.raw.txt )
-  rm -f "$tmp/reviewer-called"; ( cd "$tmp/sendrepo" && bash "$tmp/sendtry.sh" >/dev/null 2>&1 ); [ -f "$tmp/reviewer-called" ]
+  # WHY explicit stdin and a bound (cc11 r36): a redactor fake that runs `cat` read the SUITE's stdin, so with a terminal or an open pipe attached the case hung forever.
+  # The block gets /dev/null, and tmo turns any future stdin reader into a named FAIL instead of a hang (a timeout is also not a pass for the `expect fail` callers).
+  rm -f "$tmp/reviewer-called"; ( cd "$tmp/sendrepo" && tmo "${SENDTRY_TMO:-30}" bash "$tmp/sendtry.sh" >/dev/null 2>&1 < /dev/null ) || { [ $? -eq 124 ] && bad "sendtry timed out after ${SENDTRY_TMO:-30}s: the fallback block or a fake in it is waiting on stdin"; }; [ -f "$tmp/reviewer-called" ]
 }
 expect pass "the fallback sequence reaches the reviewer when the redaction script works" sendtry "$red"
 # r22 finding 1: the requirements text is hostile (a line EOF, a command substitution, backticks, a REVIEW_RECORD_END line). It reaches the block only as a file, so nothing runs and every byte arrives.
@@ -788,6 +793,14 @@ expect pass "every byte of the hostile requirements text arrives in the context 
 expect fail "the fallback sequence never reaches the reviewer when the redaction script is missing" sendtry "$tmp/no-such-redactor.sh"
 printf '#!/bin/sh\ncat; exit 3\n' > "$tmp/bad-redactor.sh"; chmod +x "$tmp/bad-redactor.sh"
 expect fail "the fallback sequence never reaches the reviewer when the redaction script exits non-zero" sendtry "$tmp/bad-redactor.sh"
+# r36: the same fake with the suite's stdin attached to a pipe that never closes must finish, and a block that DID read stdin must fail with the named timeout
+# WHY sleep 30 held open and an outer 15s bound: a reader of the inherited stdin would block until the pipe closes, so a still-open pipe past the bound is the hang.
+sendtry_open_stdin() { sleep 30 | tmo 15 bash -c "$(declare -f tmo bad sendtry); here='$here'; tmp='$tmp'; fail=0; SENDTRY_TMO=100; sendtry '$tmp/bad-redactor.sh'; echo \"fail=\$fail\"" 2>&1 | tail -1; }
+expect pass "sendtry finishes with a never-closing stdin attached (no case inherits the suite's stdin)" test "$(sendtry_open_stdin)" = "fail=0"
+printf '#!/bin/sh\nsleep 30; exit 3\n' > "$tmp/slow-redactor.sh"; chmod +x "$tmp/slow-redactor.sh"
+expect pass "a block that never returns fails with the named sendtry timeout instead of hanging (2s bound)" test "$( ( SENDTRY_TMO=2; sendtry "$tmp/slow-redactor.sh" ) 2>&1 | grep -c '^FAIL: sendtry timed out after 2s' )" = 1
+expect pass "the suite takes stdin from /dev/null before any case runs" bash -c 'awk "/^exec 0<\/dev\/null/{f=1} /^expect_run\(\)/{if(!f)exit 1; ok=1} END{exit !ok}" "$1"' _ "$here/test-checkers.sh"
+expect pass "the tripwire check and the proof's claude call take stdin from /dev/null" sh -c 'grep -qF "2>&1 < /dev/null; rc=" "$1/check-no-spy-tripwire.sh" && grep -qF "< /dev/null && claude_rc=0" "$1/review-loop-proof.sh"' _ "$here"
 # r15 finding 3: every fallback block checks its input before dispatch. fbtry runs the file's real Fallback input block in a throwaway repo with a stub reviewer;
 # states: ok (real change, real plan), emptydiff (nothing to review), noplan, emptyplan. A refused input must call no reviewer AND leave no context file behind.
 fbtry() { # $1 = file, $2 = state
@@ -2321,6 +2334,10 @@ sed 's/perm=(--permission-mode acceptEdits/perm=(--permission-mode bypassPermiss
 expectm fail "bypass in the other scenarios is rejected" 'REJECT: bypassPermissions must be limited to the real scenario' python3 "$pp" "$tmp/proof-otherbypass.sh"
 sed 's/-e "\$4"/-e "$4x"/' "$ps" > "$tmp/proof-fresh.sh"
 expectm fail "the real scenario must insist on a fresh out dir it creates" 'REJECT: the real scenario does not insist on creating its own fresh out dir' python3 "$pp" "$tmp/proof-fresh.sh"
+sed 's/def check_wrapper(/def check_wrapperx(/' "$here/proof-confine-hook.py" > "$tmp/hook-nowrapper.py"
+expectm fail "a hook without the wrapper option-grammar check is rejected" 'REJECT: the confinement hook lacks the wrapper option-grammar check' python3 "$pp" "$ps" "$tmp/hook-nowrapper.py"
+sed 's/expansion inside double quotes/expansion elsewhere/' "$here/proof-confine-hook.py" > "$tmp/hook-noexp.py"
+expectm fail "a hook without the double-quote expansion denial is rejected" 'REJECT: the confinement hook lacks the denial of expansion inside double quotes' python3 "$pp" "$ps" "$tmp/hook-noexp.py"
 # the confinement hook itself: no model needed, so these run in CI and NO_SPY too
 hk="$here/proof-confine-hook.py"; hr="$tmp/hookrepo"; mkdir -p "$hr/.claude/plan" "$tmp/hookout"; ln -sfn "$tmp/hookout" "$hr/link"; hr="$(cd "$hr" && pwd -P)"
 hook() { python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"cwd":sys.argv[2],"tool_input":json.loads(sys.argv[3])}))' "$1" "$hr" "$2" | PROOF_SCRATCH_ROOT="$hr" python3 "$hk" | python3 -c 'import json,sys; o=json.load(sys.stdin)["hookSpecificOutput"]; print(o["permissionDecision"], o.get("permissionDecisionReason",""))'; }
@@ -2362,6 +2379,27 @@ expect pass "hook: writing .git/config by Write is denied" test "$(hook Write "{
 expect pass "hook: writing .git/config by redirect is denied" hdeny 'echo x > .git/config'
 expect pass "hook: a redirect into the read-only skills dir is denied" hdeny 'echo x > ~/.claude/skills/plan-codex/SKILL.md'
 expect pass "hook: Agent is allowed (a subagent's own calls reach this hook, probed)" test "$(hook Agent '{"prompt":"x"}')" = "allow "
+# r36 CRITICAL 1: expansion in ANY quoting except single quotes, in every position and every segment
+for c in 'echo x > "$(touch /tmp/proof-escape)"' 'echo x > "`touch /tmp/proof-escape`"' 'echo x > "${IFS}"' 'echo x > "$HOME/../../tmp/proof-escape"' 'echo x > $HOME/f' 'echo "$(id)"' 'echo "`id`"' 'echo "${HOME}"' 'echo "$HOME"' 'echo $'"'"'\x41'"'"'' 'cat "$HOME/.ssh/id_rsa"' 'cd "$(echo /tmp)"' 'cd $HOME' 'ls && echo "$(id)"' 'ls; cat <<< hi' 'cat <(ls)' 'ls >(cat)' 'echo x > f*' 'cat *' 'echo {a,b}' 'eval ls' 'source x.sh' '. x.sh' 'ls & ls' 'cat ~root/x' 'cat ~/.ssh/id_rsa' 'echo "a\"$(id)"' 'cat <<'"'"'EOF'"'"' | bash
+x
+EOF'; do
+  expect pass "hook: expansion class denied: $c" hdeny "$c"
+done
+expect pass "hook: a single-quoted dollar is plain data and allowed" test "$(hbash "echo '\$(id) \${HOME}'")" = "allow "
+expect pass "hook: a quoted heredoc feeding cat is allowed, feeding another command is denied" test "$(hbash "cat > .claude/plan/y.md <<'EOF'
+x
+EOF" | cut -d' ' -f1)$(hbash "git status <<'EOF'
+x
+EOF" | cut -d' ' -f1)" = allowdeny
+# r36 CRITICAL 2: the wrapper's own option grammar
+CC='~/.claude/config/scripts/codex-call.sh'
+for c in "$CC --sandbox workspace-write hi" "$CC --sandbox danger-full-access hi" "$CC -C /tmp hi" "$CC --cd /tmp hi" "$CC --cd=.. hi" "$CC --cd .. hi" "$CC --sandbox read-only --sandbox workspace-write hi" "$CC --sandbox workspace-write --sandbox read-only hi" "$CC -- --sandbox workspace-write hi" "$CC --sandbox read-only -- hi" "$CC --bogus x hi" "$CC --resume 'x;y' hi" "$CC --role /etc/passwd hi" "$CC hi extra" "$CC" "$CC --sandbox" "$CC --sandbox read-only" "$CC -- hi" "$CC --sandbox read-only --cd /tmp hi" "~/.claude/config/scripts/reviewer.sh E /etc/passwd out.txt" "~/.claude/config/scripts/reviewer.sh E in.txt /tmp/out.txt" "~/.claude/config/scripts/reviewer.sh X in.txt out.txt" "~/.claude/config/scripts/redact-diff.sh --other" "~/.claude/config/scripts/review-snapshot.sh /etc" "~/.claude/config/scripts/other.sh"; do
+  expect pass "hook: wrapper grammar denies: ${c#\~/.claude/config/scripts/}" hdeny "$c"
+done
+for c in "$CC --sandbox read-only --role ~/.claude/skills/plan-codex/codex-analyzer-role.md \"audit this plan\"" "$CC --sandbox read-only --resume 01a20563-33aa-73d3-95b8-a8e2d30ab187 \"confirm\"" "$CC --cd . --sandbox read-only 'p'" "$CC \"just a prompt\"" "~/.claude/config/scripts/reviewer.sh E in.txt out.txt" "~/.claude/config/scripts/redact-diff.sh --text"; do
+  expect pass "hook: wrapper grammar allows: ${c#\~/.claude/config/scripts/}" test "$(hbash "$c")" = "allow "
+done
+expect pass "check-proof-permissions.py requires the expansion and wrapper-grammar guards" sh -c 'grep -q "def check_wrapper" "$1" && grep -q "expansion inside double quotes" "$1" && grep -q "expansion in a double-quoted redirect target" "$1"' _ "$hk"
 expect pass "the real task puts the confirmation follow-up before the final review (or asks for the bare verdict) so the last call stays clean" grep -q "so the last Codex call of the run is still the skill's own final review" "$here/review-loop-proof.sh"
 
 # Round 23: an early exit of the REAL codex-call.sh (bad arguments, missing prompt or role file) never reaches the codex shim, so it used to leave no event and an earlier clean review stood
