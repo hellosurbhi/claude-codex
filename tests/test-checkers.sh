@@ -380,6 +380,13 @@ for v in AKIAIOSFODNN7EXAMPLE ghp_abcdefghij github_pat_11ABC sk-ant-api03 xoxb-
   expect fail "redact-diff leaves no trace of $v" grep -qF "$v" "$tmp/secrets.out"
 done
 expect pass "redact-diff keeps the hunk header, context lines and the +/- prefixes" test "$(grep -c '^@@ -1,9 +1,9 @@' "$tmp/secrets.out")$(grep -c '^ tail = 1$' "$tmp/secrets.out")$(grep -c '^-' "$tmp/secrets.out")$(grep -c '^+' "$tmp/secrets.out")" = "111313"
+# r12 finding 2: escaped delimiters inside a quoted value must not end the value early.
+rq() { printf '%s\n' "$1" | "$red"; }
+expect fail "a double-quoted password with an escaped quote leaves no secret text" sh -c 'printf "%s\n" "+password = \"abSECRET\\\"cdTAIL\"" | "$1" | grep -q "SECRET\|TAIL"' _ "$red"
+expect fail "a single-quoted password with an escaped quote leaves no secret text" sh -c "printf '%s\n' \"+token = 'abSECRET\\\\'cdTAIL'\" | \"\$1\" | grep -q 'SECRET\\|TAIL'" _ "$red"
+expect fail "an unterminated quoted password masks to the end of the line" sh -c 'printf "%s\n" "+password = \"abSECRET and more TAIL" | "$1" | grep -q "SECRET\|TAIL"' _ "$red"
+expect fail "a value ending in an escaped backslash leaves no secret text" sh -c 'printf "%s\n" "+password = \"abSECRET\\\\\"" | "$1" | grep -q "SECRET"' _ "$red"
+expect pass "text after a value that ends in an escaped backslash is kept" sh -c 'printf "%s\n" "+password = \"abSECRET\\\\\", other = 1" | "$1" | grep -q "other = 1"' _ "$red"
 expect pass "redact-diff keeps the line count of the diff" test "$(wc -l < "$fx")" = "$(wc -l < "$tmp/secrets.out")"
 expect pass "redact-diff does not touch a word that merely contains sk-" sh -c 'printf "+x = task-description-for-the-user-that-is-long\n" | "$1" | grep -q "task-description-for-the-user-that-is-long"' _ "$red"
 printf 'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1,2 +1,2 @@\n keep one\n-old line\n+new line\n' > "$tmp/clean.diff"

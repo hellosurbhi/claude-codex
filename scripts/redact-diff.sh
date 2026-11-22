@@ -30,7 +30,7 @@ function tok(s, rx, headrx, tag, minlen, needdigit,   out, pre, m, head, val, pr
   }
   return out s
 }
-function assign(s,   ls, out, hs, hl, head, rest, c, q, e, val, tail, lead, trail, quoted, skip) {
+function assign(s,   k, ch, ls, out, hs, hl, head, rest, c, q, e, val, tail, lead, trail, quoted, skip) {
   out = ""
   while (1) {
     ls = tolower(s)
@@ -39,8 +39,15 @@ function assign(s,   ls, out, hs, hl, head, rest, c, q, e, val, tail, lead, trai
     head = substr(s, 1, hs + hl - 1); rest = substr(s, hs + hl)
     c = substr(rest, 1, 1); lead = ""; trail = ""; quoted = 0; val = ""; tail = ""
     if (c == "\"" || c == "\047") {
-      quoted = 1; q = c; e = index(substr(rest, 2), q)
-      if (e == 0) { val = substr(rest, 2); tail = "" } else { val = substr(rest, 2, e - 1); tail = substr(rest, e + 2); trail = q }
+      # WHY a character scan and not index(): a backslash escapes the next character, so an escaped quote inside the value is not the closing quote (index() ended the value at the escaped
+      # quote and left the rest of the secret in the diff); an escaped backslash (two of them) does not escape the quote after it. No closing quote: the value runs to the end of the line.
+      quoted = 1; q = c; e = 0
+      for (k = 2; k <= length(rest); k++) {
+        ch = substr(rest, k, 1)
+        if (ch == "\\") { k++; continue }
+        if (ch == q) { e = k; break }
+      }
+      if (e == 0) { val = substr(rest, 2); tail = "" } else { val = substr(rest, 2, e - 2); tail = substr(rest, e + 1); trail = q }
       lead = q
     } else if (match(rest, /^[^[:space:],;)}\]]+/)) {
       val = substr(rest, 1, RLENGTH); tail = substr(rest, RLENGTH + 1)
