@@ -17,14 +17,18 @@ def redact(data):
         print("REJECT: redact-diff.sh failed, so the expected reviewer input cannot be computed", file=sys.stderr); sys.exit(1)
     return r.stdout
 def redact_file(data):
-    # a whole file as one all-added hunk, redacted like the reviewer's diff, then the prefixes removed again: the file as the reviewer's patch would carry it
+    # a whole file as one all-added hunk, redacted like the reviewer's diff, then the prefixes removed again: the file as the reviewer's patch would carry it.
+    # WHY the trailing-newline state is carried by git's own marker (r27): a file without a final newline is written as its lines plus "\ No newline at end of file", exactly as git diff does, and rebuilt
+    # without the newline, so a patch that preserves a missing final newline reproduces the file byte for byte (r26 added a newline here and rejected it).
     if not data:
         return b""
-    ls = data.split(b"\n"); tail = ls.pop() if ls[-1] == b"" else None
-    body = b"@@ -0,0 +1,%d @@\n" % (len(ls) + (1 if tail is not None else 0))
-    src = b"".join(b"+" + l + b"\n" for l in ls + ([tail] if tail is not None else []))
-    out = [l[1:] for l in redact(body + src).split(b"\n") if l.startswith(b"+")]
-    return b"\n".join(out) + (b"\n" if tail is None else b"")
+    nonl = not data.endswith(b"\n")
+    ls = data.split(b"\n")
+    if not nonl:
+        ls.pop()
+    src = b"@@ -0,0 +1,%d @@\n" % len(ls) + b"".join(b"+" + l + b"\n" for l in ls) + (b"\\ No newline at end of file\n" if nonl else b"")
+    body = [l[1:] for l in redact(src).split(b"\n") if l.startswith(b"+")]
+    return b"\n".join(body) + (b"" if nonl else b"\n")
 def changes(lines):
     # (added, removed) line lists from the hunks of ONE file's diff; only the one-character prefix is removed.
     add, rem, inh = [], [], False
@@ -64,7 +68,7 @@ def reviewed_changes(lines):
             out[n] = (pa + a, pr + r)
     return out
 
-def patch_sections(lines, names):
+def patch_sections(lines, names, binary=()):
     # The .py file sections of a git diff, each starting at its "diff --git" line, kept whole (headers, hunks, context).
     # WHY every .py section is validated: a copy/rename-only section never reaches reviewed_changes, so without this it
     # could write outside the temp dir or smuggle a file the final tree does not have. Each section must be a plain
@@ -87,6 +91,8 @@ def patch_sections(lines, names):
             return None
         if any(re.match(r"(copy|rename|similarity|dissimilarity) ", x) for x in sc[1:]):
             return None
+        if b_ in binary:
+            continue
         out.append(sc)
     return out
 
@@ -191,6 +197,9 @@ if repo is not None:
     if root:
         names |= {f for f in G("ls-tree", "-r", "--name-only", root[0]).splitlines() if f.endswith(".py")}
     expected = {}
+    binary = {}
+    def base_exists(name):
+        return bool(root) and subprocess.run(["git", "-C", repo, "cat-file", "-e", root[0] + ":" + name], capture_output=True).returncode == 0
     for name in sorted(names):
         base = b""
         if root:
@@ -199,6 +208,11 @@ if repo is not None:
         p2 = os.path.join(repo, name)
         cur = open(p2, "rb").read() if os.path.isfile(p2) else b""
         if base == cur:
+            continue
+        # WHY a file with a NUL byte is binary and is compared by git's own one-line record, never decoded (r27): git prints "Binary files a/x and b/x differ" (or /dev/null for a new or deleted file) and no content,
+        # so the reviewer input must carry exactly that line; the bytes themselves are bound by the raw tree digest above.
+        if b"\0" in base or b"\0" in cur:
+            binary[name] = "Binary files %s and %s differ" % ("a/" + name if (root and base_exists(name)) else "/dev/null", "b/" + name if os.path.isfile(p2) else "/dev/null")
             continue
         with tempfile.TemporaryDirectory() as d:
             a, b = os.path.join(d, "a"), os.path.join(d, "b")
@@ -239,11 +253,17 @@ if repo is not None:
     # WHY apply the reviewed patch: matching added/removed lines alone accepts a stale patch whose lines sit at other
     # locations or in other context. Applying the full patch (hunk headers and context included) to the baseline must
     # reproduce every final .py file exactly (r20).
-    secs = patch_sections((spies[-1].get("input_text") or "").split("\n"), names)
+    in_lines = (spies[-1].get("input_text") or "").split("\n")
+    for line in binary.values():
+        if line not in in_lines:
+            reject('the reviewed input lacks the binary-file record for a changed binary file')
+    secs = patch_sections(in_lines, names, binary)
     if secs is None:
         reject('the reviewed patch is malformed or names files outside the repo')
     with tempfile.TemporaryDirectory() as d:
         for name in names:
+            if name in binary:
+                continue
             base = b""
             if root:
                 r = subprocess.run(["git", "-C", repo, "show", root[0] + ":" + name], capture_output=True)
@@ -260,6 +280,8 @@ if repo is not None:
             if r.returncode != 0:
                 reject('the reviewed patch does not apply to the baseline')
         for name in names:
+            if name in binary:
+                continue
             p2 = os.path.join(repo, name)
             q = os.path.join(d, name)
             if os.path.isfile(p2) != os.path.isfile(q) or (os.path.isfile(p2) and redact_file(open(p2, "rb").read()) != open(q, "rb").read()):

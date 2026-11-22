@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# contract: redact-diff v1 (source of truth: hellosurbhi/claude-codex scripts/redact-diff.sh)
+# contract: redact-diff v2 (source of truth: hellosurbhi/claude-codex scripts/redact-diff.sh)
 # Usage: redact-diff.sh [--text] < raw > masked
 #   default: the input is a unified diff (prefix and hunk aware). --text: the input is plain text (requirements, instructions): no prefix stripping, no hunk or side state, ONE key state, every other rule identical.
 # WHY an explicit --text flag and no guessing from content (r21 finding 1): the diff prefix parser strips the first hyphen of a plain-text -----BEGIN line, so a plain-text key body survived. The caller says which kind it sends.
@@ -37,7 +37,16 @@ export LC_ALL=C
 TEXT=0
 if [ "${1:-}" = "--text" ]; then TEXT=1; shift; fi
 if [ "$#" -ne 0 ]; then echo "usage: redact-diff.sh [--text] < input > output" >&2; exit 2; fi
-exec awk -v TEXT="$TEXT" '
+# WHY the input goes through a temp file and the last byte is checked (r27): awk prints every record with a trailing newline, so input with no final newline (a plain-text requirements file, or the last
+# line of a diff that ends in a "\ No newline at end of file" file) came out with one more byte than it went in. A caller comparing the sanitized text byte for byte against an expectation then rejected a legitimate review.
+# The output now ends in a newline exactly when the input did, and no other byte is normalised (CRLF, non-UTF-8 text and the no-newline marker pass through; a NUL byte never occurs because git prints binary files as one "Binary files ... differ" line).
+# v2 because that output differs from v1 for input with no final newline; the masking itself is unchanged.
+in="$(mktemp "${TMPDIR:-/tmp}/redact-in.XXXXXX")" || exit 1; out="$(mktemp "${TMPDIR:-/tmp}/redact-out.XXXXXX")" || { rm -f "$in"; exit 1; }
+trap 'rm -f "$in" "$out"' EXIT
+cat > "$in"
+nonl=0; if [ -s "$in" ] && [ "$(tail -c 1 "$in" | od -An -c | tr -d ' ')" != '\n' ]; then nonl=1; fi
+# WHY a failing awk prints nothing: a caller that ignores the status must still not receive a half-masked diff.
+awk -v TEXT="$TEXT" '
 function rep(c, n,   s, i) { s = ""; for (i = 0; i < n; i++) s = s c; return s }
 # mask the value part of every match of rx (head: leading part of the match kept as is, "" for none) when it is long enough and sits on a word boundary
 function tok(s, rx, headrx, tag, minlen, needdigit,   out, pre, m, head, val, prevc, ok, rs, rl) {
@@ -179,4 +188,5 @@ BEGIN {
   line = assign(line)
   print line
 }
-'
+' < "$in" > "$out" || exit $?
+if [ "$nonl" -eq 1 ]; then head -c "$(( $(wc -c < "$out") - 1 ))" "$out"; else cat "$out"; fi

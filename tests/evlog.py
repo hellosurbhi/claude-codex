@@ -21,7 +21,8 @@ def phase_of(text):
     # phase however the function is written (`def add (a, b)`, a lambda, ...), and a diff of test files only is the tests
     # phase even when a test body contains `return a + b` (r24).
     # WHY both sides (CodeRabbit r42): a rename test_app.py -> app.py has a test old path but an implementation new path.
-    paths = [p for pair in re.findall(r"^diff --git a/(\S+) b/(\S+)$", text, re.M) for p in pair if p.endswith(".py")]
+    # WHY the same-path form first (r27): a path with spaces ("my mod.py") is not \S+, so its diff was classified "unknown"; a same-path edit names one path twice, which the backreference matches.
+    paths = [p for pair in re.findall(r"^diff --git a/(\S+) b/(\S+)$", text, re.M) for p in pair if p.endswith(".py")] + [p for p in re.findall(r"^diff --git a/(.+) b/\1$", text, re.M) if p.endswith(".py")]
     if paths:
         return "implementation" if any(not _is_test_path(x) for x in paths) else "tests"
     # WHY the plan marker is checked BEFORE the signature (CodeRabbit thread 7): a plan that quotes `def add(a, b):` was classified as the
@@ -47,7 +48,8 @@ def main(a):
             return b""
     rd = lambda p: rb(p).decode(errors="replace")
     phase_raw = rb(phase_file)
-    phase_text = phase_raw.decode(errors="replace")
+    # WHY surrogateescape (r27): errors="replace" turned a non-UTF-8 byte into U+FFFD, so the logged reviewer input could never equal the bytes the reviewer was given; the checker maps it back with the same codec.
+    phase_text = phase_raw.decode("utf-8", "surrogateescape")
     # WHY a lock around reading the count and appending: concurrent wrappers must not get the same
     # sequence number (r12). ts_start is when the wrapper began (EVSTART), ts when it finished, so a
     # checker can order a review against a quota failure by START, not by completion.

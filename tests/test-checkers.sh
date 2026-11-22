@@ -1305,6 +1305,68 @@ redcase "$tmp/sec.raw.diff"
 expectm_spy fail "r26: raw unredacted text sent to the reviewer is rejected" 'REJECT: the reviewed changes differ from the code that remains' RCK
 redcase "$tmp/sec.bad.diff"
 expectm_spy fail "r26: reviewer input that differs from the redacted snapshot is rejected" 'REJECT: the reviewed changes differ from the code that remains' RCK
+# r27: byte fidelity of redact-diff.sh (a trailing newline, CRLF, the no-newline marker, a masked last line, empty input) in diff mode and --text mode.
+rdfid() { # mode printf-format expected-printf-format : output bytes must equal the expected bytes exactly
+  local m="$1" in out want; in="$(mktemp "$tmp/rdin.XXXXXX")"; out="$(mktemp "$tmp/rdout.XXXXXX")"; want="$(mktemp "$tmp/rdwant.XXXXXX")"
+  printf "$2" > "$in"; printf "$3" > "$want"
+  if [ "$m" = text ]; then bash "$here/../scripts/redact-diff.sh" --text < "$in" > "$out"; else bash "$here/../scripts/redact-diff.sh" < "$in" > "$out"; fi
+  cmp -s "$out" "$want"
+}
+for m in diff text; do
+  expect pass "r27: redact-diff ($m) keeps a missing final newline" rdfid $m 'a\nb' 'a\nb'
+  expect pass "r27: redact-diff ($m) keeps a present final newline" rdfid $m 'a\nb\n' 'a\nb\n'
+  expect pass "r27: redact-diff ($m) keeps CRLF line endings and a missing final newline" rdfid $m 'a\r\nb' 'a\r\nb'
+  expect pass "r27: redact-diff ($m) keeps empty input empty" rdfid $m '' ''
+  expect pass "r27: redact-diff ($m) masks a last line with no final newline and adds none" rdfid $m 'k = 1\napi_key = "abcd1234efgh5678ijkl9012"' 'k = 1\napi_key = "[REDACTED]"'
+done
+expect pass "r27: redact-diff (diff) passes the no-newline marker line through" rdfid diff '@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n' '@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n'
+# r27: the reviewed input is compared byte for byte, so every shape of file ending, name and encoding gets a legitimate pass and an altered rejection.
+bytecase() { # label path base-printf final-printf ("-" = file absent); builds the repo, the legit redacted diff and an altered one
+  local path="$2" base="$3" final="$4"  # $1 is the label, used by bccase for the test names
+  mkrun; cd "$tmp/run/repo" || exit 1; printf 'k = 1\n' > keep.py
+  [ "$base" = - ] || printf "$base" > "$path"
+  commitbase
+  if [ "$final" = - ]; then rm -f "$path"; else printf "$final" > "$path"; fi
+  git diff --no-color HEAD -- "$path" > "$tmp/bc.raw.diff"; bash "$here/../scripts/redact-diff.sh" < "$tmp/bc.raw.diff" > "$tmp/bc.legit.diff"
+  python3 - "$tmp/bc.legit.diff" "$tmp/bc.alt.diff" "$tmp/bc.nomark.diff" <<'PY'
+import sys
+t = open(sys.argv[1], "rb").read(); L = t.split(b"\n")
+alt = list(L)
+if b"Binary files" in t:
+    alt = [l for l in L if not l.startswith(b"Binary files")]
+else:
+    for pre in (b"+", b"-"):
+        i = next((i for i, l in enumerate(L) if l.startswith(pre) and not l.startswith(pre * 3) and len(l) > 1), None)
+        if i is not None:
+            alt[i] = L[i].rstrip(b"\r") + b"Z" + (b"\r" if L[i].endswith(b"\r") else b""); break
+open(sys.argv[2], "wb").write(b"\n".join(alt))
+open(sys.argv[3], "wb").write(b"\n".join(l for l in L if not l.startswith(b"\\ No newline")))
+PY
+  cp "$tmp/bc.legit.diff" "$tmp/bc.in.legit"
+}
+bcrv() { : > "$EVLOG"; bash "$here/spy-reviewer.sh" S "$1" "$tmp/out.txt" >/dev/null 2>&1; line fake 1 unknown "$LIMIT"; orderfake "$EVLOG"; }
+bccase() { # label path base final [marker]
+  bytecase "$@"
+  bcrv "$tmp/bc.legit.diff"; expect_spy pass "r27: $1: the legitimate redacted review passes" RCK
+  bcrv "$tmp/bc.alt.diff"; expectm_spy fail "r27: $1: an altered reviewer input is rejected for its content" 'REJECT: (the reviewed changes differ|the patched baseline differs|the reviewed patch|the reviewed input lacks)' RCK
+  if [ -n "${5:-}" ]; then bcrv "$tmp/bc.nomark.diff"; expectm_spy fail "r27: $1: a patch that loses the no-newline marker is rejected for its content" 'REJECT: (the reviewed changes differ|the patched baseline differs|the reviewed patch|the reviewed input lacks)' RCK; fi
+}
+bccase nonl-both app.py 'a\nb' 'a\nc' marker
+bccase nonl-removed-final-newline app.py 'a\nb\n' 'a\nb' marker
+bccase nonl-added-final-newline app.py 'a\nb' 'a\nb\n' marker
+bccase nonl-new-file app.py - 'x' marker
+bccase nonl-deleted-file app.py 'x' - marker
+bccase empty-to-content app.py '' 'a\n'
+bccase content-to-empty app.py 'a\n' ''
+bccase new-file app.py - 'a\nb\n'
+bccase deleted-file app.py 'a\nb\n' -
+bccase crlf app.py 'a\r\nb\r\n' 'a\r\nc\r\n'
+bccase crlf-no-final-newline app.py 'a\r\nb' 'a\r\nc' marker
+bccase masked-last-line-with-newline app.py 'a\n' 'a\napi_key = "abcd1234efgh5678ijkl9012"\n'
+bccase masked-last-line-no-newline app.py 'a\n' 'a\napi_key = "abcd1234efgh5678ijkl9012"' marker
+bccase non-utf8 app.py 'k = 1\n' 'k = 1\nname = "caf\xe9"\n'
+bccase binary b.py 'k = 1\n' 'k = 1\n\0\1\n'
+bccase path-with-spaces "my mod.py" 'a\n' 'a\nb\n'
 # r20: the proof asserts on one structured AUDIT-STATUS line only
 st() { printf '%s\n' "$1" > "$tmp/rep.txt"; shift; python3 "$here/audit-status.py" "$tmp/rep.txt" "$@"; }
 expect pass "a report ending in an APPROVED status line is accepted" st $'Initial review: UNREVIEWED. Retry ok.\nAUDIT-STATUS: APPROVED reviewer=codex' --expect APPROVED
@@ -2212,8 +2274,9 @@ for must in "ci.yml declares an explicit contents: read permissions block" "ci.y
 done
 if [[ -n "${CHECKERS_NO_SPY:-}" ]]; then
   [[ $plain_ran -ge 100 ]] && ok "self-test: at least 100 cases ran without the spy ($plain_ran)" || bad "self-test: only $plain_ran cases ran without the spy (expected at least 100)"
+  # WHY 160 (r27): the byte-fidelity cases add 43 deliberate spy-only assertions (151 skipped in total); the bound still catches a skip that swallows non-spy cases, of which there are about 790.
   # WHY 120 (r9 finding 2): seven new context-file cases need the installed reviewer.sh through spy-reviewer.sh, so they skip with the others; the bound still catches a skip that swallows non-spy cases.
-  [[ $skipped -lt 120 ]] && ok "self-test: fewer than 120 spy cases skipped ($skipped)" || bad "self-test: $skipped cases skipped, the skip is too wide (limit 120)"
+  [[ $skipped -lt 160 ]] && ok "self-test: fewer than 160 spy cases skipped ($skipped)" || bad "self-test: $skipped cases skipped, the skip is too wide (limit 160)"
 fi
 [[ -n "${CHECKERS_NO_SPY:-}" ]] && echo "CHECKERS_NO_SPY=1: skipped $skipped spy-reviewer case(s); they need the installed reviewer.sh"
 exit $fail
