@@ -9,6 +9,12 @@
 import hashlib, os, re, shutil, subprocess, sys, tempfile
 import wlog
 repo, base = sys.argv[1], sys.argv[2]
+# WHY the repo root, not the path as given (round 15 finding 2): the skills record at the repository root whatever folder the shell was in, so a checker handed a subfolder must read the same place.
+# A failed lookup fails the check (never falls back to the given path, which could hold some other .claude/review).
+_top = subprocess.run(["git", "-C", repo, "rev-parse", "--show-toplevel"], capture_output=True)
+if _top.returncode != 0 or not _top.stdout.strip():
+    print("git rev-parse --show-toplevel failed: cannot locate the review record", file=sys.stderr); sys.exit(1)
+repo = _top.stdout.decode().strip()
 rec = os.path.join(repo, ".claude", "review", "final-review.txt")
 try:
     lines = open(rec, encoding="utf-8").read().splitlines()

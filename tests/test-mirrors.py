@@ -346,6 +346,13 @@ for n in ("execute-codex", "tdd-execute-codex"):
         # r14 finding 1: every tree-derived hash is a checked pipeline (pipefail) and an empty snapshot never counts, at step 1 and at step 2; a failed or empty diff voids the round (old record removed).
         if b.count("[ -s .claude/review/reviewed.diff ]") != 2 or b.count("set -o pipefail; git diff") != 2:
             bad.append("%s: the Review record steps do not both check the diff pipeline status and an empty snapshot" % rel)
+    for f, b in zip(files(n), got):
+        # r15 finding 2: both steps resolve the repository root BEFORE touching .claude/review and run there (a subshell, so the caller's folder is unchanged); a failed lookup prints and records nothing.
+        # WHY: the record paths are relative, so from a subfolder the record landed in the wrong place while only the root directory was excluded from the diff.
+        RL = 'if R="$(git rev-parse --show-toplevel)" && [ -n "$R" ]; then (cd "$R" || exit 1'
+        if b and (b.count(RL) != 2 or b.count("no repo root (git rev-parse --show-toplevel failed)") != 2 or b.find(RL) > b.find("mkdir -p .claude/review")
+                  or b.rfind(RL) < b.find("Send the reviewer `.claude/review/reviewed.diff`") or b.rfind(RL) > b.find("< .claude/review/reviewed.diff")):
+            bad.append("%s: both Review record steps must resolve the repo root (git rev-parse --show-toplevel) before using .claude/review" % os.path.relpath(f, root))
     if got[0] != got[1]:
         bad.append("%s: the Review record paragraph differs between skill and command" % n)
 print("\n".join(bad))

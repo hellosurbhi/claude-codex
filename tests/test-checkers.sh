@@ -625,6 +625,13 @@ for p in sys.argv[1:]:
     open(p, "w").write(t2)
 PYX
 mirneg "a Review record step 2 that accepts an empty snapshot is caught" 'Review record sequence lacks .if N=' "$tmp/mir8"; mirc execute-codex
+python3 - "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
+import sys; p=sys.argv[1]; s=open(p).read()
+a = 'if R="$(git rev-parse --show-toplevel)" && [ -n "$R" ]; then (cd "$R" || exit 1\n'
+assert s.count(a) == 2
+k = s.rindex(a); open(p, "w").write(s[:k] + s[k+len(a):])
+PYX
+mirneg "a Review record step 2 that no longer resolves the repo root is caught" 'must resolve the repo root' "$tmp/mir8"; mirc tdd-execute-codex
 expect pass "the pristine copies pass every r10 rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 
 # cc11-main-r2 finding 3: the diff command each workflow prescribes is relative to the repository top, not to the shell's folder.
@@ -1448,7 +1455,7 @@ rrmk; rrstep step1.sh; rrstep step2.sh; printf '\ndef sub(a, b):\n    return a -
 expectm fail "an earlier round's record does not approve a later edit" 'the record'\''s diff hash is not the hash of the fi' rr
 # r14 finding 1: a pipeline failure or an empty diff voids the round at step 1 AND at step 2, removes any old record and records nothing. rrstepx runs the extracted block with NO `set -e` (the block must handle
 # its own failures) and, when FAILSUB is given, with a stub git whose subcommand FAILSUB exits 1.
-rrstepx() { (cd "$tmp/rr" && { [ ! -e app.py ] || git add -N app.py; } && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" > "$tmp/x-$1" && if [[ -n "${2:-}" ]]; then FAILSUB="$2" PATH="$tmp/stubgit:$PATH" bash "$tmp/x-$1"; else bash "$tmp/x-$1"; fi) >> "$tmp/rrout.txt" 2>&1; }
+rrstepx() { (cd "${RRCWD:-$tmp/rr}" && { [ ! -e "$tmp/rr/app.py" ] || git -C "$tmp/rr" add -N app.py; } && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" > "$tmp/x-$1" && if [[ -n "${2:-}" ]]; then FAILSUB="$2" PATH="$tmp/stubgit:$PATH" bash "$tmp/x-$1"; else bash "$tmp/x-$1"; fi) >> "$tmp/rrout.txt" 2>&1; }
 rrstale() { rrrec "$(rrhash)" "VERDICT: APPROVED\n"; }
 rrmk; rrstale; rrstepx step1.sh diff; rrstepx step2.sh
 expect fail "a git diff that fails at step 1 leaves no record (the old record is removed and no snapshot is kept)" test -e "$tmp/rr/.claude/review/final-review.txt" -o -s "$tmp/rr/.claude/review/reviewed.diff"
@@ -1464,6 +1471,17 @@ expect fail "an empty diff leaves no record and no snapshot" test -e "$tmp/rr/.c
 expect pass "control: an empty diff was refused at step 1 (the block itself said so)" grep -Eq "no snapshot" "$tmp/rrout.txt"
 rrmk; rrstepx step1.sh; rrstepx step2.sh
 expect pass "the same block with a working git and a real diff still records" rr
+# r15 finding 2: both steps resolve the repository root first. From a subfolder the record must land at the root (not in a stray subfolder .claude), the hash must match the root diff and a failed
+# `git rev-parse --show-toplevel` must record nothing anywhere. RRCWD runs the extracted block from a subfolder.
+rrmk; mkdir -p "$tmp/rr/sub/deeper"; RRCWD="$tmp/rr/sub/deeper" rrstepx step1.sh; RRCWD="$tmp/rr/sub/deeper" rrstepx step2.sh
+expect pass "the block run from a subfolder writes a record at the repo root that the checker accepts" rr
+expectm fail "review record: a failing toplevel lookup fails the check and says so" 'cannot locate the review record' env FAILSUB=--show-toplevel PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
+expect pass "the checker run with a subfolder path reads the record at the repo root" python3 "$here/check-review-record.py" "$tmp/rr/sub/deeper" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
+expect fail "the block run from a subfolder leaves no .claude directory in the subfolder" test -e "$tmp/rr/sub/deeper/.claude" -o -e "$tmp/rr/sub/.claude"
+expect pass "the block run from a subfolder kept the snapshot at the repo root" test -s "$tmp/rr/.claude/review/reviewed.diff"
+rrmk; mkdir -p "$tmp/rr/sub"; RRCWD="$tmp/rr/sub" rrstepx step1.sh rev-parse; RRCWD="$tmp/rr/sub" rrstepx step2.sh rev-parse
+expect fail "a failing toplevel lookup records nothing, at the root or in the subfolder" test -e "$tmp/rr/.claude" -o -e "$tmp/rr/sub/.claude"
+expect pass "control: a failing toplevel lookup is reported by the block" grep -q "no repo root" "$tmp/rrout.txt"
 # r14 hostile read: a reviewer reply that contains the old heredoc terminator line must not end the record early and run the rest of the reply as shell commands
 rm -f "$tmp/pwned"
 rrmk; rrstepx step1.sh; (cd "$tmp/rr" && sed "s/git diff HEAD/git diff $(git rev-list --max-parents=0 HEAD)/g; s|<the reviewer's reply, verbatim>|VERDICT: APPROVED\nREVIEW\ntouch $tmp/pwned\nLOW: x|" "$tmp/step2.sh" | bash >/dev/null 2>&1)
@@ -1527,9 +1545,9 @@ printf 'x=1\n' > "$tmp/rr/extra.py"; rrrec "$(rrhash)" "VERDICT: APPROVED\n"
 expect pass "review record: a failing intent-to-add (index preparation) fails the check and says so" sh -c 'FAILSUB=add PATH="$1:$PATH" python3 "$2" "$3" "$4" 2>&1 | grep -q "git add -N failed"' _ "$tmp/stubgit" "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
 rm -f "$tmp/rr/extra.py"
 expectm fail "review record: a failing untracked-file listing fails the check" 'git ls-files --others failed \(exit ' env FAILSUB=ls-files PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
-expectm fail "review record: a failing index path lookup fails the check" 'git rev-parse --git-path failed \(exit ' env FAILSUB=rev-parse PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
+expectm fail "review record: a failing index path lookup fails the check" 'git rev-parse --git-path failed \(exit ' env FAILSUB=--git-path PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
 rrmk; base0="$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"; rrrec "$(rrhash)" "VERDICT: APPROVED\n"; rm -rf "$tmp/notgit"; mkdir -p "$tmp/notgit/.claude/review"; cp "$tmp/rr/.claude/review/final-review.txt" "$tmp/notgit/.claude/review/"
-expectm fail "review record: a directory that is not a git repo fails the check" 'git rev-parse --git-path failed \(exit ' env GIT_CEILING_DIRECTORIES="$tmp" python3 "$here/check-review-record.py" "$tmp/notgit" "$base0"
+expectm fail "review record: a directory that is not a git repo fails the check" 'cannot locate the review record' env GIT_CEILING_DIRECTORIES="$tmp" python3 "$here/check-review-record.py" "$tmp/notgit" "$base0"
 rrmk; rm -f "$tmp/rr/app.py"; rrrec "$EMPTYH" "VERDICT: APPROVED\n"
 expectm fail "review record: an empty diff never validates, even with the empty-input hash recorded" 'the final diff is empty: nothing was reviewed' rr
 expect pass "the real branch of the proof runs the review-record check for the two skills with a Claude reviewer" sh -c "grep -q 'check-review-record.py' '$here/review-loop-proof.sh' && grep -q -- '--audit' '$here/review-loop-proof.sh'"
