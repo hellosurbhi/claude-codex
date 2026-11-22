@@ -9,9 +9,9 @@ description: How to call OpenAI Codex (plan audits, code review, implementation)
 
 ## Tool
 
-`~/.claude/config/scripts/codex-call.sh [--sandbox MODE] [--role FILE] [--resume THREAD_ID] [--cd DIR] PROMPT`
+`~/.claude/config/scripts/codex-call.sh [--sandbox MODE] [--role FILE] [--resume THREAD_ID] [--cd DIR] (--prompt-file FILE | PROMPT)`
 
-Run it with Bash. Output: first line `THREAD_ID: <id>`, then Codex's final message. It exits non-zero with "UNREVIEWED" when Codex returns no message: that is never an approval.
+Run it with Bash. The prompt reaches Codex on stdin either way. Use `--prompt-file` for anything large (a diff, a plan with context): a positional PROMPT is limited by the operating system's argument size, a file is not, and a missing or empty file is an error that calls nothing. Output: first line `THREAD_ID: <id>`, then Codex's final message. It exits non-zero with "UNREVIEWED" when Codex returns no message: that is never an approval.
 
 ## Session Management
 

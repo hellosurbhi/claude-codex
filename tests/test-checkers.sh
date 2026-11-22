@@ -878,6 +878,39 @@ expectm fail "codex-call.sh rejects an explicitly empty --resume" 'empty --resum
 expect pass "the empty --resume rejection names the argument and never calls codex" sh -c 'grep -q "empty --resume" "$1" && [ ! -e "$2" ]' _ "$tmp/tiderr.txt" "$tmp/tidcalls.txt"
 tidrun '{"type":"thread.started","thread_id":"t9"}' --resume t9 "p"
 expect pass "control: a non-empty --resume still resumes" grep -qx 'THREAD_ID: t9' "$tmp/tidout.txt"
+# r20 finding 1: the prompt reaches Codex on stdin (`-`), never as one process argument, so a multi-megabyte diff cannot exceed the OS argument limit. The fake codex hashes what it reads on stdin and records its argv.
+mkdir -p "$tmp/bigbin"
+cat > "$tmp/bigbin/codex" <<'FAKE'
+#!/usr/bin/env bash
+echo called >> "$BIGCALLS"
+printf '%s\n' "$@" > "$BIGARGS"
+shasum -a 256 | cut -d' ' -f1 > "$BIGSHA"
+printf '%s\n' '{"type":"thread.started","thread_id":"tbig"}' '{"type":"item.completed","item":{"type":"agent_message","text":"VERDICT: APPROVED"}}' '{"type":"turn.completed"}'
+FAKE
+chmod +x "$tmp/bigbin/codex"
+bigcc() { rm -f "$tmp/bigcalls.txt" "$tmp/bigsha.txt" "$tmp/bigargs.txt"; PATH="$tmp/bigbin:$PATH" BIGCALLS="$tmp/bigcalls.txt" BIGARGS="$tmp/bigargs.txt" BIGSHA="$tmp/bigsha.txt" bash "$here/../scripts/codex-call.sh" "$@" >"$tmp/bigout.txt" 2>"$tmp/bigerr.txt"; local rc=$?; cat "$tmp/bigerr.txt" >&2; return $rc; }
+python3 -c 'import base64, os, sys; open(sys.argv[1], "w").write(base64.b64encode(os.urandom(2250000)).decode() + "\n")' "$tmp/bigprompt.txt"
+BIGSUM="$(shasum -a 256 < "$tmp/bigprompt.txt" | cut -d' ' -f1)"
+bigfed() { [ "$(cat "$tmp/bigsha.txt" 2>/dev/null)" = "$1" ]; }
+bigargsmall() { [ -s "$tmp/bigargs.txt" ] && ! awk 'length($0) > 1000 { bad = 1 } END { exit bad ? 0 : 1 }' "$tmp/bigargs.txt"; }
+bigcc --prompt-file "$tmp/bigprompt.txt" || true
+expect pass "codex-call.sh: a 3 MB prompt file reaches a NEW session byte for byte (hash compare)" bigfed "$BIGSUM"
+expect pass "codex-call.sh: no argument of the new-session codex call is large (the prompt is on stdin)" bigargsmall
+expect pass "codex-call.sh: the new-session call prints the thread id and message" grep -qx 'THREAD_ID: tbig' "$tmp/bigout.txt"
+bigcc --resume tbig --prompt-file "$tmp/bigprompt.txt" || true
+expect pass "codex-call.sh: a 3 MB prompt file reaches a RESUMED session byte for byte (hash compare)" bigfed "$BIGSUM"
+expect pass "codex-call.sh: no argument of the resume codex call is large (the prompt is on stdin)" bigargsmall
+bigcc "a short positional prompt" || true
+expect pass "codex-call.sh: a short positional prompt still arrives, now on stdin" bigfed "$(printf '%s' 'a short positional prompt' | shasum -a 256 | cut -d' ' -f1)"
+printf 'ROLE' > "$tmp/bigrole.txt"
+bigcc --role "$tmp/bigrole.txt" --prompt-file "$tmp/bigprompt.txt" || true
+expect pass "codex-call.sh: --role text is prepended to the prompt file on stdin" bigfed "$( (printf 'ROLE\n\n'; cat "$tmp/bigprompt.txt") | shasum -a 256 | cut -d' ' -f1)"
+expectm fail "codex-call.sh rejects a missing prompt file" 'prompt file' bigcc --prompt-file "$tmp/no-such-prompt.txt"
+expect pass "a missing prompt file calls no codex and prints no verdict" sh -c '[ ! -e "$1" ] && ! grep -q "VERDICT\|THREAD_ID" "$2"' _ "$tmp/bigcalls.txt" "$tmp/bigout.txt"
+: > "$tmp/emptyprompt.txt"
+expectm fail "codex-call.sh rejects an empty prompt file" 'prompt file' bigcc --prompt-file "$tmp/emptyprompt.txt"
+expect pass "an empty prompt file calls no codex and prints no verdict" sh -c '[ ! -e "$1" ] && ! grep -q "VERDICT\|THREAD_ID" "$2"' _ "$tmp/bigcalls.txt" "$tmp/bigout.txt"
+expectm fail "codex-call.sh rejects a prompt file together with a positional prompt" 'both' bigcc --prompt-file "$tmp/bigprompt.txt" "also positional"
 # cc11-main-r5 finding 2: the README must name the position the contract line really has (line 1 is the shebang).
 expect pass "the README places the codex-call.sh contract line on the line it really is on" test "$(sed -n 2p "$here/../scripts/codex-call.sh" | cut -c1-22)" = "# contract: codex-call" -a -n "$(grep -F 'The second line of `scripts/codex-call.sh` is a contract line' "$here/../README.md")"
 

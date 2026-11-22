@@ -11,38 +11,50 @@
 # installs it at ~/.claude/config/scripts/codex-call.sh, the path every skill calls.
 #
 # Usage:
-#   codex-call.sh [--sandbox read-only|workspace-write] [--role FILE] [--resume THREAD_ID] [--cd DIR] PROMPT
+#   codex-call.sh [--sandbox read-only|workspace-write] [--role FILE] [--resume THREAD_ID] [--cd DIR] (--prompt-file FILE | PROMPT)
+# The prompt always reaches Codex on stdin (`-`), never as a process argument. Use --prompt-file for anything that can be large (a diff):
+# a positional PROMPT is still accepted for short text, but it is limited by the OS argument size, a prompt file is not.
 # Output (stdout): first line `THREAD_ID: <id>`, then Codex's final message.
 # Exit non-zero if Codex fails or returns no message: a dead call is NOT an approval.
 set -euo pipefail
 command -v python3 >/dev/null || { echo "codex-call: python3 is required (it parses the Codex event stream). Treat as UNREVIEWED." >&2; exit 2; }
 # WHY the repository top and not $PWD (cc11-main-r2 finding 3): Codex reviews relative to --cd, so a review started from a subfolder saw only that folder.
-sandbox=read-only role="" resume="" resume_set=0 dir="$(git rev-parse --show-toplevel 2>/dev/null || printf "%s" "$PWD")"
+sandbox=read-only role="" resume="" resume_set=0 pfile="" pfile_set=0 dir="$(git rev-parse --show-toplevel 2>/dev/null || printf "%s" "$PWD")"
 while [[ $# -gt 1 ]]; do
   case "$1" in
     --sandbox) sandbox="$2"; shift 2 ;;
     --role) role="$2"; shift 2 ;;
     --resume) resume="$2"; resume_set=1; shift 2 ;;
     --cd) dir="$2"; shift 2 ;;
+    --prompt-file) pfile="$2"; pfile_set=1; shift 2 ;;
     *) break ;;
   esac
 done
 # WHY an explicitly empty --resume is an error and not "start a new session" (r19 finding 2): a caller that lost its thread id would silently open a fresh session and the continued review
 # would run without the context it relied on. "Not passed" (resume_set=0) is still a new session; "passed but empty" never reaches codex.
 if [[ $resume_set -eq 1 && -z "$resume" ]]; then echo "codex-call: empty --resume value (a thread id was expected). Treat as UNREVIEWED." >&2; exit 2; fi
-prompt="$1"
-[[ -n "$role" ]] && prompt="$(cat "$role")"$'\n\n'"$prompt"
-out="$(mktemp)"; trap 'rm -f "$out"' EXIT
+# WHY the prompt goes on stdin from a file (r20 finding 1): a whole diff as one argument exceeds the OS argument limit (E2BIG) and Codex never started. Verified on the installed CLI:
+# `codex exec [PROMPT]` and `codex exec resume [ID] [PROMPT]` both read the instructions from stdin when the prompt is `-`. A positional PROMPT is written to the same file, so there is one path.
+# WHY a missing or empty prompt file is an error and never an empty review: Codex would answer an empty prompt with something that looks like a verdict.
+if [[ $pfile_set -eq 1 ]]; then
+  if [[ $# -gt 0 ]]; then echo "codex-call: give either --prompt-file or a positional prompt, not both. Treat as UNREVIEWED." >&2; exit 2; fi
+  if [[ -z "$pfile" || ! -s "$pfile" ]]; then echo "codex-call: prompt file is missing or empty: ${pfile:-<empty name>}. No call was made; treat as UNREVIEWED." >&2; exit 2; fi
+elif [[ $# -lt 1 ]]; then echo "codex-call: no prompt (pass --prompt-file FILE or a prompt). Treat as UNREVIEWED." >&2; exit 2; fi
+out="$(mktemp)"; pin="$(mktemp)"; trap 'rm -f "$out" "$pin"' EXIT
+if [[ $pfile_set -eq 1 ]]; then cp "$pfile" "$pin"; else printf '%s' "$1" > "$pin"; fi
+if [[ -n "$role" ]]; then
+  { printf '%s\n\n' "$(cat "$role")"; cat "$pin"; } > "$pin.role" && mv "$pin.role" "$pin"
+fi
 if [[ $resume_set -eq 1 ]]; then
   # WHY the profile, sandbox and cwd go BEFORE `resume`: the resume subcommand has no
   # -p/-s/-C flags of its own, and relying on the stored thread settings left a
   # continued audit without an explicit review profile or read-only policy
   # (codex306-r1). Verified 2026-11-12 on CLI 0.167.1: the resumed turn's
   # turn_context reads gpt-6.1-sol, xhigh, read-only.
-  codex exec -p review --sandbox "$sandbox" --cd "$dir" resume --json --skip-git-repo-check "$resume" "$prompt" </dev/null >"$out" 2>&1 && rc=0 || rc=$?
+  codex exec -p review --sandbox "$sandbox" --cd "$dir" resume --json --skip-git-repo-check "$resume" - <"$pin" >"$out" 2>&1 && rc=0 || rc=$?
 else
   # --skip-git-repo-check: plan audits can run from a scratch folder that is not a repo
-  codex exec --json -p review --sandbox "$sandbox" --skip-git-repo-check --cd "$dir" "$prompt" </dev/null >"$out" 2>&1 && rc=0 || rc=$?
+  codex exec --json -p review --sandbox "$sandbox" --skip-git-repo-check --cd "$dir" - <"$pin" >"$out" 2>&1 && rc=0 || rc=$?
 fi
 python3 - "$out" "$rc" <<'PY'
 import json, sys

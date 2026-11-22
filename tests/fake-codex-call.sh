@@ -17,16 +17,23 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 argv=("$@")
-dir="$PWD" resume=""
+dir="$PWD" resume="" pfile=""
 while [[ $# -gt 1 ]]; do
   case "$1" in
     --sandbox|--role) shift 2 ;;
     --resume) resume="$2"; shift 2 ;;
     --cd) dir="$2"; shift 2 ;;
+    --prompt-file) pfile="$2"; shift 2 ;;
     *) break ;;
   esac
 done
-prompt="${1:-}"
+# WHY --prompt-file (r20 finding 1): the skills pass the prompt as a file, like the real wrapper; a missing or empty file fails like the real one.
+if [[ -n "$pfile" ]]; then
+  [[ -s "$pfile" ]] || { echo "codex-call: prompt file is missing or empty: $pfile. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  prompt="$(cat "$pfile")"
+else
+  prompt="${1:-}"
+fi
 # WHY every execution is logged by an EXIT trap: the checkers assert on this log (see evlog.py),
 # so a call that dies, limits or returns garbage must still leave exactly one line. stdout and
 # stderr are captured to files and replayed so the log holds the exact reply the model saw.
