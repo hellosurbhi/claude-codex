@@ -64,6 +64,14 @@ CFG=(-c core.quotePath=true -c core.fileMode=true -c core.symlinks=true -c core.
 DOPT=(--no-ext-diff --no-textconv --no-color --no-color-moved --no-renames --no-relative --src-prefix=a/ --dst-prefix=b/ --full-index
       --diff-algorithm=myers --indent-heuristic -U3 --inter-hunk-context=0 --ignore-submodules=none --submodule=short -O/dev/null)
 canon() { git "${CFG[@]}" "$@"; }
+# WHY the script's own absolute path is resolved HERE, before any cd (r31): snapshot mode changes to the repo root, and a relative $0 (started from a
+# subdirectory) or a bare name (found through PATH) no longer names the script afterwards, so the recursive submodule call broke. A symlinked install
+# (the skills put it under ~/.claude/config/scripts) is kept as the symlink path, which is what the recursive call needs. The recursion starts it with
+# bash explicitly so it never depends on the exec bit.
+self="$0"
+case "$self" in */*) ;; *) self="$(command -v -- "$self" 2>/dev/null)" || self="$0" ;; esac
+self_dir="$(cd -- "$(dirname -- "$self")" 2>/dev/null && pwd)" || self_dir=""
+self="$self_dir/$(basename -- "$self")"
 mode="snapshot"
 case "${1:-}" in
   --range) mode=range; [ $# -eq 3 ] || { echo "usage: review-snapshot.sh --range <base> <head>" >&2; exit 2; } ;;
@@ -86,7 +94,6 @@ case "$mode" in
     top="$(canon rev-parse --show-toplevel)" || exit 1
     [ -n "$top" ] || exit 1
     cd "$top" || exit 1
-    self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
     die() { echo "review-snapshot: $*" >&2; exit 1; }
     base_tree="$(canon rev-parse --verify "$base^{tree}")" || die "cannot resolve $base"
     real_obj="$(canon rev-parse --path-format=absolute --git-path objects)" || exit 1
@@ -122,7 +129,7 @@ case "$mode" in
         printf '%s\0' "$p" >> "$tmp/dirs-done"
         if grep -qzxF -- "$p" "$tmp/gitlinks"; then
           [ -e "$p/.git" ] || continue   # an uninitialized submodule directory: the CURRENT index gitlink stays (a moved pointer shows as the change)
-          sub_out="$(cd -- "./$p" && env -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES "$self" HEAD)" || die "submodule $p: its own snapshot failed"
+          sub_out="$(cd -- "./$p" && env -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES "${BASH:-bash}" "$self" HEAD)" || die "submodule $p: its own snapshot failed"
           [ -z "$sub_out" ] || die "submodule $p has uncommitted or untracked changes"
           sub_sha="$(canon -C "$p" rev-parse --verify HEAD)" || die "submodule $p has no HEAD"
           printf '160000 %s\t%s\0' "$sub_sha" "$p" >> "$tmp/info"

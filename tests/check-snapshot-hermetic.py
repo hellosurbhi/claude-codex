@@ -288,6 +288,9 @@ STATE = {
     "attribute ident set fails closed": attr_case("*.py ident", "app.py"),
     "attribute -working-tree-encoding (explicitly unset) does not block": attr_case("*.py -working-tree-encoding"),
     "attribute working-tree-encoding=<name> fails closed": attr_case("*.py working-tree-encoding=UTF-16", "app.py"),
+    "relative invocation from a subdirectory with a clean submodule": st_call("relative"),
+    "invocation through a symlink with a clean submodule": st_call("symlink"),
+    "invocation by bare name through PATH with a clean submodule": st_call("path"),
 }
 
 def tree_state(repo):
