@@ -119,6 +119,8 @@ if [[ $scenario == real ]]; then
   WRAPPER_SHA256="$(shasum -a 256 "$HOME/.claude/config/scripts/codex-call.sh" | cut -d' ' -f1)"; export WRAPPER_SHA256
   EXPECT_CODEX="$REAL_CODEX"; export EXPECT_CODEX
   export PATH="$here/shim:$PATH"
+  # WHY the wrapper logs its early exits into the shim's log (r23): a call that fails before it reaches codex (bad arguments, a missing prompt file) never touches the shim, so without this an earlier clean review stood as the last word.
+  export CODEX_CALL_EVENT_LOG="$EVLOG"
 fi
 claude -p "$task" --model sonnet --setting-sources "$sources" \
   --permission-mode acceptEdits \

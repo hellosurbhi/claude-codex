@@ -8,4 +8,7 @@ last = "NONE"
 for e in sorted(wlog.load(sys.argv[1]), key=lambda x: x.get("ts_start", x["ts"])):
     if e["wrapper"] in ("fake", "real"):
         last = wlog.valid_verdict(e) or "NONE"
+    # WHY a wrapper-failed event is a failed attempt (r23): the wrapper exited before it reached codex, so the earlier verdict must not stand.
+    elif wlog.is_wrapper_failure(e):
+        last = "NONE"
 print(last)

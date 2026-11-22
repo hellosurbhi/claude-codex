@@ -18,6 +18,29 @@
 # Output (stdout): first line `THREAD_ID: <id>`, then Codex's final message.
 # Exit non-zero if Codex fails or returns no message: a dead call is NOT an approval.
 set -euo pipefail
+# WHY the exit handler is installed before ANY check (r23): the parser and the prompt, role and resume checks used to exit 2 with no trace anywhere, so a caller that kept an earlier clean verdict
+# could not tell that a later review attempt had failed. With CODEX_CALL_EVENT_LOG set (a test and proof seam; unset in normal use, which writes nothing and changes nothing) every nonzero exit that never
+# reached codex appends one wrapper-failed event: kind, exit code, the run nonce, no prompt text. An exit after codex ran is logged by the codex shim itself, so it is not logged twice.
+# WHY it never changes the exit status: a log that cannot be written (missing folder, a directory) must not turn exit 2 into success or into another code; the append is best effort and the original status is re-raised.
+# WHY one trap with the cleanup inside it: `trap` replaces any earlier handler, so a second `trap ... EXIT` further down would silently drop one of the two jobs.
+# WHY python3 for the clock with a `date` fallback: the python3 check below can itself be the failing step, and the log must still get an event ordered after any earlier call (the fallback sorts late in its second).
+out=""; pin=""; codex_started=0; ev_log="${CODEX_CALL_EVENT_LOG:-}"; ev_start=""
+now() { python3 -c 'import time; print(repr(time.time()))' 2>/dev/null || echo "$(date +%s).999"; }
+[[ -z "$ev_log" ]] || ev_start="$(now)"
+# WHY cleanup names only non-empty paths (r22 finding 2): the trap is installed before the temp files exist, and an unset $pin made "$pin.role" expand to ".role", deleting a file of that name in the working directory
+# when a mktemp failed. Do not collapse this back into one `rm -f "$out" "$pin" "$pin.role"`.
+cleanup() { [[ -z "$out" ]] || rm -f -- "$out"; if [[ -n "$pin" ]]; then rm -f -- "$pin" "$pin.role"; fi; }
+on_exit() {
+  local rc=$?
+  cleanup
+  if [[ $rc -ne 0 && $codex_started -eq 0 && -n "$ev_log" ]]; then
+    { local nonce="${EVNONCE:-}"; [[ "$nonce" =~ ^[A-Za-z0-9]*$ ]] || nonce=""
+      printf '{"seq": %s, "wrapper": "wrapper-failed", "prov": null, "argv": [], "exit": %s, "resume": null, "thread_id": null, "phase": "unknown", "stdout": "", "stderr": "", "meta": {"nonce": "%s"}, "ts_start": %s, "ts": %s}\n' \
+        "$(( $(wc -l < "$ev_log") + 1 ))" "$rc" "$nonce" "${ev_start:-0}" "$(now)" >> "$ev_log"; } 2>/dev/null || true
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
 command -v python3 >/dev/null || { echo "codex-call: python3 is required (it parses the Codex event stream). Treat as UNREVIEWED." >&2; exit 2; }
 # WHY the repository top and not $PWD (cc11-main-r2 finding 3): Codex reviews relative to --cd, so a review started from a subfolder saw only that folder.
 sandbox=read-only role="" resume="" resume_set=0 pfile="" pfile_set=0 dir="$(git rev-parse --show-toplevel 2>/dev/null || printf "%s" "$PWD")"
@@ -62,11 +85,6 @@ if [[ -n "$role" ]]; then
   role_text="$(cat "$role")" || { echo "codex-call: could not read the role file: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; }
   [[ -n "$role_text" ]] || { echo "codex-call: role file has no text: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; }
 fi
-# WHY cleanup names only non-empty paths (r22 finding 2): the trap is installed before the temp files exist, and an unset $pin made "$pin.role" expand to ".role", deleting a file of that name in the working directory
-# when a mktemp failed. Do not collapse this back into one `rm -f "$out" "$pin" "$pin.role"`.
-out=""; pin=""
-cleanup() { [[ -z "$out" ]] || rm -f -- "$out"; if [[ -n "$pin" ]]; then rm -f -- "$pin" "$pin.role"; fi; }
-trap cleanup EXIT
 out="$(mktemp)" || { echo "codex-call: could not create a temp file (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
 pin="$(mktemp)" || { echo "codex-call: could not create a temp file (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
 if [[ $pfile_set -eq 1 ]]; then
@@ -79,6 +97,9 @@ if [[ -n "$role" ]]; then
   { printf '%s\n\n' "$role_text" && cat "$pin"; } > "$pin.role" || { echo "codex-call: could not build the prompt with the role text. No call was made; treat as UNREVIEWED." >&2; exit 2; }
   mv "$pin.role" "$pin" || { echo "codex-call: could not build the prompt with the role text. No call was made; treat as UNREVIEWED." >&2; exit 2; }
 fi
+# WHY marked only when codex can actually be started: from here on the codex shim logs the attempt itself, so the exit handler must not add a second event; a codex that is not on PATH never reaches any shim,
+# so that exit is still logged as wrapper-failed.
+if command -v codex >/dev/null 2>&1; then codex_started=1; fi
 if [[ $resume_set -eq 1 ]]; then
   # WHY the profile, sandbox and cwd go BEFORE `resume`: the resume subcommand has no
   # -p/-s/-C flags of its own, and relying on the stored thread settings left a

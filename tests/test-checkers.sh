@@ -2043,6 +2043,52 @@ rrmk; rm -f "$tmp/rr/app.py"; rrrec "$EMPTYH" "VERDICT: APPROVED\n"
 expectm fail "review record: an empty diff never validates, even with the empty-input hash recorded" 'the final diff is empty: nothing was reviewed' rr
 expect pass "the real branch of the proof runs the review-record check for the two skills with a Claude reviewer" sh -c "grep -q 'check-review-record.py' '$here/review-loop-proof.sh' && grep -q -- '--audit' '$here/review-loop-proof.sh'"
 
+# Round 23: an early exit of the REAL codex-call.sh (bad arguments, missing prompt or role file) never reaches the codex shim, so it used to leave no event and an earlier clean review stood
+# as the last word. With CODEX_CALL_EVENT_LOG set the wrapper logs a wrapper-failed event for every nonzero exit that never reached codex; the final-result checks read it as "no approval".
+wfcall() { PATH="$tmp/bigbin:$PATH" CODEX_CALL_EVENT_LOG="$EVLOG" bash "$here/../scripts/codex-call.sh" "$@" >/dev/null 2>&1; }
+wfcase() { # clean review, then this early-exit call through the real wrapper: it must exit 2, the final-result check must reject and the last verdict must be NONE
+  mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
+  python3 "$here/check-scripted.py" "$EVLOG" final S1 --real >/dev/null 2>&1 || return 1
+  wfcall "$@"; [ $? -eq 2 ] || return 1
+  python3 "$here/check-scripted.py" "$EVLOG" final S1 --real >/dev/null 2>&1 && return 1
+  [ "$(python3 "$here/last-verdict.py" "$EVLOG")" = NONE ]
+}
+printf 'x' > "$tmp/wfp.txt"; : > "$tmp/wfempty.txt"
+expect pass "wrapper-failed: a clean review then a missing prompt file is not an approval" wfcase --prompt-file "$tmp/nonexistent-prompt.txt"
+expect pass "wrapper-failed: a clean review then an empty prompt file is not an approval" wfcase --prompt-file "$tmp/wfempty.txt"
+expect pass "wrapper-failed: a clean review then a missing role file is not an approval" wfcase --role "$tmp/nonexistent-role.txt" "p"
+expect pass "wrapper-failed: a clean review then an empty --resume is not an approval" wfcase --resume "" "p"
+expect pass "wrapper-failed: a clean review then an unknown option is not an approval" wfcase --bogus "p"
+expect pass "wrapper-failed: a clean review then an option with no value is not an approval" wfcase --sandbox
+expect pass "wrapper-failed: a clean review then no prompt at all is not an approval" wfcase
+expect pass "wrapper-failed: a clean review then both prompt forms is not an approval" wfcase --prompt-file "$tmp/wfp.txt" "p"
+expect pass "wrapper-failed: a clean review then extra arguments is not an approval" wfcase "p" "q"
+mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"; wfcall --bogus "p"
+expect pass "wrapper-failed: the event has kind, exit code, the run nonce and no prompt text" python3 -c 'import json,os,sys; e=[json.loads(l) for l in open(sys.argv[1])][-1]; sys.exit(0 if e["wrapper"]=="wrapper-failed" and e["exit"]==2 and e["argv"]==[] and e["meta"].get("nonce")==os.environ["EVNONCE"] and "bogus" not in json.dumps(e) else 1)' "$EVLOG"
+expect pass "wrapper-failed: a wrapper-failed event is not counted as a genuine real call" python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; sys.exit(1 if wlog.is_real(e) else 0)' "$here" "$EVLOG"
+mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"; wfcall "p" >/dev/null
+expect pass "wrapper-failed: a successful wrapper call writes no event" test "$(wc -l < "$EVLOG" | tr -d ' ')" = 1
+expect pass "wrapper-failed: a clean review plus a successful wrapper call is still approved" fr
+mkdir -p "$tmp/failbin"; printf '#!/bin/sh\nexit 1\n' > "$tmp/failbin/codex"; chmod +x "$tmp/failbin/codex"
+mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
+PATH="$tmp/failbin:$PATH" CODEX_CALL_EVENT_LOG="$EVLOG" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>&1
+expect pass "wrapper-failed: a call that reached codex and failed adds no event (the shim logs it, no double count)" test "$(wc -l < "$EVLOG" | tr -d ' ')" = 1
+mkdir -p "$tmp/nocodexbin"; for t in python3 git mktemp cp rm cat mv dirname; do ln -sf "$(command -v $t)" "$tmp/nocodexbin/$t"; done
+mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
+PATH="$tmp/nocodexbin" CODEX_CALL_EVENT_LOG="$EVLOG" "$(command -v bash)" "$here/../scripts/codex-call.sh" "p" >/dev/null 2>&1; nocodexrc=$?
+expect pass "wrapper-failed: codex missing from PATH exits nonzero and logs a wrapper-failed event" sh -c "test $nocodexrc -ne 0 && test \"\$(wc -l < '$EVLOG' | tr -d ' ')\" = 2 && ! python3 '$here/check-scripted.py' '$EVLOG' final S1 --real"
+mkrun; rm -f "$tmp/unset-log.jsonl"
+env -u CODEX_CALL_EVENT_LOG PATH="$tmp/bigbin:$PATH" bash "$here/../scripts/codex-call.sh" --bogus "p" >/dev/null 2>&1; unsetrc=$?
+expect pass "wrapper-failed: variable unset keeps exit 2 and writes no log file anywhere" sh -c "test $unsetrc -eq 2 && test ! -e '$tmp/unset-log.jsonl' && test -z \"\$(ls -A '$tmp/run/repo' | grep -v -e '^app.py\$' -e '^.git\$')\" && test \"\$(wc -l < '$EVLOG' | tr -d ' ')\" = 0"
+CODEX_CALL_EVENT_LOG="$tmp/no-such-dir/log.jsonl" bash "$here/../scripts/codex-call.sh" --bogus "p" >/dev/null 2>"$tmp/wferr.txt"; badpathrc=$?
+expect pass "wrapper-failed: an unwritable log path (missing folder) keeps the original exit code 2" test $badpathrc -eq 2
+expect pass "wrapper-failed: the original error message still prints when the log is unwritable" grep -q "unknown option" "$tmp/wferr.txt"
+mkdir -p "$tmp/wfdir"; CODEX_CALL_EVENT_LOG="$tmp/wfdir" bash "$here/../scripts/codex-call.sh" --prompt-file "$tmp/nonexistent-prompt.txt" >/dev/null 2>&1; dirrc=$?
+expect pass "wrapper-failed: a log path that is a directory keeps the original exit code 2" test $dirrc -eq 2
+mkrun; LINEMETA="state=S1 endstate=S1 impl=yes audit=yes" line real 0 review "$TID$CLEAN"
+expect pass "wrapper-failed: control: a clean audit alone passes the audit check" python3 "$here/check-scripted.py" "$EVLOG" final X --real --audit
+wfcall --bogus "p"
+expectm fail "wrapper-failed: a clean audit followed by an early wrapper exit is not an approval" 'REJECT: the last test audit is' python3 "$here/check-scripted.py" "$EVLOG" final X --real --audit
 # Self-test (round 3 finding 3): these cases need no private reviewer, so they MUST have run (and passed) in every mode, CHECKERS_NO_SPY=1 included.
 for must in "ci.yml declares an explicit contents: read permissions block" "ci.yml checks out with persist-credentials: false" "ci.yml runs the checkers with CHECKERS_NO_SPY=1" \
   "an outside-reviewer call injected into a command is caught" "the reviewer diff command in commands/execute-codex.md lists changes in sibling folders when run from a subfolder" \

@@ -18,6 +18,11 @@ def is_real(e):
         return False
     return p.get("argv_ok") is True and p.get("nonce") == n and p.get("wrapper_sha256") == w and p.get("codex") == os.path.realpath(c) and "/shim/" not in (p.get("codex") or "")
 
+def is_wrapper_failure(e):
+    """An event the real codex-call.sh wrote for an exit that never reached codex (CODEX_CALL_EVENT_LOG). Carries this run's nonce when one is set."""
+    n = os.environ.get("EVNONCE")
+    return e.get("wrapper") == "wrapper-failed" and (not n or (e.get("meta") or {}).get("nonce") == n)
+
 def reply_text(ev):
     # WHY both streams for a successful spy: the reviewer reply goes to the caller's chosen output path, so a reply routed
     # to /dev/stderr is logged as stderr; a failed spy keeps diagnostics out of the reply (r23).

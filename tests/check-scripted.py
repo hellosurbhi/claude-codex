@@ -7,7 +7,9 @@ import wlog
 # WHY --real selects the genuine wrapper events instead of the fake (r9 finding 1): the real scenario is bound to the final state and phase by this SAME mechanism, using the state and impl the shim
 # records in each real event's meta; a real event has no scripted result, so the clean verdict comes from wlog.is_clean alone.
 REAL = "--real" in sys.argv
-evs = sorted((e for e in wlog.load(sys.argv[1]) if (wlog.is_real(e) if REAL else e["wrapper"] == "fake")), key=lambda e: e.get("ts_start", e["ts"]))
+# WHY wrapper-failed events join the real list (r23): an early exit of the real wrapper (bad arguments, a missing prompt file) never reaches the shim, so without its own event an earlier clean review stood as the last word.
+# They have exit != 0 and no verdict, so every mode below reads them as a failed attempt.
+evs = sorted((e for e in wlog.load(sys.argv[1]) if ((wlog.is_real(e) or wlog.is_wrapper_failure(e)) if REAL else e["wrapper"] == "fake")), key=lambda e: e.get("ts_start", e["ts"]))
 mode = sys.argv[2]
 if mode == "rounds":
     # finding rounds 1..N each appeared as a real reply, in order, as the subsequence of the reviewer's replies
@@ -28,6 +30,9 @@ if mode == "final" and "--audit" in sys.argv:
     # WHY start == end state (r13 finding 2): a file edited while the audit ran must not inherit the audit's approval.
     am = a[-1].get("meta", {}) if a else {}
     good = bool(a and a[-1]["exit"] == 0 and wlog.is_clean(a[-1]) and am.get("state") and am.get("endstate") == am.get("state"))
+    # WHY a wrapper-failed event after the last audit voids it (r23): an early exit of the real wrapper carries no sandbox, so it cannot be told from a failed re-audit; failing closed costs one re-audit.
+    if good and any(e["wrapper"] == "wrapper-failed" and e.get("ts_start", e["ts"]) > a[-1].get("ts_start", a[-1]["ts"]) for e in evs):
+        good = False
     if not good:
         print("REJECT: the last test audit is %s" % ("missing" if not a else "not a clean exit-0 verdict bound to one state"), file=sys.stderr)
     sys.exit(0 if good else 1)
