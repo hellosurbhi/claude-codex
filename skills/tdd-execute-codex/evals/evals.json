@@ -56,7 +56,7 @@
       "files": [],
       "expectations": [
         "Claude writes test files first and verifies RED",
-        "Claude runs the codex-call.sh availability check at Phase 3 and notes 'Codex unavailable — skipping audit'",
+        "Claude runs the codex-call.sh availability check at Phase 3 and notes 'Codex unavailable: skipping audit'",
         "Claude classifies as large change (3+ production files)",
         "Claude runs the codex-call.sh availability check at Route B and detects it's unavailable",
         "Claude falls back to Claude direct implementation (does NOT stop)",
@@ -67,7 +67,7 @@
     {
       "id": 5,
       "prompt": "[tdd-execute-codex] Review loop stress case: the reviewer still lists one accepted HIGH finding in rounds 1 through 6 and returns a clean round in round 7.",
-      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7, and delivers only after the clean round.",
+      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7 and delivers only after the clean round.",
       "files": [],
       "expectations": [
         "Claude starts a 6th review round instead of stopping after 3 or 5 rounds",

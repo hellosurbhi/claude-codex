@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Implement the plan at .claude/plan/jwt-auth.md — it adds JWT authentication with refresh tokens to the Express API.",
-      "expected_output": "Claude reads the plan, implements the changes, calls codex-call.sh for review with structured verdict prompt, fixes accepted findings at every severity until a clean round, and delivers a summary table.",
+      "expected_output": "Claude reads the plan, implements the changes, calls codex-call.sh for review with structured verdict prompt, fixes accepted findings at every severity until a clean round and delivers a summary table.",
       "files": [],
       "expectations": [
         "Claude reads the plan file before implementing (Read tool called on .claude/plan/jwt-auth.md)",
@@ -46,7 +46,7 @@
     {
       "id": 4,
       "prompt": "Add a health check endpoint to the API server.",
-      "expected_output": "Claude detects that Codex (codex-call.sh or the CLI) is not available and stops with a clear error message — does NOT proceed without review.",
+      "expected_output": "Claude detects that Codex (codex-call.sh or the CLI) is not available and stops with a clear error message and does NOT proceed without review.",
       "files": [],
       "expectations": [
         "Claude runs the codex-call.sh availability check before Phase 3",
@@ -59,7 +59,7 @@
     {
       "id": 5,
       "prompt": "[claude-codex] Review loop stress case: the reviewer still lists one accepted HIGH finding in rounds 1 through 6 and returns a clean round in round 7.",
-      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7, and delivers only after the clean round.",
+      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7 and delivers only after the clean round.",
       "files": [],
       "expectations": [
         "Claude starts a 6th review round instead of stopping after 3 or 5 rounds",

@@ -28,7 +28,7 @@
         "If Codex returns any accepted finding (BLOCKED, WARNING or MEDIUM/LOW under APPROVED), Claude revises the plan file and re-audits",
         "Claude uses codex-call.sh --resume <THREAD_ID> (not a new session) for iteration 2 onward",
         "Claude reuses the saved THREAD_ID for follow-up audit calls",
-        "Claude keeps re-auditing until a round has no accepted findings, with no iteration cap and no severity floor, and never stops to ask the user for direction"
+        "Claude keeps re-auditing until a round has no accepted findings, with no iteration cap and no severity floor and never stops to ask the user for direction"
       ]
     },
     {
@@ -46,7 +46,7 @@
     {
       "id": 4,
       "prompt": "Plan adding a WebSocket notification system for real-time order updates.",
-      "expected_output": "Claude detects Codex (codex-call.sh or the CLI) is unavailable and stops — does NOT deliver an unaudited plan.",
+      "expected_output": "Claude detects Codex (codex-call.sh or the CLI) is unavailable and stops and does NOT deliver an unaudited plan.",
       "files": [],
       "expectations": [
         "Claude launches Plan agent and creates the plan successfully",
@@ -60,7 +60,7 @@
     {
       "id": 5,
       "prompt": "[plan-codex] Review loop stress case: the reviewer still lists one accepted HIGH finding in rounds 1 through 6 and returns a clean round in round 7.",
-      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7, and delivers only after the clean round.",
+      "expected_output": "Claude fixes and re-reviews every round, continues into round 6 and round 7 and delivers only after the clean round.",
       "files": [],
       "expectations": [
         "Claude starts a 6th review round instead of stopping after 3 or 5 rounds",
