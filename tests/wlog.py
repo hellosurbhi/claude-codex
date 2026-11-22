@@ -35,7 +35,16 @@ def valid_verdict(ev):
         return None
     ls = verdict_lines(ev)
     m = re.fullmatch(VERDICT, ls[0].rstrip()) if len(ls) == 1 else None
-    return m.group(1) if m else None
+    if not m:
+        return None
+    # WHY the severity lines (cc11-main-r2 finding 4): the skills define a Codex reply as the verdict line plus CRITICAL, HIGH, MEDIUM and
+    # LOW lines in that order, and treat a bare verdict as a failed audit. A checker that accepted the bare line could not notice a
+    # regression of that rule. reviewer.sh replies (spy, model) are verdict-only or verdict plus findings, so only Codex wrappers need it.
+    if ev["wrapper"] in ("fake", "real"):
+        heads = [l.split(":", 1)[0] for l in verdict_block(ev) if re.match(r"(CRITICAL|HIGH|MEDIUM|LOW):", l)]
+        if heads != list(SEVS):
+            return None
+    return m.group(1)
 
 def verdict_block(ev):
     """The reply minus the THREAD_ID line, as non-blank lines."""

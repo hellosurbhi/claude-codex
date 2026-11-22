@@ -211,7 +211,8 @@ expect fail "a deleted module after the approval is rejected" python3 "$here/che
 mkrun; python3 - "$EVLOG" <<'PY'
 import json, sys
 ev = lambda seq, st, ts, out: {"seq": seq, "wrapper": "fake", "argv": [], "exit": 0, "resume": None, "thread_id": None, "phase": "unknown", "stdout": out, "stderr": "", "ts_start": st, "ts": ts}
-rows = [ev(1, 10, 15, "THREAD_ID: b\nVERDICT: BLOCKED\n"), ev(2, 5, 30, "THREAD_ID: a\nVERDICT: APPROVED\n")]
+SV = "CRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n"  # complete blocks: only the timing differs, so only the timing decides
+rows = [ev(1, 10, 15, "THREAD_ID: b\nVERDICT: BLOCKED\n" + SV), ev(2, 5, 30, "THREAD_ID: a\nVERDICT: APPROVED\n" + SV)]
 open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
 PY
 expect pass "last-verdict picks the newer BLOCKED review, not the slower older APPROVED" test "$(python3 "$here/last-verdict.py" "$EVLOG")" = "BLOCKED"
@@ -597,6 +598,22 @@ rows=[json.loads(l) for l in open(sys.argv[1])]; rows[1]["wrapper"]="real"
 open(sys.argv[1],"w").write("\n".join(json.dumps(x) for x in rows)+"\n")
 PY2
 expect pass "a real resume of a real thread passes the real-only resume check" python3 "$here/check-resume.py" "$EVLOG" --real
+# cc11-main-r2 finding 4: a Codex approval that lacks the four severity lines is not a valid verdict (the skills define the whole block).
+mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\n'
+expect fail "a real Codex approval with no severity lines is not a valid verdict" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nLOW: none\n'
+expect fail "a real Codex approval missing the MEDIUM line is not a valid verdict" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: BLOCKED\nCRITICAL: bad thing\nHIGH: none\nMEDIUM: none\nLOW: none\n'
+expect pass "a complete BLOCKED block with a finding is a valid verdict" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\n'
+python3 - "$EVLOG" <<'PY2'
+import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1])]
+rows[0]["thread_id"]="abcdef12-3456"
+r=dict(rows[0]); r.update(seq=2, resume="abcdef12-3456", ts=2)
+rows.append(r); open(sys.argv[1],"w").write("\n".join(json.dumps(x) for x in rows)+"\n")
+PY2
+expect fail "a real resume whose approval lacks the severity lines does not count" python3 "$here/check-resume.py" "$EVLOG" --real
 
 # r28/r29: provenance of real runs comes from the process table, the wrapper hash, the run nonce and the real binary path
 cat > "$tmp/realbin/codex" <<'SH'
