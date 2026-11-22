@@ -1287,6 +1287,24 @@ open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in fake+spy)+"\n")
 PY
 expectm_spy fail "a stale patch with the same added line at another location is rejected" 'REJECT: the patched baseline differs from the fi' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 
+# r26 finding 3: the reviewer input is the REDACTED snapshot. A diff where redaction really masked a value passes; raw text, or any input that differs from the redacted snapshot, is rejected.
+redcase() { # input-diff-file : fresh repo with a committed base and a secret-shaped added line, one fallback review of that input after a quota hit
+  mkrun; cd "$tmp/run/repo" || exit 1; printf 'k\n' > app.py; commitbase
+  printf 'k\napi_key = "abcd1234efgh5678ijkl9012"\n' > app.py
+  git diff --no-color HEAD -- app.py > "$tmp/sec.raw.diff"; bash "$here/../scripts/redact-diff.sh" < "$tmp/sec.raw.diff" > "$tmp/sec.red.diff"
+  cp "$tmp/sec.raw.diff" "$tmp/sec.bad.diff"; python3 -c 'import re,sys; p=sys.argv[1]; t=open(p).read(); open(p,"w").write(re.sub(r"(?m)^\+api_key = .*", "+api_key = \"[SECRET]\"", t))' "$tmp/sec.bad.diff"
+  bash "$here/spy-reviewer.sh" S "$1" "$tmp/out.txt" >/dev/null 2>&1
+  line fake 1 unknown "$LIMIT"; orderfake "$EVLOG"
+}
+RCK() { python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"; }
+mkrun; cd "$tmp/run/repo" || exit 1; printf 'k\n' > app.py; commitbase; printf 'k\napi_key = "abcd1234efgh5678ijkl9012"\n' > app.py; git diff --no-color HEAD -- app.py > "$tmp/sec.raw.diff"
+expect_spy pass "r26 control: the redaction really masks the secret-shaped line" bash -c '! grep -q abcd1234efgh5678ijkl9012 <(bash "$1/../scripts/redact-diff.sh" < "$2")' _ "$here" "$tmp/sec.raw.diff"
+redcase "$tmp/sec.red.diff"
+expect_spy pass "r26: a legitimate review of the redacted snapshot passes although redaction masked a value" RCK
+redcase "$tmp/sec.raw.diff"
+expectm_spy fail "r26: raw unredacted text sent to the reviewer is rejected" 'REJECT: the reviewed changes differ from the code that remains' RCK
+redcase "$tmp/sec.bad.diff"
+expectm_spy fail "r26: reviewer input that differs from the redacted snapshot is rejected" 'REJECT: the reviewed changes differ from the code that remains' RCK
 # r20: the proof asserts on one structured AUDIT-STATUS line only
 st() { printf '%s\n' "$1" > "$tmp/rep.txt"; shift; python3 "$here/audit-status.py" "$tmp/rep.txt" "$@"; }
 expect pass "a report ending in an APPROVED status line is accepted" st $'Initial review: UNREVIEWED. Retry ok.\nAUDIT-STATUS: APPROVED reviewer=codex' --expect APPROVED

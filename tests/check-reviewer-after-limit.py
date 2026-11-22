@@ -7,6 +7,24 @@
 # WHY only the log: transcripts quote docs and agent text; the wrapper log is what actually ran.
 import hashlib, os, re, subprocess, sys, tempfile
 import wlog
+# WHY the reviewer input is judged against the REDACTED snapshot (r26 finding 3): every reviewer is handed the diff after scripts/redact-diff.sh (the skills build it that way), so a run where redaction
+# really masked a value must still pass, and raw text reaching the reviewer must not. The raw tree binding (treehash.py) is separate and unchanged. These helpers apply the same script to the raw
+# expectation; what was tried first: comparing the sanitized input to the raw per-file changes and to the raw files, which rejected every legitimate review that masked anything.
+REDACT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "redact-diff.sh")
+def redact(data):
+    r = subprocess.run(["bash", REDACT], input=data, capture_output=True)
+    if r.returncode != 0:
+        print("REJECT: redact-diff.sh failed, so the expected reviewer input cannot be computed", file=sys.stderr); sys.exit(1)
+    return r.stdout
+def redact_file(data):
+    # a whole file as one all-added hunk, redacted like the reviewer's diff, then the prefixes removed again: the file as the reviewer's patch would carry it
+    if not data:
+        return b""
+    ls = data.split(b"\n"); tail = ls.pop() if ls[-1] == b"" else None
+    body = b"@@ -0,0 +1,%d @@\n" % (len(ls) + (1 if tail is not None else 0))
+    src = b"".join(b"+" + l + b"\n" for l in ls + ([tail] if tail is not None else []))
+    out = [l[1:] for l in redact(body + src).split(b"\n") if l.startswith(b"+")]
+    return b"\n".join(out) + (b"\n" if tail is None else b"")
 def changes(lines):
     # (added, removed) line lists from the hunks of ONE file's diff; only the one-character prefix is removed.
     add, rem, inh = [], [], False
@@ -186,7 +204,7 @@ if repo is not None:
             a, b = os.path.join(d, "a"), os.path.join(d, "b")
             open(a, "wb").write(base); open(b, "wb").write(cur)
             out = subprocess.run(["git", "diff", "--no-index", "--no-color", "--no-ext-diff", "-U0", a, b], capture_output=True).stdout.decode("utf-8", "surrogateescape")
-        expected[name] = changes(out.split("\n"))
+        expected[name] = changes(redact(out.encode("utf-8", "surrogateescape")).decode("utf-8", "surrogateescape").split("\n"))
     if mm["bin"] == "coderabbit":
         # WHY the logged argv (r40): the fake models whatever it is asked for, so the mode must be proven from what production passed:
         # `review -t committed --base <ref>`. Any other review type (uncommitted, all) leaves the committed code unreviewed.
@@ -211,7 +229,7 @@ if repo is not None:
         if subprocess.run(["git", "-C", repo, "diff", "--quiet", rootc, mm["base"], "--", "*.py"]).returncode != 0:
             reject('the coderabbit base adds python changes beyond the root commit')
         # WHY bytes (r41): text=True would turn CRLF into LF while the model event keeps the carriage returns.
-        want = G("diff", "--no-color", mm["base"], head, text=False).decode("utf-8", "surrogateescape")
+        want = redact(G("diff", "--no-color", mm["base"], head, text=False)).decode("utf-8", "surrogateescape")
         if want != (model.get("input_text") or ""):
             reject('the coderabbit input is not the committed diff')
         sys.exit(0)
@@ -233,7 +251,7 @@ if repo is not None:
             # WHY by existence, not content: an unchanged empty baseline file (an empty __init__.py) must be restored too (r23).
             if root and subprocess.run(["git", "-C", repo, "cat-file", "-e", root[0] + ":" + name], capture_output=True).returncode == 0:
                 os.makedirs(os.path.dirname(os.path.join(d, name)) or d, exist_ok=True)
-                open(os.path.join(d, name), "wb").write(base)
+                open(os.path.join(d, name), "wb").write(redact_file(base))
         patch = "\n".join(l for sec in secs for l in sec)
         patch += "" if patch.endswith("\n") else "\n"
         if secs:
@@ -244,6 +262,6 @@ if repo is not None:
         for name in names:
             p2 = os.path.join(repo, name)
             q = os.path.join(d, name)
-            if os.path.isfile(p2) != os.path.isfile(q) or (os.path.isfile(p2) and open(p2, "rb").read() != open(q, "rb").read()):
+            if os.path.isfile(p2) != os.path.isfile(q) or (os.path.isfile(p2) and redact_file(open(p2, "rb").read()) != open(q, "rb").read()):
                 reject('the patched baseline differs from the final files')
 sys.exit(0)
