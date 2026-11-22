@@ -2,6 +2,7 @@
 
 ### Codex (2026-08-03T04:15Z)
 - [ ] MEDIUM: 1. The execute and TDD eval suites contain no WARNING-path cases. `skills/claude-codex/evals/evals.json:29` also covers remaining MEDIUM/LOW findings only after APPROVED. 2. `README.md:35-36` says Claude fixes all findings while users decide MEDIUM/LOW findings. `README.md:127` calls WARNING outcomes approved. 3. Changed Markdown retains prohibited em dashes and Oxford commas, contrary to the repository copy mandate.
+- WONTFIX(MEDIUM, 2026-10-27): 1. `commands/execute-codex.md:133-155` can silently drop MEDIUM and LOW findings on the no-CRITICAL/HIGH path because its delivery template has no field for them. 2. The execute and TDD eval suites contain no WARNING-path cases. `skills/claude-codex/evals/evals.json:29` also covers remaining MEDIUM/LOW findings only after APPROVED. 3. `README.md:35-36` says Claude fixes all findings while users decide MEDIUM/LOW findings. `README.md:127` calls WARNING outcomes approved. 4. Changed Markdown retains prohibited em dashes and Oxford commas, contrary to the repository copy mandate. | Reason: Findings 2 and 4 need edits to unnamed files (TDD eval suites, unspecified "changed Markdown") and the cited copy mandate does not exist in the repo, so the entry cannot be fixed whole.
 
 
 ## High priority (from push reviews, fix first)
@@ -16,6 +17,9 @@
   - `commands/plan-codex.md:50-54`: Verdict validation ignores severity consistency. `VERDICT: APPROVED` with CRITICAL or HIGH findings still reaches Phase 3 and drops them.
   - `commands/claude-codex.md:82,91-93` and `commands/plan-codex.md:51,54`: The new gate says rejected findings are not accepted, but later instructions require fixing every CRITICAL and HIGH finding. This defeats the gate on BLOCKED reviews.
   - `SCOPE-CREEP`: `commands/claude-codex.md:82` expands the counterpart’s CRITICAL/HIGH evaluation gate to “ANY finding.” This can discard MEDIUM/LOW findings before the user decision in Step R3 without support in the stated intent.
+- WONTFIX(HIGH, 2026-10-27): `skills/plan-codex/SKILL.md:51,61,76-87`: The CLI fallback provides no MCP `threadId`. A BLOCKED result or contested finding therefore reaches `mcp__codex__codex-reply` with no valid saved thread. Define a CLI follow-up path for the full audit loop. | Reason: The cited CLI fallback, rejected-findings gate, and "ANY finding" wording do not exist in this tree (the referenced lines belong to a different diff), so the findings are stale and not actionable.
+
+### Codex (2026-08-03T05:50Z)
 - [ ] MEDIUM: `commands/plan-codex.md:48-58`: The malformed-response retry does not specify whether it reuses the thread or replaces the saved `threadId`.
   - `UNASKED-CHANGE`: More than 2,000 lines of derived state under `reviews/.cache`, `reviews/.routed` and `reviews/.verdicts` were committed without a trace to the stated intent. No repository code references these artifacts.
   - `ENHANCEMENTS.md:5,8`: Both new entries are stale. Current `BUGS.md:12` is a heading, while current `commands/plan-codex.md:40` already says the old analyzer exists.
