@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034  # WHY (file-wide): claude_rc, NOVERDICT, real_final_state, review_base and final_state are read only inside single-quoted check expressions that `check` evaluates, so shellcheck cannot see the use
 # review-loop-proof.sh: runs a real headless Claude session through a review
 # skill against tests/fake-codex-call.sh and checks the loop's behavior.
 #

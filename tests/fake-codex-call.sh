@@ -114,14 +114,14 @@ echo "THREAD_ID: $tid"
 if [[ $next == 0 ]]; then
   # WHY the same line goes into the event (EV_META): the checks read the wrapper log, so a call that died before
   # writing calls.log (an unknown-thread resume) cannot leave an earlier CLEAN standing as the last word (r17).
-  export EV_META="$(printf 'result=CLEAN state=%s impl=%s' "$state" "$impl")"
+  EV_META="$(printf 'result=CLEAN state=%s impl=%s' "$state" "$impl")"; export EV_META
   printf 'call=%s resume=%s result=CLEAN state=%s impl=%s\n' "$n" "${resume:-new}" "$state" "$impl" >> "$FAKE_LOG"
   printf 'VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
   exit 0
 fi
 sev=${sevs[$(( (next - 1) % ${#sevs[@]} ))]}
 case "$sev" in CRITICAL) verdict=BLOCKED ;; HIGH) verdict=WARNING ;; *) verdict=APPROVED ;; esac
-export EV_META="$(printf 'result=%s round=%s state=%s impl=%s' "$sev" "$next" "$state" "$impl")"
+EV_META="$(printf 'result=%s round=%s state=%s impl=%s' "$sev" "$next" "$state" "$impl")"; export EV_META
 printf 'call=%s resume=%s result=%s round=%s state=%s impl=%s\n' "$n" "${resume:-new}" "$sev" "$next" "$state" "$impl" >> "$FAKE_LOG"
 echo "VERDICT: $verdict"
 for s in CRITICAL HIGH MEDIUM LOW; do
