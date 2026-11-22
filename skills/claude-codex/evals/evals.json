@@ -108,8 +108,8 @@
       "files": [],
       "expectations": [
         "Claude does NOT treat the response as an approval despite the word APPROVED appearing in it",
-        "Claude identifies the contradictory, qualified or doubled verdict as no verdict",
-        "Claude re-asks through codex-call.sh --resume with the saved THREAD_ID (or the active fallback reviewer) quoting the contradiction and requesting one unambiguous verdict",
+        "Claude identifies APPROVED beside a real CRITICAL or HIGH finding as findings, a round that is not clean",
+        "Claude fixes the finding, then re-reviews through codex-call.sh --resume with the saved THREAD_ID (or the active fallback reviewer) until a round has no real finding",
         "Claude does NOT silently drop any CRITICAL or HIGH finding",
         "Claude does NOT proceed to the next phase or deliver"
       ]

@@ -1,7 +1,7 @@
 # Usage: test-mirrors.py [repo-root]   exit 0 when every mirrored review-loop instruction is identical in every copy.
 # WHY a manifest test: the same instruction lives in skills/<n>/SKILL.md and commands/<n>.md (and several times per file);
 # hand-checking copies kept missing one per review round (r17 to r20). Here a copy that differs or is missing fails (r20).
-import os, re, sys
+import json, os, re, sys
 root = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 NAMES = ["claude-codex", "execute-codex", "plan-codex", "tdd-claude-codex", "tdd-execute-codex"]
 DIFF_NAMES = [n for n in NAMES if n != "plan-codex"]
@@ -226,9 +226,21 @@ for n in NAMES:
     ev = open(os.path.join(root, "skills/%s/evals/evals.json" % n), encoding="utf-8").read()
     if "mcp__codex" in ev or '"id": 9' not in ev:
         bad.append("skills/%s/evals/evals.json lacks the invalid-verdict eval (id 9) or still names mcp__codex__" % n)
-    # Round 3: APPROVED beside a real CRITICAL or HIGH finding is FINDINGS (fix and re-review), never "no verdict".
-    if n in ("claude-codex", "tdd-claude-codex") and "treats the contradiction as no verdict" in ev:
-        bad.append("skills/%s/evals/evals.json still treats APPROVED beside a real finding as no verdict instead of findings" % n)
+    # Round 4 finding 2: read EVERY text field of the id 9 eval (prompt, expected_output, files, every expectation), not one field. APPROVED beside a real CRITICAL or HIGH finding is FINDINGS
+    # (fix and re-review) in the two evals that model it; a doubled or qualified verdict is no verdict in the other three. Neither may borrow the other's wording.
+    def texts(x):
+        return [x] if isinstance(x, str) else [y for v in (x.values() if isinstance(x, dict) else x if isinstance(x, list) else []) for y in texts(v)]
+    e9 = [e for e in json.loads(ev)["evals"] if e.get("id") == 9]
+    t9 = " ".join(texts(e9)).lower() if e9 else ""
+    if n in ("claude-codex", "tdd-claude-codex"):
+        for banned in ("no verdict", "unambiguous verdict", "contradictory", "contradiction", "re-asks"):
+            if banned in t9:
+                bad.append("skills/%s/evals/evals.json id 9 still says %r although APPROVED with a real finding is findings (fix and re-review)" % (n, banned))
+        for need in ("findings", "re-review"):
+            if need not in t9:
+                bad.append("skills/%s/evals/evals.json id 9 does not say %r" % (n, need))
+    elif "no verdict" not in t9:
+        bad.append("skills/%s/evals/evals.json id 9 does not say a doubled or qualified verdict is no verdict" % n)
 for f in files("plan-codex"):
     if "CodeRabbit tier R reads commits, not the plan file" not in open(f, encoding="utf-8").read():
         bad.append("%s: the plan fallback does not say which other reviewers can read the actual plan" % os.path.relpath(f, root))
