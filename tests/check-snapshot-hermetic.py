@@ -280,6 +280,14 @@ STATE = {
     "a tracked file replaced by a fifo fails closed": st_fifo,
     "a path with a newline fails closed": st_newline,
     "an unmerged index entry fails closed": st_unmerged,
+    "attribute -filter (explicitly unset) does not block": attr_case("*.py -filter"),
+    "attribute filter=<configured driver> fails closed": attr_case("*.py filter=scrub", "app.py", [("filter.scrub.clean", "cat")]),
+    "attribute filter=<undefined driver> fails closed (the safe side)": attr_case("*.py filter=nodriver", "app.py"),
+    "attribute filter set bare fails closed": attr_case("*.py filter", "app.py"),
+    "attribute -ident (explicitly unset) does not block": attr_case("*.py -ident"),
+    "attribute ident set fails closed": attr_case("*.py ident", "app.py"),
+    "attribute -working-tree-encoding (explicitly unset) does not block": attr_case("*.py -working-tree-encoding"),
+    "attribute working-tree-encoding=<name> fails closed": attr_case("*.py working-tree-encoding=UTF-16", "app.py"),
 }
 
 def tree_state(repo):

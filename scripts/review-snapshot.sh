@@ -139,7 +139,7 @@ case "$mode" in
     # Content hashing would run clean filters, ident or re-encoding on file bytes, which are user code or a rewrite git cannot undo: fail closed.
     if [ -s "$tmp/upd" ]; then
       canon check-attr -z --stdin filter ident working-tree-encoding < "$tmp/upd" > "$tmp/attrs" || exit 1
-      bad="$(tr '\0' '\n' < "$tmp/attrs" | awk 'NR%3==1{p=$0} NR%3==0 && $0!="unspecified"{print p; exit}')"
+      bad="$(tr '\0' '\n' < "$tmp/attrs" | awk 'NR%3==1{p=$0} NR%3==0 && $0!="unspecified" && $0!="unset"{print p; exit}')"
       [ -z "$bad" ] || die "$bad has a filter, ident or working-tree-encoding attribute: its bytes cannot be bound canonically"
     fi
     [ ! -s "$tmp/rm" ] || canon update-index --force-remove -z --stdin < "$tmp/rm" || exit 1
