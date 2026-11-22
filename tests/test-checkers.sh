@@ -2096,6 +2096,56 @@ mkrun; LINEMETA="state=S1 endstate=S1 impl=yes audit=yes" line real 0 review "$T
 expect pass "wrapper-failed: control: a clean audit alone passes the audit check" python3 "$here/check-scripted.py" "$EVLOG" final X --real --audit
 wfcall --bogus "p"
 expectm fail "wrapper-failed: a clean audit followed by an early wrapper exit is not an approval" 'REJECT: the last test audit is' python3 "$here/check-scripted.py" "$EVLOG" final X --real --audit
+# r24 finding 1: the shim re-implements the wrapper's reading of the Codex event stream; they must never disagree on accept or reject. Each row is one raw Codex output, fed to the REAL
+# codex-call.sh and to the shim (through the same fake codex binary); the wrapper's exit code and the shim's logged exit must agree, and an accepted row must print the same thread id and message.
+dfx="$tmp/diffx"; mkdir -p "$dfx/bin" "$dfx/repo"; (cd "$dfx/repo" && git init -q && printf 'x=1\n' > app.py)
+printf '#!/usr/bin/env bash\ncat "$DIFFROW"\nexit "${DIFFRC:-0}"\n' > "$dfx/bin/codex"; chmod +x "$dfx/bin/codex"
+TS='{"type":"thread.started","thread_id":"t1"}'; MSG='{"type":"item.completed","item":{"type":"agent_message","text":"VERDICT: APPROVED"}}'; DONE='{"type":"turn.completed"}'
+diffrow() { # name rc line... : writes the raw stream and records name:rc
+  local n="$1" rc="$2"; shift 2; printf '%s\n' "$@" > "$dfx/row.$n"; printf '%s' "$rc" > "$dfx/rc.$n"; DIFFNAMES+=("$n"); }
+DIFFNAMES=()
+diffrow valid 0 "$TS" "$MSG" "$DONE"
+diffrow tid-null 0 '{"type":"thread.started","thread_id":null}' "$MSG" "$DONE"
+diffrow tid-empty 0 '{"type":"thread.started","thread_id":""}' "$MSG" "$DONE"
+diffrow tid-missing 0 '{"type":"thread.started"}' "$MSG" "$DONE"
+diffrow tid-number 0 '{"type":"thread.started","thread_id":42}' "$MSG" "$DONE"
+diffrow tid-false 0 '{"type":"thread.started","thread_id":false}' "$MSG" "$DONE"
+diffrow tid-list 0 '{"type":"thread.started","thread_id":["a"]}' "$MSG" "$DONE"
+diffrow no-thread-event 0 "$MSG" "$DONE"
+diffrow no-message 0 "$TS" "$DONE"
+diffrow no-completed 0 "$TS" "$MSG"
+diffrow message-no-text 0 "$TS" '{"type":"item.completed","item":{"type":"agent_message"}}' "$DONE"
+diffrow message-empty-text 0 "$TS" '{"type":"item.completed","item":{"type":"agent_message","text":""}}' "$DONE"
+diffrow turn-failed 0 "$TS" "$MSG" "$DONE" '{"type":"turn.failed","error":{"message":"boom"}}'
+diffrow error-event 0 "$TS" '{"type":"error","message":"quota"}'
+diffrow error-after-complete 0 "$TS" "$MSG" "$DONE" '{"type":"error","message":"late"}'
+diffrow non-object-list 0 "$TS" "$MSG" "$DONE" '[1,2]'
+diffrow non-object-number 0 "$TS" "$MSG" "$DONE" '3'
+diffrow non-object-null 0 "$TS" "$MSG" "$DONE" 'null'
+diffrow item-not-object 0 "$TS" '{"type":"item.completed","item":"x"}' "$MSG" "$DONE"
+diffrow truncated 0 "$TS" "$MSG" '{"type":"turn.compl'
+diffrow nonjson-noise 0 'WARNING: something' "$TS" "$MSG" "$DONE"
+diffrow nonzero-valid 1 "$TS" "$MSG" "$DONE"
+diffrow empty-output 0
+diffrow text-not-string 0 "$TS" '{"type":"item.completed","item":{"type":"agent_message","text":7}}' "$DONE"
+dfres() { # name -> "wrapper-rc shim-rc"; leaves the outputs for the comparison
+  local n="$1" wrc srcc
+  ( cd "$dfx/repo" && DIFFROW="$dfx/row.$n" DIFFRC="$(cat "$dfx/rc.$n")" PATH="$dfx/bin:$PATH" bash "$here/../scripts/codex-call.sh" "prompt" > "$dfx/w.out.$n" 2>/dev/null ); wrc=$?
+  rm -f "$dfx/ev.$n"
+  ( cd "$dfx/repo" && DIFFROW="$dfx/row.$n" DIFFRC="$(cat "$dfx/rc.$n")" REAL_CODEX="$dfx/bin/codex" EVLOG="$dfx/ev.$n" PROOF_REPO="$dfx/repo" bash "$here/shim/codex" exec --json -p review --sandbox read-only --skip-git-repo-check --cd "$dfx/repo" - <<<"prompt" > "$dfx/s.out.$n" 2>/dev/null )
+  srcc="$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["exit"])' "$dfx/ev.$n")"
+  [ "$wrc" -eq 0 ] && wrc=0 || wrc=1
+  [ "$srcc" -eq 0 ] && srcc=0 || srcc=1
+  echo "$wrc $srcc"
+}
+for n in "${DIFFNAMES[@]}"; do
+  dfagree() { local r; r="$(dfres "$1")"; [ "${r% *}" = "${r#* }" ]; }
+  expect pass "wrapper and shim agree on accept or reject for the Codex stream: $n" dfagree "$n"
+done
+expect pass "differential control: the valid stream is accepted by both" test "$(dfres valid)" = "0 0"
+expect pass "differential control: a null thread id is rejected by both" test "$(dfres tid-null)" = "1 1"
+dfres valid >/dev/null
+expect pass "differential control: an accepted row prints the same thread id and message in the wrapper output and the logged reply" python3 -c 'import json,sys; w=open(sys.argv[1]).read(); e=json.loads(open(sys.argv[2]).read().splitlines()[-1])["stdout"]; sys.exit(0 if w and w == e else 1)' "$dfx/w.out.valid" "$dfx/ev.valid"
 # Self-test (round 3 finding 3): these cases need no private reviewer, so they MUST have run (and passed) in every mode, CHECKERS_NO_SPY=1 included.
 for must in "ci.yml declares an explicit contents: read permissions block" "ci.yml checks out with persist-credentials: false" "ci.yml runs the checkers with CHECKERS_NO_SPY=1" \
   "an outside-reviewer call injected into a command is caught" "the reviewer diff command in commands/execute-codex.md lists changes in sibling folders when run from a subfolder" \

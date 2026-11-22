@@ -34,19 +34,29 @@ out, rc, pf, so, errf, sinf, *argv = sys.argv[1:]
 # WHY this mirrors codex-call.sh exactly: thread id only from thread.started (never invented from the resume
 # argument), turn.failed clears "done", and JSON errors plus the CLI's own non-JSON lines become the diagnostics, so a
 # failed call or a quota error is logged as the wrapper would report it (r14).
-tid, msg, done, errs = "", "", False, []
+tid, msg, done, errs, bad = "", "", False, [], False
 raw = open(out, errors="replace").read().splitlines()
+# WHY the same crash and normalization rules as codex-call.sh (r24 finding 1): a null or empty thread id, a non-object line, a non-object `error` or an agent_message with no text make the real wrapper fail,
+# so the shim must record a failed call for them too (`bad`). The differential table in tests/test-checkers.sh feeds the same streams to both and requires the same accept or reject.
 for line in raw:
     try: ev = json.loads(line)
     except ValueError: continue
-    if ev.get("type") == "thread.started": tid = ev.get("thread_id", "")
+    if not isinstance(ev, dict):
+        bad = True; continue
+    if ev.get("type") == "thread.started": tid = str(ev.get("thread_id") or "")
     if ev.get("type") == "turn.completed": done = True
     if ev.get("type") == "turn.failed":
         done = False
-        errs.append(str((ev.get("error") or {}).get("message", ev)))
+        er = ev.get("error") or {}
+        if not isinstance(er, dict): bad = True; continue
+        errs.append(str(er.get("message", ev)))
     if ev.get("type") == "error": errs.append(str(ev.get("message", ev)))
-    it = ev.get("item", {})
-    if ev.get("type") == "item.completed" and it.get("type") == "agent_message": msg = it.get("text", "")
+    if ev.get("type") == "item.completed":
+        it = ev.get("item", {})
+        if not isinstance(it, dict): bad = True; continue
+        if it.get("type") == "agent_message":
+            if "text" not in it: bad = True; continue
+            msg = it["text"]
 # WHY parse the subcommand: only the first non-option token after `exec` (skipping option values) is the subcommand, so a
 # new call whose PROMPT is the word "resume" is not a resume (r24).
 VALOPT = {"-p", "--profile", "-s", "--sandbox", "-C", "--cd", "-m", "--model", "-c", "--config", "--color", "-i", "--image", "--output-schema", "-o", "--output-last-message"}
@@ -63,7 +73,8 @@ def subcommand_and_id(args):
 resume = subcommand_and_id(argv)
 # WHY stdin when the prompt argument is `-`: the wrapper sends the prompt that way, so the logged prompt is what Codex really read.
 open(pf, "w").write(open(sinf, errors="replace").read() if argv and argv[-1] == "-" else (argv[-1] if argv else ""))
-ok = done and bool(msg) and rc == "0"
+# WHY a completed turn with no thread id is a failed call: the wrapper rejects it (r19 finding 2), so the logged exit must be 1.
+ok = done and bool(msg) and rc == "0" and bool(tid) and not bad
 open(so, "w").write(("THREAD_ID: %s\n%s\n" % (tid, msg)) if ok else "")
 diag = ""
 if not ok:
