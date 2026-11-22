@@ -1369,7 +1369,6 @@ open(sys.argv[2], "w").write(f[0] + "\n"); open(sys.argv[3], "w").write(f[1] + "
 PYX
 rrstep() { (cd "$tmp/rr" && git add -N app.py && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" | bash -e); }
 rrmk; rrstep step1.sh; rrstep step2.sh
-rr; echo "DBG rr=$?" >&2; ls -la "$tmp/rr/.claude/review" >&2
 expect pass "the prescribed sequence on an unchanged tree writes a record the checker accepts" rr
 rrmk; rrstep step1.sh; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"; rrstep step2.sh
 expect fail "the prescribed sequence voids the round when a file is edited while the reviewer ran (no record, nothing approved)" test -s "$tmp/rr/.claude/review/final-review.txt"
