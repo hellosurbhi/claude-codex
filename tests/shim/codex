@@ -74,7 +74,8 @@ resume = subcommand_and_id(argv)
 # WHY stdin when the prompt argument is `-`: the wrapper sends the prompt that way, so the logged prompt is what Codex really read.
 open(pf, "w").write(open(sinf, errors="replace").read() if argv and argv[-1] == "-" else (argv[-1] if argv else ""))
 # WHY a completed turn with no thread id is a failed call: the wrapper rejects it (r19 finding 2), so the logged exit must be 1.
-ok = done and bool(msg) and rc == "0" and bool(tid) and not bad
+# WHY any error or turn.failed event fails the call (r26): the wrapper withholds the verdict whenever errs is non-empty, before or after the completed turn; mirrored here so the logged exit matches.
+ok = done and bool(msg) and rc == "0" and bool(tid) and not bad and not errs
 open(so, "w").write(("THREAD_ID: %s\n%s\n" % (tid, msg)) if ok else "")
 diag = ""
 if not ok:

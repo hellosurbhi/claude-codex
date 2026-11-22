@@ -130,9 +130,13 @@ for line in open(sys.argv[1]):
 # message ("I'll read the plan...") as the last agent_message; returning that would
 # look like a verdict-less answer instead of a dead call.
 # WHY a completed turn with no thread id is a failed call (r19 finding 2): the caller would print an empty THREAD_ID, and a later resume with it would start a new session and lose the review context.
-if msg and done and sys.argv[2] == "0" and not tid:
+if msg and done and sys.argv[2] == "0" and not tid and not errs:
     sys.exit("codex-call: Codex completed the turn but reported no thread id, so the review cannot be resumed. Treat as UNREVIEWED (no verdict).")
-if not msg or not done or sys.argv[2] != "0":
+# WHY ANY error or turn.failed event anywhere in the stream fails the call (r26): a completed turn with an APPROVED message and a LATER error event used to exit 0 whenever the CLI did.
+# An error event means the run did not finish cleanly, and an unclean review is not an approval, so the message and verdict are withheld (nothing on stdout, diagnostics on stderr).
+# An error BEFORE a later successful turn.completed is fatal too: fail closed is the default and no captured real Codex stream (searched the proof dirs and scratch logs) shows a recoverable error event in a normal successful run.
+# If a real run ever proves one (a retried connection, say), narrow this to "an error after the last agent message, or no turn.completed after it" and add that real stream to the differential table; never a blanket allowance.
+if not msg or not done or sys.argv[2] != "0" or errs:
     # WHY print the CLI's own non-JSON lines: auth, profile and quota errors arrive
     # there, and the scratch file is deleted on exit, so this is the only copy.
     # Quota errors (with their reset time) arrive as JSON error events, not plain text. An event with no message is printed whole (str(e)),

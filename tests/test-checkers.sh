@@ -2101,33 +2101,39 @@ expectm fail "wrapper-failed: a clean audit followed by an early wrapper exit is
 dfx="$tmp/diffx"; mkdir -p "$dfx/bin" "$dfx/repo"; (cd "$dfx/repo" && git init -q && printf 'x=1\n' > app.py)
 printf '#!/usr/bin/env bash\ncat "$DIFFROW"\nexit "${DIFFRC:-0}"\n' > "$dfx/bin/codex"; chmod +x "$dfx/bin/codex"
 TS='{"type":"thread.started","thread_id":"t1"}'; MSG='{"type":"item.completed","item":{"type":"agent_message","text":"VERDICT: APPROVED"}}'; DONE='{"type":"turn.completed"}'
-diffrow() { # name rc line... : writes the raw stream and records name:rc
-  local n="$1" rc="$2"; shift 2; printf '%s\n' "$@" > "$dfx/row.$n"; printf '%s' "$rc" > "$dfx/rc.$n"; DIFFNAMES+=("$n"); }
+# r26 finding 1: a differential test only proves AGREEMENT, so each row also carries a hand-written EXPECTED answer (0 accept, 1 reject) taken from the rule, never from running the wrapper, and wrapper == shim == expected is required.
+# The rule: accept only a stream with a thread id, a non-empty agent message, a turn.completed, NO error or turn.failed event anywhere (before or after the turn) and a CLI exit of 0.
+# Stated reasons for the odd rows: tid-number and tid-list are stringified like the real wrapper does (accepted, not endorsed); truncated loses its turn.completed so it is rejected; nonjson-noise and text-not-string stay accepted.
+diffrow() { # name rc expected line... : writes the raw stream and records name:rc:expected
+  local n="$1" rc="$2" ex="$3"; shift 3; printf '%s\n' "$@" > "$dfx/row.$n"; printf '%s' "$rc" > "$dfx/rc.$n"; printf '%s' "$ex" > "$dfx/ex.$n"; DIFFNAMES+=("$n"); }
 DIFFNAMES=()
-diffrow valid 0 "$TS" "$MSG" "$DONE"
-diffrow tid-null 0 '{"type":"thread.started","thread_id":null}' "$MSG" "$DONE"
-diffrow tid-empty 0 '{"type":"thread.started","thread_id":""}' "$MSG" "$DONE"
-diffrow tid-missing 0 '{"type":"thread.started"}' "$MSG" "$DONE"
-diffrow tid-number 0 '{"type":"thread.started","thread_id":42}' "$MSG" "$DONE"
-diffrow tid-false 0 '{"type":"thread.started","thread_id":false}' "$MSG" "$DONE"
-diffrow tid-list 0 '{"type":"thread.started","thread_id":["a"]}' "$MSG" "$DONE"
-diffrow no-thread-event 0 "$MSG" "$DONE"
-diffrow no-message 0 "$TS" "$DONE"
-diffrow no-completed 0 "$TS" "$MSG"
-diffrow message-no-text 0 "$TS" '{"type":"item.completed","item":{"type":"agent_message"}}' "$DONE"
-diffrow message-empty-text 0 "$TS" '{"type":"item.completed","item":{"type":"agent_message","text":""}}' "$DONE"
-diffrow turn-failed 0 "$TS" "$MSG" "$DONE" '{"type":"turn.failed","error":{"message":"boom"}}'
-diffrow error-event 0 "$TS" '{"type":"error","message":"quota"}'
-diffrow error-after-complete 0 "$TS" "$MSG" "$DONE" '{"type":"error","message":"late"}'
-diffrow non-object-list 0 "$TS" "$MSG" "$DONE" '[1,2]'
-diffrow non-object-number 0 "$TS" "$MSG" "$DONE" '3'
-diffrow non-object-null 0 "$TS" "$MSG" "$DONE" 'null'
-diffrow item-not-object 0 "$TS" '{"type":"item.completed","item":"x"}' "$MSG" "$DONE"
-diffrow truncated 0 "$TS" "$MSG" '{"type":"turn.compl'
-diffrow nonjson-noise 0 'WARNING: something' "$TS" "$MSG" "$DONE"
-diffrow nonzero-valid 1 "$TS" "$MSG" "$DONE"
-diffrow empty-output 0
-diffrow text-not-string 0 "$TS" '{"type":"item.completed","item":{"type":"agent_message","text":7}}' "$DONE"
+diffrow valid 0 0 "$TS" "$MSG" "$DONE"
+diffrow tid-null 0 1 '{"type":"thread.started","thread_id":null}' "$MSG" "$DONE"
+diffrow tid-empty 0 1 '{"type":"thread.started","thread_id":""}' "$MSG" "$DONE"
+diffrow tid-missing 0 1 '{"type":"thread.started"}' "$MSG" "$DONE"
+diffrow tid-number 0 0 '{"type":"thread.started","thread_id":42}' "$MSG" "$DONE"
+diffrow tid-false 0 1 '{"type":"thread.started","thread_id":false}' "$MSG" "$DONE"
+diffrow tid-list 0 0 '{"type":"thread.started","thread_id":["a"]}' "$MSG" "$DONE"
+diffrow no-thread-event 0 1 "$MSG" "$DONE"
+diffrow no-message 0 1 "$TS" "$DONE"
+diffrow no-completed 0 1 "$TS" "$MSG"
+diffrow message-no-text 0 1 "$TS" '{"type":"item.completed","item":{"type":"agent_message"}}' "$DONE"
+diffrow message-empty-text 0 1 "$TS" '{"type":"item.completed","item":{"type":"agent_message","text":""}}' "$DONE"
+diffrow turn-failed 0 1 "$TS" "$MSG" "$DONE" '{"type":"turn.failed","error":{"message":"boom"}}'
+diffrow error-event 0 1 "$TS" '{"type":"error","message":"quota"}'
+diffrow error-after-complete 0 1 "$TS" "$MSG" "$DONE" '{"type":"error","message":"late"}'
+diffrow non-object-list 0 1 "$TS" "$MSG" "$DONE" '[1,2]'
+diffrow non-object-number 0 1 "$TS" "$MSG" "$DONE" '3'
+diffrow non-object-null 0 1 "$TS" "$MSG" "$DONE" 'null'
+diffrow item-not-object 0 1 "$TS" '{"type":"item.completed","item":"x"}' "$MSG" "$DONE"
+diffrow truncated 0 1 "$TS" "$MSG" '{"type":"turn.compl'
+diffrow nonjson-noise 0 0 'WARNING: something' "$TS" "$MSG" "$DONE"
+diffrow nonzero-valid 1 1 "$TS" "$MSG" "$DONE"
+diffrow empty-output 0 1
+diffrow error-before-complete 0 1 "$TS" '{"type":"error","message":"retrying"}' "$MSG" "$DONE"
+diffrow failed-then-complete 0 1 "$TS" '{"type":"turn.failed","error":{"message":"boom"}}' "$MSG" "$DONE"
+diffrow error-event-no-message 0 1 "$TS" "$MSG" "$DONE" '{"type":"error"}'
+diffrow text-not-string 0 0 "$TS" '{"type":"item.completed","item":{"type":"agent_message","text":7}}' "$DONE"
 dfres() { # name -> "wrapper-rc shim-rc"; leaves the outputs for the comparison
   local n="$1" wrc srcc
   ( cd "$dfx/repo" && DIFFROW="$dfx/row.$n" DIFFRC="$(cat "$dfx/rc.$n")" PATH="$dfx/bin:$PATH" bash "$here/../scripts/codex-call.sh" "prompt" > "$dfx/w.out.$n" 2>/dev/null ); wrc=$?
@@ -2139,10 +2145,11 @@ dfres() { # name -> "wrapper-rc shim-rc"; leaves the outputs for the comparison
   echo "$wrc $srcc"
 }
 for n in "${DIFFNAMES[@]}"; do
-  dfagree() { local r; r="$(dfres "$1")"; [ "${r% *}" = "${r#* }" ]; }
-  expect pass "wrapper and shim agree on accept or reject for the Codex stream: $n" dfagree "$n"
+  dfagree() { local r e; r="$(dfres "$1")"; e="$(cat "$dfx/ex.$1")"; [ "${r% *}" = "${r#* }" ] && [ "${r% *}" = "$e" ]; }
+  expect pass "wrapper == shim == hand-written expected (accept 0 or reject 1) for the Codex stream: $n" dfagree "$n"
 done
 expect pass "differential control: the valid stream is accepted by both" test "$(dfres valid)" = "0 0"
+expect pass "differential control: an APPROVED message followed by a late error event prints nothing on stdout (no verdict leaks)" test ! -s "$dfx/w.out.error-after-complete"
 expect pass "differential control: a null thread id is rejected by both" test "$(dfres tid-null)" = "1 1"
 dfres valid >/dev/null
 expect pass "differential control: an accepted row prints the same thread id and message in the wrapper output and the logged reply" python3 -c 'import json,sys; w=open(sys.argv[1]).read(); e=json.loads(open(sys.argv[2]).read().splitlines()[-1])["stdout"]; sys.exit(0 if w and w == e else 1)' "$dfx/w.out.valid" "$dfx/ev.valid"
