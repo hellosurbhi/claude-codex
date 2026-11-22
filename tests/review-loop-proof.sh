@@ -18,9 +18,14 @@
 # the real path would replace the live wrapper. So the run is told, once, to use
 # the fake at that path. The skill text that decides when to re-review is untouched.
 #
-# WHY the explicit .claude/plan allow rules: plan-codex writes its plan under
-# .claude/plan/, which acceptEdits alone treats as a protected path, so the
-# run stalled on denied edits instead of exercising the loop.
+# WHY bypassPermissions and not allow rules (cc11 real run at bd3bce6 ended UNREVIEWED; confirmed with claude 2.1.323 probes): the skills
+# keep the plan at .claude/plan/<name>.md, and a headless `claude -p` run DENIES every write to an EXISTING file under .claude/ ("sensitive
+# file") for Edit, Write and a Bash redirect alike. What was tried first: acceptEdits with Edit(.claude/plan/**), Edit(./.claude/plan/**),
+# Edit(/.claude/plan/**), an absolute // rule, Edit(.claude/**), Edit(.claude/plan/p.md), and a PreToolUse allow hook; every one was still
+# denied (a Write(...) rule is rejected outright, only Edit rules are read). Only bypassPermissions let the edit through. A real session
+# shows the user a prompt for the same write and the user approves it, so unattended approval is what this stands in for. The run is a
+# scratch repo, and Bash was already allowed without limit. What breaks if this goes back to acceptEdits: the first round of findings can
+# never be fixed in the plan file, so the loop ends UNREVIEWED every time.
 set -euo pipefail
 src="$1" skill="$2" scenario="$3"
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -123,8 +128,8 @@ if [[ $scenario == real ]]; then
   export CODEX_CALL_EVENT_LOG="$EVLOG"
 fi
 claude -p "$task" --model sonnet --setting-sources "$sources" \
-  --permission-mode acceptEdits \
-  --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill Edit(./.claude/plan/**) Edit(.claude/plan/**)" \
+  --permission-mode bypassPermissions \
+  --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill" \
   --append-system-prompt "$seam" --no-session-persistence --output-format stream-json --verbose > "$out/stream.jsonl" 2> "$out/session.err" && claude_rc=0 || claude_rc=$?
 python3 - "$out" <<'PY'
 import json, sys
