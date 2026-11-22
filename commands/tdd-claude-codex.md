@@ -79,8 +79,11 @@ Before the audit, run `git add -N <each file this task created>` in your own she
 ```
 Run `git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'` to see newly created test files. Review the tests ONLY (no implementation exists yet).
 
+Task requirements (paste the task text or the saved task path content here, with any secret, credential or `.env` value removed first):
+<TASK_REQUIREMENTS>
+
 Evaluate:
-1. Do the tests cover the described task requirements comprehensively?
+1. Do the tests cover the task requirements above comprehensively?
 2. Are edge cases covered (null, empty, boundary, error paths)?
 3. Are tests well-structured and following project test conventions?
 4. Are there any tests that are impossible to implement or fundamentally flawed?

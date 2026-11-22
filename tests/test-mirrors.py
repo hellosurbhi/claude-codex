@@ -171,5 +171,13 @@ for n in ("claude-codex", "tdd-claude-codex", "tdd-execute-codex", "execute-code
                 bad.append("%s: failed review/audit paragraph does not treat a missing severity block as failed" % os.path.relpath(f, root))
         if not paras and not re.search(r"`LOW:` lines, is a failed review|without the four severity lines", t):
             bad.append("%s: no failed review/audit rule for an incomplete Codex block" % os.path.relpath(f, root))
+# WHY (CodeRabbit thread 2): the TDD test audit received only a diff and generic questions, so a task given as direct text (not saved in the repo)
+# could never be checked for coverage. Both TDD workflows, skill and command, must put the sanitized task requirements in the audit prompt.
+for n in ("tdd-claude-codex", "tdd-execute-codex"):
+    for f in files(n):
+        t = open(f, encoding="utf-8").read()
+        i = t.find("Test Audit")
+        if "<TASK_REQUIREMENTS>" not in t[i:i + 6000].split("Return ONLY a structured verdict")[0]:
+            bad.append("%s: the test-audit prompt does not include the sanitized <TASK_REQUIREMENTS>" % os.path.relpath(f, root))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)
