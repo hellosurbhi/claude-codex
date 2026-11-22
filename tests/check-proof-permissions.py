@@ -36,6 +36,12 @@ if '"excludedCommands": [sys.argv[4] + " *"]' not in real_b or "wrapper='~/.clau
     reject("the OS sandbox excludes more than the one wrapper (codex-call.sh)")
 if not re.search(r'-e "\$canary" \]\].*not permitted.*exit 2', real_b, re.S) or 'sbx_settings "$out/sbx-probe-settings.json" ""' not in real_b:
     reject("no start-up probe that requires the sandbox itself to refuse a write outside the scratch repo (hook-free probe run)")
+for needle in ("GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_COUNT=4", "GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false", "GIT_CONFIG_KEY_1=core.hooksPath GIT_CONFIG_VALUE_1=/dev/null",
+               "GIT_CONFIG_KEY_2=core.pager GIT_CONFIG_VALUE_2=cat", "GIT_CONFIG_KEY_3=diff.external GIT_CONFIG_VALUE_3=", "--record-baseline", 'export PROOF_GIT_BASELINE="$out/git-baseline"'):
+    if needle not in real_b:
+        reject("the real branch does not pin the git configuration from outside and record the git baseline (missing: %s)" % needle)
+if '"$(cat "$pd/sbx-git.txt" 2>/dev/null)" != false' not in real_b:
+    reject("no start-up probe that the pinned git configuration reaches the agent's shell")
 if "-e \"$4\"" not in src or "exit 2" not in src[src.index('-e "$4"'):src.index('-e "$4"') + 220]:
     reject("the real scenario does not insist on creating its own fresh out dir")
 if "the confinement hook ran" not in src:
@@ -46,7 +52,7 @@ try:
 except OSError:
     reject("the confinement hook file is missing: " + hook)
 # WHY these markers (cc11 r36): the two guard classes the review found missing, expansion in any quoting but single quotes and the wrapper's own option grammar.
-for marker, what in (("def check_wrapper(", "the wrapper option-grammar check"), ("expansion inside double quotes", "the denial of expansion inside double quotes"),
+for marker, what in (("def check_wrapper(", "the wrapper option-grammar check"), ("def git_state(", "the git-state baseline check"), ("expansion inside double quotes", "the denial of expansion inside double quotes"),
                      ("expansion in a double-quoted redirect target", "the denial of expansion in a quoted redirect target"), ('must be read-only', "the read-only sandbox requirement")):
     if marker not in h:
         reject("the confinement hook lacks " + what)

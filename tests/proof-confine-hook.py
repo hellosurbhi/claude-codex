@@ -10,7 +10,7 @@
 # WHY Agent/Task are allowed: probed with claude 2.1.323 under bypassPermissions that a subagent's own Read and Bash calls reach this hook (payload carries agent_id and
 # agent_type; evidence review-work/cc11-allow-probe/agentprobe/hook.log), so a subagent is confined exactly like the main session. If a CLI update stops that, deny Agent/Task here. What breaks if it is loosened: the agent runs unprompted
 # on the owner's machine with nothing between it and the home directory. The start-up probe in review-loop-proof.sh feeds an out-of-bounds call straight to this file.
-import json, os, re, sys
+import hashlib, json, os, re, sys
 
 ROOT = ""
 HOME = os.path.realpath(os.path.expanduser("~"))
@@ -37,11 +37,56 @@ def inside(p, base):
 def in_root(p):
     return bool(ROOT) and inside(real(p), ROOT)
 
+GITNAMES = (".git", ".gitattributes", ".gitmodules")
+
 def writable(p):
-    # WHY not under .git: git status/diff/log read .git/config and may run programs it names (core.fsmonitor, diff.<driver>.textconv, core.pager), so a config the
-    # agent wrote there would turn the allowed read-only git commands into unconfined code execution.
+    # WHY no component named .git, .gitattributes or .gitmodules at ANY depth (cc11 r37 CRITICAL): git status/diff read the config of every repo they touch and may run programs it
+    # names (core.fsmonitor, diff.<driver>.textconv, core.pager, hooks), so a nested `nested/.git/config` written by the agent turned the allowed `git status` into code execution
+    # (the old rule only protected the root .git). .gitattributes names diff and filter drivers and .gitmodules names submodule commands, so they are closed the same way.
     r = real(p)
-    return inside(r, ROOT) and not inside(r, os.path.join(ROOT, ".git")) and ".git" not in os.path.relpath(r, ROOT).split(os.sep)[:1]
+    return inside(r, ROOT) and not any(c in GITNAMES for c in os.path.relpath(r, ROOT).split(os.sep))
+
+def git_state(root):
+    # The two things an allowed git command trusts in the root repo: its config file and its hooks directory. One line per item, comparable as plain text.
+    try:
+        cfg = hashlib.sha256(open(os.path.join(root, ".git", "config"), "rb").read()).hexdigest()
+    except OSError:
+        cfg = "missing"
+    hd, items = os.path.join(root, ".git", "hooks"), []
+    for n in sorted(os.listdir(hd)) if os.path.isdir(hd) else []:
+        fp = os.path.join(hd, n)
+        items.append("%s:%s" % (n, hashlib.sha256(open(fp, "rb").read()).hexdigest() if os.path.isfile(fp) else "notfile"))
+    return "config %s\nhooks %s\n" % (cfg, ",".join(items))
+
+def nested_git(root):
+    # any `.git` entry (directory or gitlink file) below the root other than the root's own
+    for dp, dns, fns in os.walk(root):
+        if dp == root and ".git" in dns:
+            dns.remove(".git")
+        for n in dns + fns:
+            if n == ".git":
+                return os.path.join(dp, n)
+    return None
+
+def git_guard():
+    # WHY these checks (cc11 r37): an allowed git command runs whatever the repo's config names, so it is only allowed when (a) the tool cwd is the repo root (no `cd nested`),
+    # (b) root .git/config and .git/hooks are byte for byte what the proof recorded before launch (baseline file outside the repo, path in PROOF_GIT_BASELINE) and (c) no other
+    # repo exists anywhere below the root (Codex in workspace-write can create one, and the hook cannot see what Codex writes). The proof also launches claude with GIT_CONFIG_*
+    # forcing the dangerous keys off; this is the second layer for the case that environment is not what was intended. What breaks if (c) is dropped: a nested repo's config runs.
+    if os.path.realpath(CWD) != ROOT:
+        raise Deny("git needs the tool cwd to be the scratch repo root, got " + CWD)
+    bf = os.environ.get("PROOF_GIT_BASELINE", "")
+    try:
+        base = open(bf).read() if bf else None
+    except OSError:
+        base = None
+    if base is None:
+        raise Deny("git is not allowed without the baseline file the proof recorded")
+    if base != git_state(ROOT):
+        raise Deny("git is not allowed: .git/config or .git/hooks changed since the baseline")
+    n = nested_git(ROOT)
+    if n:
+        raise Deny("git is not allowed while another repository exists below the root: " + os.path.relpath(n, ROOT))
 
 def readable(p):
     r = real(p)
@@ -201,26 +246,45 @@ def check_wrapper(name, args):
     # then the one prompt; verified sandbox default is read-only) and anything the script would treat differently from the hook (unknown option, `--`, a repeated option,
     # `--opt=value`, extra arguments) is denied. Re-check this if the script's option set changes.
     if name == "codex-call.sh":
-        a, seen = list(args), set()
-        while len(a) > 1:
+        a, seen, sandbox, cd, pf = list(args), set(), "read-only", None, None
+        # WHY --prompt-file is an option here (cc11 r37 HIGH): the prescribed review and implementation calls pass the prompt as a file inside the repo, and the script
+        # reads it itself, so the file must resolve (symlinks followed) inside the scratch repo; it replaces the positional prompt, never accompanies it.
+        while a:
             o = a[0]
-            if o not in ("--sandbox", "--role", "--resume", "--cd"):
+            if o not in ("--sandbox", "--role", "--resume", "--cd", "--prompt-file"):
                 break
             if o in seen:
                 raise Deny("codex-call.sh option given twice: " + o)
             seen.add(o)
+            if len(a) < 2 or a[1].startswith("-") or not a[1]:
+                raise Deny("codex-call.sh option without a value: " + o)
             v = a[1]
-            if o == "--sandbox" and v != "read-only":
-                raise Deny("codex-call.sh --sandbox must be read-only, got " + v)
+            if o == "--sandbox":
+                if v not in ("read-only", "workspace-write"):
+                    raise Deny("codex-call.sh --sandbox must be read-only or workspace-write, got " + v)
+                sandbox = v
             if o == "--role" and not readable(v):
                 raise Deny("codex-call.sh --role file outside the scratch repo and the skills dir: " + v)
             if o == "--resume" and not re.fullmatch(r"[A-Za-z0-9-]{8,64}", v):
                 raise Deny("codex-call.sh --resume is not a thread id: " + v)
-            if o == "--cd" and not in_root(v):
-                raise Deny("codex-call.sh --cd outside the scratch repo: " + v)
+            if o == "--cd":
+                if not in_root(v):
+                    raise Deny("codex-call.sh --cd outside the scratch repo: " + v)
+                cd = v
+            if o == "--prompt-file":
+                if not in_root(v) or not os.path.isfile(real(v)):
+                    raise Deny("codex-call.sh --prompt-file must be an existing file inside the scratch repo: " + v)
+                pf = v
             a = a[2:]
-        if len(a) != 1 or a[0].startswith("-") or not a[0]:
+        if pf is not None:
+            if a:
+                raise Deny("codex-call.sh takes a prompt file or a prompt, not both (extra argument: " + a[0] + ")")
+        elif len(a) != 1 or a[0].startswith("-") or not a[0]:
             raise Deny("codex-call.sh needs known options then exactly one prompt (an option-looking, extra or missing argument is refused)")
+        # WHY workspace-write only inside the repo (cc11 r37): the script's working directory is --cd, else the git toplevel of the tool cwd. Both must be inside the
+        # scratch repo for Codex's own sandbox to be confined to it; danger-full-access never passes the check above.
+        if sandbox == "workspace-write" and cd is None and not in_root(CWD):
+            raise Deny("codex-call.sh --sandbox workspace-write needs --cd or a tool cwd inside the scratch repo (must be read-only otherwise)")
         return
     if name == "reviewer.sh":
         if len(args) != 3 or args[0] not in ("E", "R", "S") or not readable(args[1]) or not writable(args[2]):
@@ -295,7 +359,10 @@ def check_simple(argv, reds):
             if not readable(a):
                 raise Deny("reads outside the scratch repo: " + a)
         return
+    if prog in ("export", "unset", "declare", "typeset", "readonly", "set", "setenv"):
+        raise Deny("changing the shell environment is not allowed (the git configuration is pinned from outside): " + prog)
     if prog == "git":
+        git_guard()
         if not args or args[0] not in GIT_READ:
             raise Deny("git subcommand not allowed: " + (args[0] if args else ""))
         if args[0] == "branch" and any(not a.startswith("-") or a not in ("-a", "-r", "-v", "-vv", "--list", "--show-current") for a in args[1:]):
@@ -313,7 +380,11 @@ def check_simple(argv, reds):
     raise Deny("command not allowed: " + prog)
 
 def check_bash(cmd):
-    for argv, reds in lex(cmd):
+    segs = lex(cmd)
+    # WHY: a `cd` earlier on the line moves git into another repo whose config the baseline does not cover; the tool cwd check alone sees only where the call STARTED.
+    if any(a and a[0] == "cd" for a, _ in segs) and any(a and a[0] == "git" for a, _ in segs):
+        raise Deny("cd and git on one command line")
+    for argv, reds in segs:
         check_simple(argv, reds)
 
 def decide(d):
@@ -368,4 +439,8 @@ def main():
     print(json.dumps({"hookSpecificOutput": out}))
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 4 and sys.argv[1] == "--record-baseline":
+        # used by the proof (before launch) and by the tests: writes the baseline the hook compares against, to a file outside the repo
+        open(sys.argv[3], "w").write(git_state(os.path.realpath(sys.argv[2])))
+    else:
+        main()

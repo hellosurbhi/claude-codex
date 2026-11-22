@@ -169,13 +169,25 @@ json.dump(s, open(sys.argv[1], "w"), indent=1)
 PY
   }
   wrapper='~/.claude/config/scripts/codex-call.sh'
+  # WHY the git environment is pinned from outside (cc11 r37): `git status` and `git diff` run whatever the repo's config names (core.fsmonitor, a pager, an external diff, a hooks
+  # directory). GIT_CONFIG_COUNT entries sit above every config file (repo, user, system) in git's precedence, so the dangerous keys are forced off even when a config file says
+  # otherwise; the user and system files are not read at all. WHY the baseline: root .git/config and the .git/hooks listing are hashed here, before the agent exists, into a file
+  # outside the repo, and the hook refuses git when they differ. The variables are exported only around the claude calls and unset right after, because this script's own git calls
+  # (checkers, tree hashes) need the normal configuration.
+  export PROOF_GIT_BASELINE="$out/git-baseline"
+  python3 "$hook" --record-baseline "$repo" "$PROOF_GIT_BASELINE" < /dev/null || { echo "REJECT: could not record the git baseline" >&2; exit 2; }
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=4
+  export GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false GIT_CONFIG_KEY_1=core.hooksPath GIT_CONFIG_VALUE_1=/dev/null
+  export GIT_CONFIG_KEY_2=core.pager GIT_CONFIG_VALUE_2=cat GIT_CONFIG_KEY_3=diff.external GIT_CONFIG_VALUE_3=
   # WHY a probe where only the sandbox can say no: a separate throwaway claude call WITHOUT the hook runs one fixed command that writes inside its own probe dir (control) and then
   # outside it. The control file must exist (the command really ran), the outside file must not, and the refusal text must come from the OS. The canary sits next to the repo and not
-  # under the default temp dir (which Claude Code always allows), so a refusal here is the allowlist at work.
+  # under the default temp dir (which Claude Code always allows), so a refusal here is the allowlist at work. The same command records what git sees in the agent's own shell, so a
+  # pinned variable that Claude Code does not hand to its Bash tool is caught before the run (sbx-git.txt must show the pinned fsmonitor value).
   pd="$out/sbx-probe"; mkdir -p "$pd"; canary="$out/sbx-canary-outside.txt"
   sbx_settings "$out/sbx-probe-settings.json" "" "$pd" "$wrapper"
-  (cd "$pd" && claude -p "Run exactly this one Bash command and nothing else, then reply done: echo ctl > sbx-ctl.txt; { echo x > $canary; } 2> sbx-err.txt" --model sonnet --setting-sources "" --settings "$out/sbx-probe-settings.json" --permission-mode bypassPermissions --allowedTools Bash --no-session-persistence < /dev/null > "$out/sbx-probe.out" 2>&1) || true
+  (cd "$pd" && claude -p "Run exactly this one Bash command and nothing else, then reply done: echo ctl > sbx-ctl.txt; git config --get core.fsmonitor > sbx-git.txt; { echo x > $canary; } 2> sbx-err.txt" --model sonnet --setting-sources "" --settings "$out/sbx-probe-settings.json" --permission-mode bypassPermissions --allowedTools Bash --no-session-persistence < /dev/null > "$out/sbx-probe.out" 2>&1) || true
   if [[ ! -s "$pd/sbx-ctl.txt" || -e "$canary" ]] || ! grep -qi "not permitted" "$pd/sbx-err.txt" 2>/dev/null; then echo "REJECT: the OS sandbox did not refuse a write outside the scratch dir (see $out/sbx-probe.out; an out dir under Claude Code's own temp dir is always writable, so choose another); the run is not started" >&2; exit 2; fi
+  if [[ "$(cat "$pd/sbx-git.txt" 2>/dev/null)" != false ]]; then echo "REJECT: the pinned git configuration did not reach the agent's shell (sbx-git.txt); the run is not started" >&2; exit 2; fi
   sbx_settings "$out/proof-settings.json" "$hook" "$repo" "$wrapper"
   perm=(--permission-mode bypassPermissions --settings "$out/proof-settings.json" --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill")
 else
@@ -183,6 +195,7 @@ else
 fi
 claude -p "$task" --model sonnet --setting-sources "$sources" "${perm[@]}" \
   --append-system-prompt "$seam" --no-session-persistence --output-format stream-json --verbose > "$out/stream.jsonl" 2> "$out/session.err" < /dev/null && claude_rc=0 || claude_rc=$?
+[[ $scenario != real ]] || unset PROOF_GIT_BASELINE GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_KEY_1 GIT_CONFIG_VALUE_1 GIT_CONFIG_KEY_2 GIT_CONFIG_VALUE_2 GIT_CONFIG_KEY_3 GIT_CONFIG_VALUE_3
 python3 - "$out" <<'PY'
 import json, sys
 o = sys.argv[1]; res = ""; ev = []; jl = []

@@ -2349,10 +2349,19 @@ sed 's/"excludedCommands": \[sys.argv\[4\] + " \*"\]/"excludedCommands": ["*"]/'
 expectm fail "a sandbox that excludes more than the one wrapper is rejected" 'REJECT: the OS sandbox excludes more than the one wrapper' python3 "$pp" "$tmp/proof-sbx-excl.sh"
 sed 's/-e "\$canary"/-e "\$canaryx"/' "$ps" > "$tmp/proof-sbx-noprobe.sh"
 expectm fail "no start-up probe where the sandbox itself refuses a write outside the scratch repo is rejected" 'REJECT: no start-up probe that requires the sandbox itself to refuse' python3 "$pp" "$tmp/proof-sbx-noprobe.sh"
+sed 's/GIT_CONFIG_NOSYSTEM=1/GIT_CONFIG_NOSYSTEMx=1/' "$ps" > "$tmp/proof-git-env.sh"
+expectm fail "a real branch that does not pin the git configuration is rejected" 'REJECT: the real branch does not pin the git configuration from outside' python3 "$pp" "$tmp/proof-git-env.sh"
+sed 's/--record-baseline/--record-basel1ne/' "$ps" > "$tmp/proof-git-base.sh"
+expectm fail "a real branch that records no git baseline is rejected" 'REJECT: the real branch does not pin the git configuration from outside' python3 "$pp" "$tmp/proof-git-base.sh"
+sed 's/sbx-git.txt" 2>\/dev\/null)" != false/sbx-git.txt" 2>\/dev\/null)" != falsy/' "$ps" > "$tmp/proof-git-noprobe.sh"
+expectm fail "no probe that the pinned git configuration reaches the agent's shell is rejected" "REJECT: no start-up probe that the pinned git configuration reaches" python3 "$pp" "$tmp/proof-git-noprobe.sh"
 expect pass "the real scenario refuses a skill it has not proven (exit 2, names the proven skill)" sh -c 'o=$("$1" installed claude-codex real "$2/never-created" 2>&1); rc=$?; [ $rc -eq 2 ] && echo "$o" | grep -q "plan-codex"' _ "$ps" "$tmp"
 # the confinement hook itself: no model needed, so these run in CI and NO_SPY too
 hk="$here/proof-confine-hook.py"; hr="$tmp/hookrepo"; mkdir -p "$hr/.claude/plan" "$tmp/hookout"; ln -sfn "$tmp/hookout" "$hr/link"; hr="$(cd "$hr" && pwd -P)"
-hook() { python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"cwd":sys.argv[2],"tool_input":json.loads(sys.argv[3])}))' "$1" "$hr" "$2" | PROOF_SCRATCH_ROOT="$hr" python3 "$hk" | python3 -c 'import json,sys; o=json.load(sys.stdin)["hookSpecificOutput"]; print(o["permissionDecision"], o.get("permissionDecisionReason",""))'; }
+# cc11 r37: the scratch repo is a real git repo and the hook gets the baseline the proof recorded before launch (a file outside the repo)
+git -C "$hr" init -q; hgb="$tmp/hookgitbase"; python3 "$hk" --record-baseline "$hr" "$hgb" < /dev/null > /dev/null 2>&1 || true
+HCWD="$hr"
+hook() { python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"cwd":sys.argv[2],"tool_input":json.loads(sys.argv[3])}))' "$1" "${HCWD:-$hr}" "$2" | PROOF_SCRATCH_ROOT="$hr" PROOF_GIT_BASELINE="${HGB-$hgb}" python3 "$hk" | python3 -c 'import json,sys; o=json.load(sys.stdin)["hookSpecificOutput"]; print(o["permissionDecision"], o.get("permissionDecisionReason",""))'; }
 hbash() { hook Bash "$(python3 -c 'import json,sys; print(json.dumps({"command":sys.argv[1]}))' "$1")"; }
 expect pass "hook: the prescribed wrapper call is allowed" test "$(hbash '~/.claude/config/scripts/codex-call.sh --sandbox read-only --role ~/.claude/skills/plan-codex/codex-analyzer-role.md "audit the plan" 2>&1 | tail -20')" = "allow "
 expect pass "hook: the availability check is allowed" test "$(hbash 'test -x ~/.claude/config/scripts/codex-call.sh && codex --version; echo "exit $?"')" = "allow "
@@ -2390,6 +2399,52 @@ expect pass "hook: cd inside the repo is allowed" test "$(hbash 'cd .claude/plan
 expect pass "hook: writing .git/config by Write is denied" test "$(hook Write "{\"file_path\":\"$hr/.git/config\"}" | cut -d' ' -f1)" = deny
 expect pass "hook: writing .git/config by redirect is denied" hdeny 'echo x > .git/config'
 expect pass "hook: a redirect into the read-only skills dir is denied" hdeny 'echo x > ~/.claude/skills/plan-codex/SKILL.md'
+# cc11 r37 CRITICAL: nested repos and git state, by construction. A nested repo (written by the agent or by Codex) carries its own config, and `git status` reads it.
+expect pass "hook: the baseline file exists and names the config hash and the hooks listing" sh -c 'grep -q "^config " "$1" && grep -q "^hooks" "$1"' _ "$hgb"
+for c in 'echo x > nested/.git/config' 'mkdir -p nested/.git' 'echo x > a/b/.gitattributes' 'echo x > sub/.gitmodules' 'mkdir -p x/.git/hooks' 'cat > deep/er/.git/config <<'"'"'EOF'"'"'
+x
+EOF'; do
+  expect pass "hook: a .git, .gitattributes or .gitmodules path at any depth is not writable: ${c%%$'\n'*}" hdeny "$c"
+done
+for f in nested/.git/config a/b/.gitattributes sub/.gitmodules .gitattributes .gitmodules; do
+  expect pass "hook: Write to $f is denied" test "$(hook Write "{\"file_path\":\"$hr/$f\"}" | cut -d' ' -f1)" = deny
+  expect pass "hook: Edit of $f is denied" test "$(hook Edit "{\"file_path\":\"$hr/$f\"}" | cut -d' ' -f1)" = deny
+done
+for c in 'export GIT_CONFIG_COUNT=0' 'unset GIT_CONFIG_COUNT' 'GIT_CONFIG_COUNT=0 git status' 'export PATH=/tmp' 'declare -x A=b'; do
+  expect pass "hook: environment change denied: $c" hdeny "$c"
+done
+expect pass "hook: git status in the repo root with the recorded baseline is allowed" test "$(hbash 'git status')" = "allow "
+expect pass "hook: cd then git on one command line is denied" hdeny 'cd .claude && git status'
+HCWD="$hr/.claude"; expect pass "hook: git with the tool cwd below the root is denied" hdeny 'git status'; HCWD="$hr"
+HGB=/nonexistent/baseline; expect pass "hook: git with a missing baseline file is denied" hdeny 'git status'; unset HGB
+HGB=; expect pass "hook: git with no baseline configured is denied" hdeny 'git log'; unset HGB
+printf '[core]\n\tfsmonitor = /tmp/x\n' >> "$hr/.git/config"
+expect pass "hook: git after .git/config changed since the baseline is denied" hdeny 'git status'
+git -C "$hr" config --unset core.fsmonitor; python3 "$hk" --record-baseline "$hr" "$hgb" < /dev/null > /dev/null 2>&1 || true
+expect pass "hook: git is allowed again once the baseline matches" test "$(hbash 'git status')" = "allow "
+touch "$hr/.git/hooks/pre-commit"
+expect pass "hook: git after a hook file appeared under .git/hooks is denied" hdeny 'git diff'
+rm -f "$hr/.git/hooks/pre-commit"
+expect pass "hook: git is allowed again after the extra hook file is gone" test "$(hbash 'git diff')" = "allow "
+# the reviewer's example and the Codex-written variant: a nested repo whose config names a program git would run
+mkdir -p "$hr/nested" && git -C "$hr/nested" init -q && printf '[core]\n\tfsmonitor = touch /tmp/proof-escape\n' >> "$hr/nested/.git/config"
+expect pass "hook: git status denied while a nested repo exists (config planted by Codex or the agent)" hdeny 'git status'
+expect pass "hook: cd nested && git status denied" hdeny 'cd nested && git status'
+rm -rf "$hr/nested"
+expect pass "hook: git status is allowed again with the nested repo removed" test "$(hbash 'git status')" = "allow "
+expect pass "hook: record-baseline writes the same file the hook compares (idempotent)" sh -c 'cp "$1" "$2.a"; python3 "$3" --record-baseline "$4" "$2.b" < /dev/null >/dev/null 2>&1; cmp -s "$2.a" "$2.b"' _ "$hgb" "$tmp/hgb" "$hk" "$hr"
+expect pass "check-proof-permissions.py requires the git-state guard in the hook" sh -c 'sed "s/def git_state(/def git_statex(/" "$1" > "$2"; ! python3 "$3" "$4" "$2" >/dev/null 2>&1' _ "$hk" "$tmp/hook-nogit.py" "$pp" "$ps"
+# cc11 r37 HIGH: the prescribed review and implementation calls must be allowed, still confined
+CC='~/.claude/config/scripts/codex-call.sh'
+mkdir -p "$hr/.claude/plan"; printf 'x' > "$hr/.claude/plan/p.txt"; mkdir -p "$tmp/outside-dir"; printf 'x' > "$tmp/outside-dir/x.txt"; ln -sfn "$tmp/outside-dir" "$hr/link"
+for c in "$CC --prompt-file .claude/plan/p.txt" "$CC --prompt-file $hr/.claude/plan/p.txt" "$CC --sandbox read-only --role ~/.claude/skills/plan-codex/codex-analyzer-role.md --prompt-file .claude/plan/p.txt" "$CC --resume 01a20563-33aa-73d3-95b8-a8e2d30ab187 --prompt-file .claude/plan/p.txt" "$CC --sandbox workspace-write 'implement the plan'" "$CC --sandbox workspace-write --cd . --prompt-file .claude/plan/p.txt" "$CC --sandbox workspace-write --cd $hr 'go'" "$CC --sandbox workspace-write --prompt-file .claude/plan/p.txt 2>&1 | tail -20"; do
+  expect pass "hook: prescribed call allowed: ${c#\~/.claude/config/scripts/}" test "$(hbash "$c")" = "allow "
+done
+HCWD="$tmp"
+expect pass "hook: workspace-write without --cd from a tool cwd outside the root is denied" hdeny "$CC --sandbox workspace-write 'implement'"
+HCWD="$hr/.claude"
+expect pass "hook: workspace-write without --cd from a cwd below the root is allowed (the script's directory is the repo toplevel)" test "$(hbash "$CC --sandbox workspace-write 'implement'")" = "allow "
+HCWD="$hr"
 expect pass "hook: Agent is allowed (a subagent's own calls reach this hook, probed)" test "$(hook Agent '{"prompt":"x"}')" = "allow "
 # r36 CRITICAL 1: expansion in ANY quoting except single quotes, in every position and every segment
 for c in 'echo x > "$(touch /tmp/proof-escape)"' 'echo x > "`touch /tmp/proof-escape`"' 'echo x > "${IFS}"' 'echo x > "$HOME/../../tmp/proof-escape"' 'echo x > $HOME/f' 'echo "$(id)"' 'echo "`id`"' 'echo "${HOME}"' 'echo "$HOME"' 'echo $'"'"'\x41'"'"'' 'cat "$HOME/.ssh/id_rsa"' 'cd "$(echo /tmp)"' 'cd $HOME' 'ls && echo "$(id)"' 'ls; cat <<< hi' 'cat <(ls)' 'ls >(cat)' 'echo x > f*' 'cat *' 'echo {a,b}' 'eval ls' 'source x.sh' '. x.sh' 'ls & ls' 'cat ~root/x' 'cat ~/.ssh/id_rsa' 'echo "a\"$(id)"' 'cat <<'"'"'EOF'"'"' | bash
@@ -2405,7 +2460,7 @@ x
 EOF" | cut -d' ' -f1)" = allowdeny
 # r36 CRITICAL 2: the wrapper's own option grammar
 CC='~/.claude/config/scripts/codex-call.sh'
-for c in "$CC --sandbox workspace-write hi" "$CC --sandbox danger-full-access hi" "$CC -C /tmp hi" "$CC --cd /tmp hi" "$CC --cd=.. hi" "$CC --cd .. hi" "$CC --sandbox read-only --sandbox workspace-write hi" "$CC --sandbox workspace-write --sandbox read-only hi" "$CC -- --sandbox workspace-write hi" "$CC --sandbox read-only -- hi" "$CC --bogus x hi" "$CC --resume 'x;y' hi" "$CC --role /etc/passwd hi" "$CC hi extra" "$CC" "$CC --sandbox" "$CC --sandbox read-only" "$CC -- hi" "$CC --sandbox read-only --cd /tmp hi" "~/.claude/config/scripts/reviewer.sh E /etc/passwd out.txt" "~/.claude/config/scripts/reviewer.sh E in.txt /tmp/out.txt" "~/.claude/config/scripts/reviewer.sh X in.txt out.txt" "~/.claude/config/scripts/redact-diff.sh --other" "~/.claude/config/scripts/review-snapshot.sh /etc" "~/.claude/config/scripts/other.sh"; do
+for c in "$CC --sandbox danger-full-access hi" "$CC --sandbox workspace-write --cd /tmp hi" "$CC --sandbox workspace-write --cd .. hi" "$CC --sandbox workspace-write --cd link hi" "$CC --sandbox full hi" "$CC --prompt-file /etc/passwd" "$CC --prompt-file ../x.txt" "$CC --prompt-file link/x.txt" "$CC --prompt-file .claude/plan/p.txt extra" "$CC --prompt-file" "$CC --prompt-file .claude/plan/p.txt --prompt-file .claude/plan/q.txt" "$CC --prompt-file -x" "$CC -C /tmp hi" "$CC --cd /tmp hi" "$CC --cd=.. hi" "$CC --cd .. hi" "$CC --sandbox read-only --sandbox workspace-write hi" "$CC --sandbox workspace-write --sandbox read-only hi" "$CC -- --sandbox workspace-write hi" "$CC --sandbox read-only -- hi" "$CC --bogus x hi" "$CC --resume 'x;y' hi" "$CC --role /etc/passwd hi" "$CC hi extra" "$CC" "$CC --sandbox" "$CC --sandbox read-only" "$CC -- hi" "$CC --sandbox read-only --cd /tmp hi" "~/.claude/config/scripts/reviewer.sh E /etc/passwd out.txt" "~/.claude/config/scripts/reviewer.sh E in.txt /tmp/out.txt" "~/.claude/config/scripts/reviewer.sh X in.txt out.txt" "~/.claude/config/scripts/redact-diff.sh --other" "~/.claude/config/scripts/review-snapshot.sh /etc" "~/.claude/config/scripts/other.sh"; do
   expect pass "hook: wrapper grammar denies: ${c#\~/.claude/config/scripts/}" hdeny "$c"
 done
 for c in "$CC --sandbox read-only --role ~/.claude/skills/plan-codex/codex-analyzer-role.md \"audit this plan\"" "$CC --sandbox read-only --resume 01a20563-33aa-73d3-95b8-a8e2d30ab187 \"confirm\"" "$CC --cd . --sandbox read-only 'p'" "$CC \"just a prompt\"" "~/.claude/config/scripts/reviewer.sh E in.txt out.txt" "~/.claude/config/scripts/redact-diff.sh --text"; do
