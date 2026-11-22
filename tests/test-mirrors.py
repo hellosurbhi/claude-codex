@@ -71,6 +71,20 @@ for n in NAMES:
         for m in re.finditer(r"Never conclude the reviewer is stuck", t):
             if "and the only other exit is the failed-review rule." not in t[m.start():m.start() + 600].split("\n")[0]:
                 bad.append("%s: no-stop clause does not end with the failed-review exit rule" % os.path.relpath(f, root))
+# WHY per occurrence from the stable prefix (CodeRabbit thread 9): the full-clause regex stops matching a copy whose tail was edited
+# (`any severity` -> `CRITICAL severity`), so that copy dropped out of `seen` and the cross-copy comparison never saw it.
+NOCAP_PREFIX = "There is no iteration cap and no stop to ask the user"
+for n in NAMES:
+    for f in files(n):
+        t = open(f, encoding="utf-8").read()
+        for m in re.finditer(re.escape(NOCAP_PREFIX), t):
+            # WHY not NOCAP_FULL itself: some workflows legitimately end the sentence "until a round has no accepted findings (owner mandate ...)",
+            # so the stable invariant is: same round-count lead, ends on "no accepted findings", and no severity word narrows it.
+            whole = t[m.start():m.start() + 400]
+            sent = re.split(r"\. |\(", whole)[0]
+            if "until a" not in sent or "no accepted findings" not in sent \
+                    or re.search(r"\b(CRITICAL|HIGH|MEDIUM|LOW|only)\b", sent):
+                bad.append("%s: a no-cap clause does not carry the canonical text (round 6, 10 or 20 ... no accepted findings, no severity limit)" % os.path.relpath(f, root))
 for rx in CLAUSES:
     seen = {}
     for n in NAMES:
