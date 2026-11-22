@@ -347,6 +347,61 @@ for p in sys.argv[1:]:
     t = open(p).read(); open(p, "w").write(t.replace(">> \"$CTX\"", "> \"$CTX\""))
 PY
 expect fail "a fallback sequence whose diff overwrites the context file instead of appending is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc claude-codex
+python3 - "$tmp/mir8/skills/claude-codex/SKILL.md" "$tmp/mir8/commands/claude-codex.md" <<'PY'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); open(p, "w").write(t.replace(" | ~/.claude/config/scripts/redact-diff.sh >>", " >>"))
+PY
+expect fail "a fallback sequence that skips redact-diff.sh is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc claude-codex
+# r11 finding 1: scripts/redact-diff.sh masks credential values in a diff (added AND deleted lines), keeps the diff structure, leaves a clean diff byte-identical.
+red="$here/../scripts/redact-diff.sh"
+fx="$tmp/secrets.diff"
+{
+  printf 'diff --git a/app.py b/app.py\nindex 111..222 100644\n--- a/app.py\n+++ b/app.py\n@@ -1,9 +1,9 @@ def main():\n'
+  printf ' keep = "task-description-for-the-user-that-is-long"\n'
+  for sign in - +; do
+    printf '%s%s\n' "$sign" 'aws = "AKIAIOSFODNN7EXAMPLE"'
+    printf '%s%s\n' "$sign" 'gh = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"'
+    printf '%s%s\n' "$sign" 'pat = "github_pat_11ABCDEFG0123456789_abcdefghijklmnop"'
+    printf '%s%s\n' "$sign" 'k = "sk-ant-api03-abcdefghijklmnopqrstuvwx"'
+    printf '%s%s\n' "$sign" 'sl = "xoxb-123456789012-abcdefghijkl"'
+    printf '%s%s\n' "$sign" 'h = {"Authorization": "Bearer abc123def456ghi789"}'
+    printf '%s%s\n' "$sign" 'j = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop"'
+    printf '%s%s\n' "$sign" 'password = "hunter2hunter2"'
+    printf '%s%s\n' "$sign" 'API_KEY: zzTopSecretValue99'
+    printf '%s%s\n' "$sign" '-----BEGIN RSA PRIVATE KEY-----'
+    printf '%s%s\n' "$sign" 'MIIEowIBAAKCAQEAsupersecretkeybody'
+    printf '%s%s\n' "$sign" '-----END RSA PRIVATE KEY-----'
+  done
+  printf ' tail = 1\n'
+} > "$fx"
+"$red" < "$fx" > "$tmp/secrets.out"
+for v in AKIAIOSFODNN7EXAMPLE ghp_abcdefghij github_pat_11ABC sk-ant-api03 xoxb-1234 abc123def456ghi789 eyJhbGciOiJIUzI1NiJ9 hunter2hunter2 zzTopSecretValue99 MIIEowIBAAKCAQEAsupersecretkeybody; do
+  expect fail "redact-diff leaves no trace of $v" grep -qF "$v" "$tmp/secrets.out"
+done
+expect pass "redact-diff keeps the hunk header, context lines and the +/- prefixes" test "$(grep -c '^@@ -1,9 +1,9 @@' "$tmp/secrets.out")$(grep -c '^ tail = 1$' "$tmp/secrets.out")$(grep -c '^-' "$tmp/secrets.out")$(grep -c '^+' "$tmp/secrets.out")" = "111313"
+expect pass "redact-diff keeps the line count of the diff" test "$(wc -l < "$fx")" = "$(wc -l < "$tmp/secrets.out")"
+expect pass "redact-diff does not touch a word that merely contains sk-" sh -c 'printf "+x = task-description-for-the-user-that-is-long\n" | "$1" | grep -q "task-description-for-the-user-that-is-long"' _ "$red"
+git -C "$here/.." diff 9847101 HEAD -- tests/proof 2>/dev/null | grep -v -i 'password\|secret\|token\|api.key\|credential\|bearer' > "$tmp/clean.diff"
+printf 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-hello world\n+hello there, a task-list and ask-me\n' >> "$tmp/clean.diff"
+"$red" < "$tmp/clean.diff" > "$tmp/clean.out"
+expect pass "a clean diff comes out byte-identical" cmp -s "$tmp/clean.diff" "$tmp/clean.out"
+# a fallback sequence run for real: with the script missing no context file survives and the reviewer is never called.
+sendtry() { # $1 = redactor path; runs the claude-codex fallback lines with a stub reviewer that records its call
+  python3 - "$here/../skills/claude-codex/SKILL.md" "$1" "$tmp/sendtry.sh" "$tmp/reviewer-called" <<'PY'
+import re, sys
+t = open(sys.argv[1]).read()
+b = re.search(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
+b = b.replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[2]).replace("~/.claude/config/scripts/reviewer.sh S", "touch " + sys.argv[4] + " #")
+b = b.replace("git diff HEAD", "git diff 9847101").replace("<out-file>", "x")
+open(sys.argv[3], "w").write(b + "\n")
+PY
+  rm -f "$tmp/reviewer-called"; ( cd "$here/.." && bash "$tmp/sendtry.sh" >/dev/null 2>&1 ); [ -f "$tmp/reviewer-called" ]
+}
+expect pass "the fallback sequence reaches the reviewer when the redaction script works" sendtry "$red"
+expect fail "the fallback sequence never reaches the reviewer when the redaction script is missing" sendtry "$tmp/no-such-redactor.sh"
+printf '#!/bin/sh\ncat; exit 3\n' > "$tmp/bad-redactor.sh"; chmod +x "$tmp/bad-redactor.sh"
+expect fail "the fallback sequence never reaches the reviewer when the redaction script exits non-zero" sendtry "$tmp/bad-redactor.sh"
 expect pass "the pristine copies pass the fallback-context rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 # r10 finding 1: a delivery exit needs `VERDICT: APPROVED` AND zero findings; a bare BLOCKED or WARNING (no finding listed) is neither clean nor actionable.
 isclean() { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"real","exit":0,"stdout":sys.argv[2].replace("\\n", "\n"),"stderr":""}) else 1)' "$here" "$1"; }

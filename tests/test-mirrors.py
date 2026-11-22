@@ -195,7 +195,7 @@ for f in CTXFILES:
             continue
         base = "$START_SHA" if "tdd-" in rel else "HEAD"
         need = ['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "OPEN FINDINGS:"] + (["AUDIT INSTRUCTIONS:", 'cat .claude/plan/<feature-name>.md >> "$CTX"', "PLAN:"] if plan else
-                ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:", "git diff %s %s >> \"$CTX\"" % (base, EXCL)])
+                ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:", "(set -o pipefail; git diff %s %s | ~/.claude/config/scripts/redact-diff.sh >> \"$CTX\")" % (base, EXCL), "|| { rm -f \"$CTX\"", "[ -f \"$CTX\" ] && ~/.claude/config/scripts/reviewer.sh S", "best-effort mask", "no context is sent"])
         for k in need:
             if k not in b:
                 bad.append("%s: the Fallback input sequence lacks %r" % (rel, k[:50]))

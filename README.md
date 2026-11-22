@@ -106,6 +106,13 @@ cp scripts/codex-call.sh ~/.claude/config/scripts/codex-call.sh
 chmod +x ~/.claude/config/scripts/codex-call.sh
 ```
 
+The fallback also needs the diff redaction script at one fixed path. It masks inline credential values (private keys, cloud and API tokens, Bearer tokens, JWTs, password and secret assignments) in the diff before the diff goes into the tier S context file. It is a best-effort mask on top of the path exclusions, not a guarantee. If it is missing the fallback sends nothing:
+
+```bash
+cp scripts/redact-diff.sh ~/.claude/config/scripts/redact-diff.sh
+chmod +x ~/.claude/config/scripts/redact-diff.sh
+```
+
 The usage-limit fallback also needs the shared reviewer script `~/.claude/config/scripts/reviewer.sh` (it is not shipped in this repo, and it needs its own `claude` CLI). Without it a Codex quota error leaves the review unreviewed instead of falling back.
 
 Outside reviewers (Gemini, CodeRabbit) are never called from these skills, because a skill cannot prove a diff is free of credentials; they run only inside the reviewer script's own chain. When Codex gives no verdict (a usage limit, an error or a malformed reply), the skills fall back to exactly one reviewer, tier S (`reviewer.sh S`, a Sonnet review) on one context file that carries the task requirements, the review instructions, the carried and contested findings and then the sanitized diff (a plan audit carries the audit instructions, the findings and then the current plan text), and the work stays pending until it returns a clean verdict on the current head.
@@ -228,7 +235,8 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
 │       └── reviewer.md      # Codex role: code reviewer
 └── config/
     └── scripts/
-        └── codex-call.sh            # codex exec wrapper every skill calls (install step 3)
+        ├── codex-call.sh            # codex exec wrapper every skill calls (install step 3)
+        └── redact-diff.sh           # masks credential values in the fallback diff (install step 3)
 ```
 
 The tests are not installed. They live in this repository only:
