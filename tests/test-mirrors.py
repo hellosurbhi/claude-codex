@@ -412,5 +412,18 @@ for n in PROMPTSITES:
         sm = re.search(re.escape(RIB) + r".*?\n```\n.*?\n```\n", texts[0], re.S); cm = re.search(re.escape(RIB) + r".*?\n```\n.*?\n```\n", texts[1], re.S)
         if (sm and sm.group(0)) != (cm and cm.group(0)):
             bad.append("%s: the Review input paragraph differs between skill and command" % n)
+# r20 finding 3: docs and evals must describe the current flow (the Codex prompt carries the masked DIFF and the TASK REQUIREMENTS; Codex never runs git itself).
+STALE = ["Codex runs `git diff HEAD` itself", "The Codex prompt includes 'git diff HEAD' instruction", "(Phase 6) with 'git diff $START_SHA'", "`git diff $START_SHA` review prompt", "all reviews use `git diff $START_SHA`", "`git diff $START_SHA` instead of `git diff HEAD`"]
+DOCNEED = {"README.md": "TASK REQUIREMENTS", "skills/claude-codex/evals/evals.json": "review-context.txt", "skills/tdd-claude-codex/evals/evals.json": "review-context.txt"}
+doc_files = ["README.md"] + [os.path.relpath(f, root) for g in ("skills/*/evals/evals.json", "skills/*/*.md", ".claude/plan/*.md", "docs/**/*.md") for f in sorted(glob.glob(os.path.join(root, g), recursive=True))]
+for rel in doc_files:
+    if not os.path.isfile(os.path.join(root, rel)): continue
+    dt = open(os.path.join(root, rel)).read()
+    for s in STALE:
+        if s in dt:
+            bad.append("%s: stale old-flow text %r" % (rel, s))
+for rel, need in DOCNEED.items():
+    if need not in open(os.path.join(root, rel)).read():
+        bad.append("%s: does not describe the current review flow (missing %r)" % (rel, need))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)

@@ -270,4 +270,4 @@ The `prompts/codex/` files are passed via `--role` on each Codex call to shape i
 - Plans are saved to `.claude/plan/` in your project directory — add to `.gitignore` if you don't want them committed
 - No iteration cap on any review loop: every loop runs until a round has no accepted findings at any severity, and a failed review leaves the work UNREVIEWED
 - The `codex-mcp` skill auto-loads when Codex calls are relevant, providing Claude with session management patterns and best practices
-- `/claude-codex` uses `codex exec` for review: Codex runs `git diff HEAD` itself and returns a structured verdict only, minimising token usage
+- `/claude-codex` uses `codex exec` for review: Codex receives one masked review context file (TASK REQUIREMENTS, REVIEW INSTRUCTIONS, OPEN FINDINGS and the redacted DIFF) via `--prompt-file`, never runs git itself and returns a structured verdict only, minimising token usage

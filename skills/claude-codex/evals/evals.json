@@ -24,7 +24,7 @@
       "expectations": [
         "Claude does NOT attempt to read a plan file (uses task description directly)",
         "Claude calls codex-call.sh for review after implementation",
-        "The Codex prompt includes 'git diff HEAD' instruction",
+        "The Codex prompt is the masked review-context.txt file (TASK REQUIREMENTS plus the redacted DIFF) sent with --prompt-file, and tells Codex not to run git itself",
         "If Codex returns any accepted finding at any severity (BLOCKED, WARNING or MEDIUM/LOW under APPROVED), Claude fixes every accepted finding and re-reviews; there is no WARNING proceed-without-review path",
         "Delivery includes a changes table and review result"
       ]

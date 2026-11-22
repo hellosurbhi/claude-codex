@@ -14,7 +14,7 @@
         "Claude reads tdd-specialist-role.md from the skill directory",
         "Claude calls codex-call.sh for test audit (Phase 3) with test-focused verdict prompt",
         "Claude implements minimal code to make tests pass (GREEN phase)",
-        "Claude calls codex-call.sh for implementation review (Phase 6) with 'git diff $START_SHA'",
+        "Claude calls codex-call.sh for implementation review (Phase 6) with --prompt-file pointing at the masked review-context.txt (TASK REQUIREMENTS plus the redacted DIFF since $START_SHA)",
         "Phase 6 Codex call is a separate codex-call.sh call (not reusing Phase 3 THREAD_ID)",
         "Delivery includes TDD summary with test count, coverage, and RED/GREEN confirmation"
       ]
