@@ -113,6 +113,13 @@ cp scripts/redact-diff.sh ~/.claude/config/scripts/redact-diff.sh
 chmod +x ~/.claude/config/scripts/redact-diff.sh
 ```
 
+The review snapshot script is needed at one fixed path too. It is the one definition of the state a reviewer judges and the review record certifies: `git diff <base>` of the tracked changes plus a new-file diff for every untracked, non-ignored file, without secret-named paths (`.env*`, `*secret*`, `*credential*`, `*.pem`, `*.key`) and without `.claude/review` and `.claude/plan`. The execute-codex and tdd-execute-codex skills hash it before the reviewer runs and again after the reply, so a new file created while the reviewer ran voids the round; the other diff skills build their review input from it. It prints nothing and exits non-zero when any step fails, and it never touches your real index (it works on a copy). Its second line is `# contract: review-snapshot v1`.
+
+```bash
+cp scripts/review-snapshot.sh ~/.claude/config/scripts/review-snapshot.sh
+chmod +x ~/.claude/config/scripts/review-snapshot.sh
+```
+
 The usage-limit fallback also needs the shared reviewer script `~/.claude/config/scripts/reviewer.sh` (it is not shipped in this repo, and it needs its own `claude` CLI). Without it a Codex quota error leaves the review unreviewed instead of falling back.
 
 Outside reviewers (Gemini, CodeRabbit) are never called from these skills, because a skill cannot prove a diff is free of credentials; they run only inside the reviewer script's own chain. When Codex gives no verdict (a usage limit, an error or a malformed reply), the skills fall back to exactly one reviewer, tier S (`reviewer.sh S`, a Sonnet review) on one context file that carries the task requirements, the review instructions, the carried and contested findings and then the sanitized diff (a plan audit carries the audit instructions, the findings and then the current plan text), and the work stays pending until it returns a clean verdict on the current head.
@@ -240,7 +247,8 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
 └── config/
     └── scripts/
         ├── codex-call.sh            # codex exec wrapper every skill calls (install step 3)
-        └── redact-diff.sh           # masks credential values in the diff every reviewer receives (install step 3)
+        ├── redact-diff.sh           # masks credential values in the diff every reviewer receives (install step 3)
+        └── review-snapshot.sh       # the reviewed state: tracked changes plus untracked files, hashed by the review record (install step 3)
 ```
 
 The tests are not installed. They live in this repository only:

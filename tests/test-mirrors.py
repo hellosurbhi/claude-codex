@@ -17,7 +17,7 @@ def prose(path):
         if not fence:
             out.append((i, l))
     return out
-CLAUSE = "`git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'`)"
+CLAUSE = "`git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it; the review snapshot (`review-snapshot.sh`) also carries every other untracked non-ignored file, so ignore or remove any stray file you do not want reviewed, and it leaves secret-named paths such as `.env.production` out of the diff by itself)"
 # a line that (re)calls a reviewer on a diff or on test files must carry the clause itself
 CALL = re.compile(r"^\s*(- )?(Run `git diff|Re-call Codex via|Call Codex via)|re-calls? `codex-call\.sh --resume|re-run (the )?`?code-reviewer`?|re-audits? via", re.I)
 # (regex, workflows that must contain it); every snippet must also appear equally often in a skill and its command
@@ -366,7 +366,7 @@ for n in ("execute-codex", "tdd-execute-codex"):
         got.append(b)
         if cnt != 1 or not b:
             bad.append("%s: expected exactly one Review record paragraph with its command sequence (found %d)" % (rel, cnt)); continue
-        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n'", "if H=\"$(set -o pipefail; git diff %s %s ':(top,exclude).claude/review' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && (set -o pipefail; ~/.claude/config/scripts/redact-diff.sh < .claude/review/reviewed.diff > .claude/review/review-input.diff) && [ -s .claude/review/review-input.diff ]; then" % (base, EXCL), "if N=\"$(set -o pipefail; git diff %s %s ':(top,exclude).claude/review' | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && [ \"$N\" = \"$H\" ] && [ -s .claude/review/reply.raw.txt ]; then" % (base, EXCL), "rm -f .claude/review/final-review.txt .claude/review/reviewed.diff .claude/review/review-input.diff", "else rm -f .claude/review/reviewed.diff .claude/review/review-input.diff; echo \"no review input", "Dispatch only after it prints \"review input ready\". Send every reviewer `.claude/review/review-input.diff`", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n' \"$H\"", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"", "else rm -f .claude/review/final-review.txt", "> .claude/review/final-review.txt", "cat .claude/review/reply.raw.txt; } > .claude/review/final-review.txt && rm -f .claude/review/reply.raw.txt", "file-writing tool (Write, never a heredoc, echo or printf carrying the pasted reply)", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
+        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n'", "if H=\"$(set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh %s | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && (set -o pipefail; ~/.claude/config/scripts/redact-diff.sh < .claude/review/reviewed.diff > .claude/review/review-input.diff) && [ -s .claude/review/review-input.diff ]; then" % base, "if N=\"$(set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh %s | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && [ \"$N\" = \"$H\" ] && [ -s .claude/review/reply.raw.txt ]; then" % base, "rm -f .claude/review/final-review.txt .claude/review/reviewed.diff .claude/review/review-input.diff", "else rm -f .claude/review/reviewed.diff .claude/review/review-input.diff; echo \"no review input", "Dispatch only after it prints \"review input ready\". Send every reviewer `.claude/review/review-input.diff`", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n' \"$H\"", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"", "else rm -f .claude/review/final-review.txt", "> .claude/review/final-review.txt", "cat .claude/review/reply.raw.txt; } > .claude/review/final-review.txt && rm -f .claude/review/reply.raw.txt", "file-writing tool (Write, never a heredoc, echo or printf carrying the pasted reply)", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
             if k not in b:
                 bad.append("%s: the Review record sequence lacks %r" % (rel, k[:60]))
         # r13 finding 2: ORDER is the rule. Snapshot and hash BEFORE dispatch (step 1), then after the reply compare the current tree with that hash (step 2) and only then write the record, whose hash is
@@ -374,10 +374,10 @@ for n in ("execute-codex", "tdd-execute-codex"):
         pos = [b.find(x) for x in ["| tee .claude/review/reviewed.diff", "Send every reviewer `.claude/review/review-input.diff`", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff", "[ \"$N\" = \"$H\" ]", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS:"]]
         if min(pos) < 0 or pos != sorted(pos):
             bad.append("%s: the Review record steps are not in the order snapshot and hash, dispatch, compare after the reply, write the record" % rel)
-        if b.count('H="$(set -o pipefail; git diff') != 1 or b.count('H="$(git diff') != 0:
+        if b.count('H="$(set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh') != 1 or b.count('H="$(git diff') != 0:
             bad.append("%s: the Review record takes H from the tree more than once (the hash must be taken before dispatch only)" % rel)
         # r14 finding 1: every tree-derived hash is a checked pipeline (pipefail) and an empty snapshot never counts, at step 1 and at step 2; a failed or empty diff voids the round (old record removed).
-        if b.count("[ -s .claude/review/reviewed.diff ]") != 2 or b.count("set -o pipefail; git diff") != 2:
+        if b.count("[ -s .claude/review/reviewed.diff ]") != 2 or b.count("set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh") != 2:
             bad.append("%s: the Review record steps do not both check the diff pipeline status and an empty snapshot" % rel)
     for f in files(n):
         # r19 finding 1: the primary reviewer is handed .claude/review/review-input.diff (the snapshot after redact-diff.sh), never the output of a fresh git diff and never the raw snapshot.
@@ -425,7 +425,7 @@ for n in PROMPTSITES:
             else:
                 code, base2 = m.group(1), ("\"${START_SHA:?}\"" if n.startswith("tdd-") else "HEAD")
                 for k in ['if R="$(git rev-parse --show-toplevel)" && [ -n "$R" ]; then (cd "$R" || exit 1', "mkdir -p .claude/review; rm -f .claude/review/review-input.diff",
-                          "(set -o pipefail; git diff %s %s ':(top,exclude).claude/review' | ~/.claude/config/scripts/redact-diff.sh > .claude/review/review-input.diff) && [ -s .claude/review/review-input.diff ]" % (base2, EXCL),
+                          "(set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh %s | ~/.claude/config/scripts/redact-diff.sh > .claude/review/review-input.diff) && [ -s .claude/review/review-input.diff ]" % base2,
                           'echo "review input ready', "rm -f .claude/review/review-input.diff; echo \"no review input", "do NOT dispatch any reviewer", "no repo root (git rev-parse --show-toplevel failed)"]:
                     if k not in code:
                         bad.append("%s: the Review input sequence lacks %r" % (rel, k[:60]))
@@ -450,6 +450,16 @@ for f in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")) + glob.
             bad.append("%s:%d: a redact-diff.sh run does not check its exit status (expected `> file && ...`)" % (rel, ln))
         if "[ -s" not in line:
             bad.append("%s:%d: a redact-diff.sh run is not on a line that also checks for non-empty output" % (rel, ln))
+# r28: every script the skills call at ~/.claude/config/scripts/ is a shipped script, so the README must install it (cp + chmod) and list it in the tree; a new script nobody installs fails every review.
+_readme = open(os.path.join(root, "README.md"), encoding="utf-8").read()
+for _s in sorted(os.path.basename(x) for x in glob.glob(os.path.join(root, "scripts", "*.sh"))):
+    for _need in ("cp scripts/%s ~/.claude/config/scripts/%s" % (_s, _s), "chmod +x ~/.claude/config/scripts/%s" % _s, _s + " "):
+        if _need not in _readme:
+            bad.append("README.md: install steps or file tree lack %r for the shipped script scripts/%s" % (_need, _s))
+# r28 finding 2: no skill or command re-derives the snapshot; every `git diff <base> -- ':(top)'` pathspec lives in scripts/review-snapshot.sh only.
+for _f in sorted(glob.glob(os.path.join(root, "skills", "*", "*.md")) + glob.glob(os.path.join(root, "commands", "*.md"))):
+    if re.search(r"git diff \S+ -- ':\(top\)'", open(_f, encoding="utf-8").read()):
+        bad.append("%s: re-derives the review snapshot inline (call ~/.claude/config/scripts/review-snapshot.sh)" % os.path.relpath(_f, root))
 # r20 finding 3: docs and evals must describe the current flow (the Codex prompt carries the masked DIFF and the TASK REQUIREMENTS; Codex never runs git itself).
 STALE = ["Codex runs `git diff HEAD` itself", "The Codex prompt includes 'git diff HEAD' instruction", "(Phase 6) with 'git diff $START_SHA'", "`git diff $START_SHA` review prompt", "all reviews use `git diff $START_SHA`", "`git diff $START_SHA` instead of `git diff HEAD`"]
 DOCNEED = {"README.md": "TASK REQUIREMENTS", "skills/claude-codex/evals/evals.json": "review-context.txt", "skills/tdd-claude-codex/evals/evals.json": "review-context.txt"}
