@@ -36,7 +36,7 @@ HIGH: <findings>
 MEDIUM: <findings>
 LOW: <findings>
 
-Omit any severity line with no findings (never write placeholder lines such as "HIGH: none"). A clean review is exactly the one line `VERDICT: APPROVED`.
+Omit any severity line with no findings (never write placeholder lines such as "HIGH: none", and never a severity header with no text after it). A clean review is exactly the one line `VERDICT: APPROVED`.
 ```
 
 Severity definitions:

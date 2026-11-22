@@ -204,7 +204,7 @@ for n in NAMES:
             if ln.startswith("There is no iteration cap and no stop to ask the user") and ACTIVE not in ln:
                 bad.append("%s: a no-cap paragraph does not route re-review to the active fallback reviewer" % os.path.relpath(f, root))
 # C3 (PR 10, rewritten for codex-call.sh): a verdict is validated, never substring-matched.
-VALID_KEYS = ("first non-blank line must be exactly `VERDICT: APPROVED`", "NOT APPROVED", "APPROVED once you fix", "second `VERDICT:` line is no verdict", "takes the next non-blank line", "`none` or `n/a`", "real finding at any severity means findings", "never a clean round", "mpty output")
+VALID_KEYS = ("first non-blank line must be exactly `VERDICT: APPROVED`", "NOT APPROVED", "APPROVED once you fix", "second `VERDICT:` line is no verdict", "takes the next non-blank line that is not a severity header as its text", "makes the whole output no verdict and never a clean round", "`none` or `n/a`", "real finding at any severity means findings", "never a clean round", "mpty output")
 PARSE_ANCHOR = re.compile(r"^(Classify the verdict\.|\*\*Parse response\*\*|\*\*Parse the exact|Parse reviewer response)")
 for n in NAMES:
     for f in files(n):
@@ -241,6 +241,11 @@ for n in NAMES:
                 bad.append("skills/%s/evals/evals.json id 9 does not say %r" % (n, need))
     elif "no verdict" not in t9:
         bad.append("skills/%s/evals/evals.json id 9 does not say a doubled or qualified verdict is no verdict" % n)
+# cc11-main-r4 finding 3: every reviewer prompt that says to omit empty severity lines also forbids a header with no text (the grammar treats one as no verdict).
+for f in sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root, "skills", n, "codex-analyzer-role.md") for n in ("plan-codex", "tdd-claude-codex"))):
+    t = open(f, encoding="utf-8").read()
+    if t.count("Omit any severity line with no findings") != t.count("and never a severity header with no text after it"):
+        bad.append("%s: a reviewer prompt omits the 'never a severity header with no text after it' clause" % os.path.relpath(f, root))
 for f in files("plan-codex"):
     if "CodeRabbit tier R reads commits, not the plan file" not in open(f, encoding="utf-8").read():
         bad.append("%s: the plan fallback does not say which other reviewers can read the actual plan" % os.path.relpath(f, root))

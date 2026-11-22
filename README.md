@@ -112,7 +112,7 @@ The CodeRabbit fallback (`reviewer.sh R`) reads the committed changes itself and
 
 The first line of `scripts/codex-call.sh` is a contract line (`# contract: codex-call v2 ...`). It names this repo as the source of truth, and a copy installed elsewhere is only compatible with the skills while that line matches.
 
-Every skill validates a reviewer reply with one grammar. The first non-blank line must be exactly `VERDICT: APPROVED`, `VERDICT: WARNING` or `VERDICT: BLOCKED`. Severity lines are optional, `none` and `n/a` placeholders are ignored, any real finding at any severity means findings whatever the verdict word, and empty or unparseable output is no verdict. A bare `VERDICT: APPROVED` is a clean review.
+Every skill validates a reviewer reply with one grammar. The first non-blank line must be exactly `VERDICT: APPROVED`, `VERDICT: WARNING` or `VERDICT: BLOCKED`. Severity lines are optional, `none` and `n/a` placeholders are ignored, a severity header with empty text takes the next non-blank line that is not a header as its text, and with none (end of output, or another header next) the output is no verdict, never clean, any real finding at any severity means findings whatever the verdict word, and empty or unparseable output is no verdict. A bare `VERDICT: APPROVED` is a clean review.
 
 Without the `codex-call.sh` wrapper or the `codex` CLI (the two things each skill's availability check inspects; it does not look at `reviewer.sh`), the check fails: `/plan-codex`, `/claude-codex` and the final review in `/tdd-claude-codex` stop and say Codex is unavailable, while `/execute-codex` and `/tdd-execute-codex` fall back to Claude implementing directly. Both TDD skills skip the Codex test audit.
 

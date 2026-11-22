@@ -34,11 +34,15 @@ PLACEHOLDER = re.compile(r"(none|n/a)\.?", re.I)
 def verdict_state(text):
     """THE verdict grammar (one function, used by every checker). Returns "clean", "findings" or "no-verdict".
     The first non-blank line must be exactly VERDICT: APPROVED, WARNING or BLOCKED; any other VERDICT: line is no verdict, and so is
-    empty or unparseable output. Severity lines are optional; a header with empty text takes the next non-blank line as its text; the
-    placeholder text none or n/a (any case, optional trailing period) is ignored. Any real finding, or any verdict word but APPROVED,
-    is "findings". Only APPROVED with no real finding is "clean"."""
+    empty or unparseable output. Severity lines are optional; a header with empty text takes the next non-blank NON-HEADER line as its
+    text, and with none (end of output, or another header comes next) the whole output is no verdict; the placeholder text none or n/a
+    (any case, optional trailing period) is ignored. Any real finding, or any verdict word but APPROVED, is "findings". Only APPROVED
+    with no real finding is "clean"."""
     # WHY (round 3 finding 1): the global review contract tells the reviewer to OMIT empty severity lines and to answer a clean review as exactly
     # `VERDICT: APPROVED`, so requiring four severity lines made every compliant reviewer look broken. Tolerating `none` keeps older replies valid.
+    # WHY an empty header with nothing after it is NO VERDICT, not clean (round 4 finding 3): it is neither an omitted severity line nor an explicit
+    # placeholder, and it can be a finding cut off mid-reply, so certifying clean would approve what was never read. Re-asking costs one call.
+    # The two other choices stay conservative on purpose: a verdict word but APPROVED is "findings" and prose no header consumed is "findings", both fail toward "not clean".
     # WHY real findings beat the verdict word (finding 2): `VERDICT: APPROVED` beside a populated CRITICAL or HIGH must never read as a clean round.
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     if not lines:
@@ -52,7 +56,9 @@ def verdict_state(text):
         h = SEV_HEAD.fullmatch(lines[i])
         if h:
             body = h.group(2).strip()
-            if not body and i + 1 < len(lines) and not SEV_HEAD.fullmatch(lines[i + 1]):
+            if not body:
+                if i + 1 >= len(lines) or SEV_HEAD.fullmatch(lines[i + 1]):
+                    return "no-verdict"
                 i += 1
                 body = lines[i]
             if body and not PLACEHOLDER.fullmatch(body):

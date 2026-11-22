@@ -183,6 +183,14 @@ expect pass "grammar: APPROVED plus a real CRITICAL is findings" test "$(gstate 
 expect pass "grammar: APPROVED plus a real HIGH among placeholders is findings" test "$(gstate $'VERDICT: APPROVED\nCRITICAL: none\nHIGH: data loss on retry\nMEDIUM: none\nLOW: none\n')" = findings
 expect pass "grammar: a header with its text on the next line is findings" test "$(gstate $'VERDICT: APPROVED\nHIGH:\nthe retry loop never stops\n')" = findings
 expect pass "grammar: a header whose next line is a placeholder is clean" test "$(gstate $'VERDICT: APPROVED\nHIGH:\nnone\n')" = clean
+# cc11-main-r4 finding 3: a severity header with empty text and no non-header line after it is a possibly truncated finding, so it is no verdict, never clean.
+expect pass "grammar: APPROVED then an empty HIGH: at the end of the output is no verdict" test "$(gstate $'VERDICT: APPROVED\nHIGH:\n')" = no-verdict
+expect pass "grammar: APPROVED then an empty HIGH: then MEDIUM with real text is no verdict" test "$(gstate $'VERDICT: APPROVED\nHIGH:\nMEDIUM: real text\n')" = no-verdict
+expect pass "grammar: APPROVED then HIGH: with its text on the next line is findings" test "$(gstate $'VERDICT: APPROVED\nHIGH:\nrace in the cache\n')" = findings
+expect pass "grammar: APPROVED then HIGH: none is clean" test "$(gstate $'VERDICT: APPROVED\nHIGH: none\n')" = clean
+expect pass "grammar: two empty headers in a row are no verdict" test "$(gstate $'VERDICT: APPROVED\nCRITICAL:\nHIGH:\n')" = no-verdict
+expect pass "grammar: BLOCKED with no finding at all is findings (never clean)" test "$(gstate $'VERDICT: BLOCKED\n')" = findings
+expect pass "grammar: stray prose after APPROVED is findings (never clean)" test "$(gstate $'VERDICT: APPROVED\nlooks fine to me\n')" = findings
 expect pass "grammar: BLOCKED with a finding is findings" test "$(gstate $'VERDICT: BLOCKED\nCRITICAL: bad\n')" = findings
 expect pass "grammar: two verdict lines is no verdict" test "$(gstate $'VERDICT: APPROVED\nVERDICT: BLOCKED\n')" = no-verdict
 expect pass "grammar: NOT APPROVED is no verdict" test "$(gstate $'VERDICT: NOT APPROVED\n')" = no-verdict
