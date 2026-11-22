@@ -166,6 +166,8 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 - Original task requirements
 - Required output: exactly one `VERDICT: APPROVED | WARNING | BLOCKED` line, then `CRITICAL:`, `HIGH:`, `MEDIUM:` and `LOW:` lines listing every finding at that severity (`none` when empty). A reply without exactly one valid verdict line, or whose verdict line is not followed by the `CRITICAL:`, `HIGH:`, `MEDIUM:` and `LOW:` lines, is a failed review (an incomplete block is never "no findings"): re-launch it.
 
+**Validate the response**: never accept a verdict on a substring match. The reply counts only when it holds exactly one line `VERDICT: APPROVED`, `VERDICT: WARNING` or `VERDICT: BLOCKED`. "NOT APPROVED", "APPROVED once you fix ..." and any other qualified verdict is no verdict, two verdict lines is no verdict, and `VERDICT: APPROVED` together with a CRITICAL or HIGH finding contradicts itself and is no verdict: do not drop the findings, treat the call as a failed review and re-ask the same reviewer for one unambiguous verdict (the same Codex thread through the wrapper, or the active fallback reviewer). `VERDICT: APPROVED` with a finding at any severity is never a clean round: the finding is evaluated, fixed and re-reviewed.
+
 Parse reviewer response:
 - No findings at any severity → approved, go to Phase 3.
 - Any finding at any severity → evaluate as below, fix, and re-review.

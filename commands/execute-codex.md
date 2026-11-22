@@ -132,6 +132,8 @@ Launch Task agent (subagent_type: "feature-dev:code-reviewer") with:
 
 **Critical evaluation gate** (before acting on ANY finding): assess whether it is technically accurate against the actual code and project conventions, whether the reviewer had full context for intentional decisions and whether it improves correctness/security or is a preference / false positive. If a finding seems incorrect, launch a new code-reviewer agent with the original diff, the contested findings and your technical reasoning; accept every finding the reviewer does not explicitly withdraw in writing and drop only withdrawn ones; your own disagreement never drops a finding.
 
+**Validate the response**: never accept a verdict on a substring match. The reply counts only when it holds exactly one line `VERDICT: APPROVED`, `VERDICT: WARNING` or `VERDICT: BLOCKED`. "NOT APPROVED", "APPROVED once you fix ..." and any other qualified verdict is no verdict, two verdict lines is no verdict, and `VERDICT: APPROVED` together with a CRITICAL or HIGH finding contradicts itself and is no verdict: do not drop the findings, treat the call as a failed review and re-ask the same reviewer for one unambiguous verdict (the same Codex thread through the wrapper, or the active fallback reviewer). `VERDICT: APPROVED` with a finding at any severity is never a clean round: the finding is evaluated, fixed and re-reviewed.
+
 Parse reviewer response:
 - No findings at any severity → approved, go to Phase 3.
 - Any accepted finding at any severity (CRITICAL, HIGH, MEDIUM or LOW) → apply the fixes and re-review:

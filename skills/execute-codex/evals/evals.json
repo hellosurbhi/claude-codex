@@ -100,6 +100,19 @@
         "Claude tells the user the work is UNREVIEWED and names the blocker (missing Codex login, no CodeRabbit CLI)",
         "Claude does not describe the work as approved or reviewed"
       ]
+    },
+    {
+      "id": 9,
+      "prompt": "[execute-codex] Extract the billing calculation into a shared service.",
+      "expected_output": "The reviewer replies 'NOT APPROVED' (or 'APPROVED once you fix the null check'). Claude does not accept it on the substring APPROVED, re-asks for one unambiguous verdict and does NOT deliver.",
+      "files": [],
+      "expectations": [
+        "Claude does NOT treat the response as an approval despite the word APPROVED appearing in it",
+        "Claude identifies the contradictory, qualified or doubled verdict as no verdict",
+        "Claude re-asks through codex-call.sh --resume with the saved THREAD_ID (or the active fallback reviewer) quoting the contradiction and requesting one unambiguous verdict",
+        "Claude does NOT silently drop any CRITICAL or HIGH finding",
+        "Claude does NOT proceed to the next phase or deliver"
+      ]
     }
   ]
 }

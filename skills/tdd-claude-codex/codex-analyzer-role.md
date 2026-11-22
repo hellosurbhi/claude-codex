@@ -49,3 +49,5 @@ Verdict rules:
 - **BLOCKED** — at least one CRITICAL issue
 
 The verdict signals urgency only. The caller fixes and re-audits every finding you list at any severity, so list every real MEDIUM and LOW finding even under APPROVED, and list none that are not real.
+
+Emit exactly one verdict line, and make it consistent with the findings below it. Never pair `VERDICT: APPROVED` with a non-empty `CRITICAL:` or `HIGH:` list, and never qualify the verdict ("APPROVED once you fix ..."). A contradictory or doubled verdict is rejected as no verdict and sent back for a single unambiguous one.

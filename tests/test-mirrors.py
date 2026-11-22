@@ -195,5 +195,36 @@ for n in NAMES:
         for ln in open(f, encoding="utf-8").read().split("\n"):
             if ln.startswith("There is no iteration cap and no stop to ask the user") and ACTIVE not in ln:
                 bad.append("%s: a no-cap paragraph does not route re-review to the active fallback reviewer" % os.path.relpath(f, root))
+# C3 (PR 10, rewritten for codex-call.sh): a verdict is validated, never substring-matched.
+VALID_KEYS = ("exactly one line `VERDICT: APPROVED`", "NOT APPROVED", "APPROVED once you fix", "two verdict lines is no verdict", "CRITICAL or HIGH finding", "never a clean round")
+PARSE_ANCHOR = re.compile(r"^(Classify the verdict\.|\*\*Parse response\*\*|\*\*Parse the exact|Parse reviewer response)")
+for n in NAMES:
+    for f in files(n):
+        L = open(f, encoding="utf-8").read().split("\n")
+        for i, l in enumerate(L):
+            if PARSE_ANCHOR.match(l):
+                prev = L[i - 2] if i > 1 else ""
+                if not (prev.startswith("**Validate the response**") and all(k in prev for k in VALID_KEYS)):
+                    bad.append("%s:%d verdict parse step is not preceded by the canonical Validate the response block" % (os.path.relpath(f, root), i + 1))
+ref = open(os.path.join(root, "skills/codex-mcp/reference.md"), encoding="utf-8").read()
+for k in VALID_KEYS:
+    if k not in ref:
+        bad.append("skills/codex-mcp/reference.md lacks verdict validation text: %r" % k)
+for n in ("plan-codex", "tdd-claude-codex"):
+    r = open(os.path.join(root, "skills/%s/codex-analyzer-role.md" % n), encoding="utf-8").read()
+    if "Emit exactly one verdict line" not in r or "the caller fixes and re-audits every finding you list at any severity" not in r.lower():
+        bad.append("skills/%s/codex-analyzer-role.md lacks the one-verdict-line sentence merged with the any-severity sentence" % n)
+for n in NAMES:
+    ev = open(os.path.join(root, "skills/%s/evals/evals.json" % n), encoding="utf-8").read()
+    if "contradict" not in ev.lower() or "mcp__codex" in ev:
+        bad.append("skills/%s/evals/evals.json lacks the contradictory-verdict eval or still names mcp__codex__" % n)
+for f in files("plan-codex"):
+    if "CodeRabbit tier R reads commits, not the plan file" not in open(f, encoding="utf-8").read():
+        bad.append("%s: the plan fallback does not say which other reviewers can read the actual plan" % os.path.relpath(f, root))
+for dp, _, fs in os.walk(root):
+    if "/.git" in dp or "/tests" in dp: continue
+    for fn in fs:
+        if fn.endswith((".md", ".json")) and "max iteration count (default" in open(os.path.join(dp, fn), encoding="utf-8", errors="ignore").read():
+            bad.append("%s ports a capped iteration count, which contradicts the no-cap rule" % os.path.relpath(os.path.join(dp, fn), root))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)
