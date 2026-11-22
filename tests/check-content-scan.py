@@ -4,8 +4,8 @@
 # exact commands from the skill text and runs them with bash on throwaway repos from a subdirectory, so a missing, reworded or cwd-relative clause fails here instead of passing on wording.
 import os, re, subprocess, sys, tempfile
 text = open(sys.argv[1], encoding="utf-8").read()
-pm = re.search(r"`(git diff --name-only <base commit>\.\.HEAD -- [^`]*)`", text)
-sm = re.search(r"`(d=\$\(git diff <base commit>\.\.HEAD -- ':\(top\)'\) && [^`]*)`", text)
+pm = re.search(r"`(git diff --name-only --no-renames <base commit>\.\.HEAD -- [^`]*)`", text)
+sm = re.search(r"`(d=\$\(git diff -U1000000 --no-renames <base commit>\.\.HEAD -- ':\(top\)'\) && [^`]*)`", text)
 if not pm or not sm:
     print("path check or content scan command not found in %s" % sys.argv[1]); sys.exit(1)
 def allowed(d, sub, base):
@@ -38,9 +38,22 @@ with tempfile.TemporaryDirectory() as d:
                         ("GitHub token", "t ghp_" + "a" * 36 + "\n"), ("GitHub fine-grained token", "t github_pat_11ABC\n"), ("sk- key", "k sk-" + "a" * 24 + "\n"),
                         ("Slack token", "t xoxb-123\n"), ("Google key", "k AIza" + "a" * 35 + "\n"), ("single-quoted password", "PASSWORD: 'correct-horse-battery'\n")):
         case("added %s" % label, False, [("app/%s.js" % label.replace(" ", "_"), body)])
-    # a REMOVED credential line must not block (only added lines count) and a short placeholder value is not credential-shaped
-    base = g("rev-parse", "HEAD").strip(); g("rm", "-q", "-f", "app/api.js"); commit("removed key"); ok, _, rc = allowed(d, "app", base)
-    if not ok: bad.append("deleting a credential line was refused (scan exit %s)" % rc)
+    # round 5: the scan covers the WHOLE payload (added, removed and context lines), so removing a credential or leaving it on an unchanged line next to a change is still refused.
+    def refused(label, setup):
+        base = g("rev-parse", "HEAD").strip(); setup(); commit(label); ok, paths, rc = allowed(d, "app", base)
+        if ok: bad.append("%s: tier R allowed (path check printed %s, scan exit %s)" % (label, paths, rc))
+    key = "const apiKey = \"abcd1234efgh5678ijkl\";\n"
+    add("app/r5del.js", key + "x\n"); commit("seed removal")
+    refused("deleted credential line", lambda: add("app/r5del.js", "x\n"))
+    add("app/r5ctx.js", "a\n" + key + "".join("filler %d\n" % i for i in range(60)) + "z\n"); commit("seed context")
+    refused("credential on an unchanged context line next to a change", lambda: add("app/r5ctx.js", "A\n" + key + "".join("filler %d\n" % i for i in range(60)) + "z\n"))
+    refused("credential 60 lines away from the only change in the file", lambda: add("app/r5ctx.js", "A\n" + key + "".join("filler %d\n" % i for i in range(60)) + "Z\n"))
+    add("app/r5old.txt", "ordinary\n"); add("app/Secrets.old", "x\n"); commit("seed paths")
+    refused("deleted secret-shaped file", lambda: g("rm", "-q", "-f", "app/Secrets.old"))
+    add("app/prod.pem", "x\n"); commit("seed pem")
+    refused("secret-shaped file renamed away", lambda: (g("mv", "app/prod.pem", "app/prod.txt")))
+    add("app/r5move.js", key); commit("seed move")
+    refused("credential-bearing file renamed unchanged", lambda: g("mv", "app/r5move.js", "app/r5moved.js"))
     case("short placeholder value", True, [("app/cfg.js", "const token = 'x';\n")])
     # unresolvable base: the scan must not exit 1
     ok, _, rc = allowed(d, "app", "0" * 40)

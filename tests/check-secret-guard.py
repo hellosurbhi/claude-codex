@@ -5,9 +5,9 @@
 # SUBDIRECTORY, so a clause that is missing, misspelled or cwd-relative fails here instead of passing on wording alone.
 import os, re, shlex, subprocess, sys, tempfile
 text = open(sys.argv[1], encoding="utf-8").read()
-m = re.search(r"`(git diff --name-only <base commit>\.\.HEAD -- [^`]*)`", text)
+m = re.search(r"`(git diff --name-only --no-renames <base commit>\.\.HEAD -- [^`]*)`", text)
 if not m:
-    print("no `git diff --name-only <base commit>..HEAD -- ...` guard found in %s" % sys.argv[1]); sys.exit(1)
+    print("no `git diff --name-only --no-renames <base commit>..HEAD -- ...` guard found in %s" % sys.argv[1]); sys.exit(1)
 with tempfile.TemporaryDirectory() as d:
     g = lambda *a, cwd=d: subprocess.run(("git", "-C", cwd, "-c", "user.email=a@b", "-c", "user.name=n") + a, capture_output=True, text=True, check=True).stdout
     g("init", "-q")
