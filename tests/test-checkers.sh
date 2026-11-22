@@ -9,6 +9,21 @@ fail=0
 # WHY a hard prerequisite (CodeRabbit r47): the launcher cases run the REAL installed reviewer.sh (~/.claude/config/scripts/reviewer.sh, or
 # SPY_CONFIG_DIR); without it they would fail in confusing ways, so stop with one clear line.
 [[ -f "${SPY_CONFIG_DIR:-$HOME/.claude/config}/scripts/reviewer.sh" ]] || { echo "FAIL: installed reviewer.sh not found under ${SPY_CONFIG_DIR:-$HOME/.claude/config}/scripts (required by this suite)"; exit 1; }
+# WHY a portable timeout (cc11-main-r1): GNU `timeout` is not on stock macOS (coreutils installs it as `gtimeout`), so use whichever exists and
+# otherwise a python3 stand-in with the same contract (kill on expiry, exit 124). TMO_FORCE_PY=1 forces the stand-in so it can be tested.
+tmo() {
+  local secs="$1"; shift
+  if [[ -z "${TMO_FORCE_PY:-}" ]] && command -v timeout >/dev/null 2>&1; then timeout "$secs" "$@"
+  elif [[ -z "${TMO_FORCE_PY:-}" ]] && command -v gtimeout >/dev/null 2>&1; then gtimeout "$secs" "$@"
+  else
+    python3 -c 'import subprocess, sys
+p = subprocess.Popen(sys.argv[2:])
+try:
+    sys.exit(p.wait(timeout=float(sys.argv[1])))
+except subprocess.TimeoutExpired:
+    p.kill(); p.wait(); sys.exit(124)' "$secs" "$@"
+  fi
+}
 ok()  { echo "PASS: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
 expect() { local want="$1" name="$2"; shift 2; "$@" >/dev/null 2>&1; local rc=$?; if { [[ $want == pass && $rc -eq 0 ]] || [[ $want == fail && $rc -ne 0 ]]; }; then ok "$name"; else bad "$name (rc=$rc, wanted $want)"; fi; }
@@ -692,12 +707,14 @@ expect pass "a tier S plan review with the full file in the model prompt is acce
 expect fail "a model prompt missing part of the plan is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG.trunc" --plan-file "$tmp/plan.md"
 # FIFO evidence (r37): the launcher opens the caller's output path once, so a one-shot reader gets the reply and nothing hangs.
 mkrun; cd "$tmp/run/repo"; rm -f "$tmp/ff"; mkfifo "$tmp/ff"; printf 'plan\n' > "$tmp/plan.md"
-( timeout 20 cat "$tmp/ff" > "$tmp/ff.out" ) & rd=$!
-timeout 60 bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/ff" >/dev/null 2>&1; frc=$?; wait $rd
+( tmo 20 cat "$tmp/ff" > "$tmp/ff.out" ) & rd=$!
+tmo 60 bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/ff" >/dev/null 2>&1; frc=$?; wait $rd
 expect pass "r37 FIFO: the launcher finishes against a one-shot FIFO reader which gets the reply exactly once" test "$frc:$(grep -c '^VERDICT' "$tmp/ff.out")" = "0:1"
 expect pass "and the unobservable FIFO delivery is not logged as a reply" test "$(evcount)" = 0
 # fidelity link: a change to PRODUCTION reviewer.sh validation changes what the suite sees, with the launcher untouched.
-mkdir -p "$tmp/cfg/scripts"; cp "$HOME/.claude/config/scripts/reviewer.sh" "$tmp/cfg/scripts/"; cp -R "$HOME/.claude/config/scripts/lib" "$tmp/cfg/scripts/lib"
+# WHY a helper script that honors SPY_CONFIG_DIR (cc11-main-r1): the copy used to read from $HOME, so an otherwise valid override still needed the real installed config.
+bash "$here/copy-config.sh" "$tmp/cfg"
+expect pass "the production-mutation copy honors SPY_CONFIG_DIR and never reads HOME" env HOME="$tmp/no-home" SPY_CONFIG_DIR="${SPY_CONFIG_DIR:-$HOME/.claude/config}" bash "$here/copy-config.sh" "$tmp/cfg-home-test"
 sed -i.bak 's/^  E|R|S|diagnose) ;;$/  E|R|diagnose) ;;/' "$tmp/cfg/scripts/reviewer.sh"
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
 SPY_CONFIG_DIR="$tmp/cfg" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
@@ -791,5 +808,9 @@ PYT
 expect fail "a CodeRabbit review whose model-time tree digest differs from the launcher's is rejected (r47)" python3 "$here/check-reviewer-after-limit.py" "$tmp/evT.jsonl" --repo "$tmp/run/repo"
 expect pass "a model event keeps its place after the quota event once the quota is ordered" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); q=[e for e in es if e["wrapper"]=="fake"][0]; print(all(e["ts"]>q["ts"] for e in es if e["wrapper"]=="model"))' "$here" "$EVLOG")" = True
 expect fail "the suite stops with a clear line when the installed reviewer.sh is missing" env SPY_CONFIG_DIR="$tmp/no-such-config" bash "$here/test-checkers.sh"
+
+# cc11-main-r1: the portable timeout stand-in kills a slow command with 124 and passes through a fast command's status
+expect pass "tmo python fallback kills a slow command with exit 124" test "$(TMO_FORCE_PY=1 tmo 1 sleep 5 >/dev/null 2>&1; echo $?)" = 124
+expect pass "tmo python fallback passes through the command exit status" test "$(TMO_FORCE_PY=1 tmo 5 bash -c 'exit 3' >/dev/null 2>&1; echo $?)" = 3
 
 exit $fail

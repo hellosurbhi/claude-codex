@@ -75,7 +75,9 @@ logrc=0; [[ $ok == True ]] || logrc=1
 # codex-call.sh holds that script open on fd 255, so lsof names the file really being executed; its sha256 must equal the
 # reviewed installed wrapper (WRAPPER_SHA256) and the run nonce (EVNONCE) must be set. A bare `codex exec`, a prompt that
 # mentions codex-call.sh or an edited copy of the wrapper therefore fails and is logged as "direct", which no checker counts.
+# WHY lsof with a /proc fallback: lsof is stock on macOS but often absent on Linux, where bash's script fd is a symlink under /proc.
 wpath="$(lsof -a -p "$PPID" -d 255 -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+[[ -n "$wpath" ]] || wpath="$(readlink "/proc/$PPID/fd/255" 2>/dev/null || true)"
 # WHY the parent's TRUE argument vector, not ps text (r30, r31): the kernel's KERN_PROCARGS2 record keeps argv boundaries and the
 # executable path, so a forged argv[0] such as "bash <wrapper>" cannot pass. The parent must be exactly
 # [<bash>, <absolute wrapper path>, ...] with the shell executable /bin/bash or the bash this PATH resolves, and the wrapper
@@ -86,7 +88,23 @@ import ctypes, ctypes.util, hashlib, json, os, struct, sys
 wp, codex, ppid, pathbash = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 rp = os.path.realpath(wp) if wp and os.path.isfile(wp) else ""
 def procargs(pid):
-    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    # WHY /proc first, sysctl second (portability, cc11-main-r1): Linux exposes the true argv boundaries and executable in
+    # /proc/<pid>/cmdline and /exe; macOS has no /proc, so KERN_PROCARGS2 is the equivalent there. Using only sysctl made the
+    # whole provenance check raise on Linux, and using only /proc would fail on stock macOS. A failure of both returns
+    # (None, []), which the caller treats as "not the installed wrapper" (fails closed).
+    if os.path.exists("/proc/%d/cmdline" % pid):
+        try:
+            exe = os.readlink("/proc/%d/exe" % pid)
+            av = open("/proc/%d/cmdline" % pid, "rb").read().split(b"\0")
+            if av and av[-1] == b"":
+                av = av[:-1]
+            return exe, [x.decode(errors="replace") for x in av]
+        except OSError:
+            return None, []
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    except (OSError, TypeError):
+        return None, []
     mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2
     size = ctypes.c_size_t(0)
     if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
