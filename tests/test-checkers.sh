@@ -296,6 +296,21 @@ rows = [ev(1, 10, 15, "THREAD_ID: b\nVERDICT: BLOCKED\n" + SV), ev(2, 5, 30, "TH
 open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
 PY
 expect pass "last-verdict picks the newer BLOCKED review, not the slower older APPROVED" test "$(python3 "$here/last-verdict.py" "$EVLOG")" = "BLOCKED"
+# r21 finding 3: a failed attempt that exits before any Codex call (bad arguments, missing role, missing or empty prompt file) still leaves an event, so it voids an earlier clean review.
+ee="$tmp/earlyexit"; rm -rf "$ee"; mkdir -p "$ee/repo"; ( cd "$ee/repo" && git init -q && printf 'x = 1\n' > app.py ); printf 'ok prompt' > "$ee/p.txt"; : > "$ee/empty.txt"
+eecase() { # $1 = label, rest = fake args: a clean review, then this failed attempt, then the last-verdict must be NONE; a clean review after it is APPROVED again
+  rm -f "$ee/wrapper.jsonl"; : > "$ee/wrapper.jsonl"
+  EVLOG="$ee/wrapper.jsonl" FAKE_ROUNDS=0 bash "$here/fake-codex-call.sh" --cd "$ee/repo" --prompt-file "$ee/p.txt" >/dev/null 2>&1 || return 1
+  [ "$(python3 "$here/last-verdict.py" "$ee/wrapper.jsonl")" = "APPROVED" ] || return 1
+  shift; EVLOG="$ee/wrapper.jsonl" FAKE_ROUNDS=0 bash "$here/fake-codex-call.sh" --cd "$ee/repo" "$@" >/dev/null 2>&1 && return 1
+  [ "$(python3 "$here/last-verdict.py" "$ee/wrapper.jsonl")" = "NONE" ]
+}
+expect pass "a clean review then a call with no prompt: the final result is not approved" eecase x
+expect pass "a clean review then a missing prompt file: the final result is not approved" eecase x --prompt-file "$ee/no-such.txt"
+expect pass "a clean review then an empty prompt file: the final result is not approved" eecase x --prompt-file "$ee/empty.txt"
+expect pass "a clean review then a missing role file: the final result is not approved" eecase x --role "$ee/no-such-role.txt" "p"
+expect pass "a clean review then an empty --resume: the final result is not approved" eecase x --resume "" "p"
+expect pass "a clean review then both prompt forms: the final result is not approved" eecase x --prompt-file "$ee/p.txt" "p"
 # the codex shim mirrors codex-call.sh: turn.failed is a failure with diagnostics, and a thread id is never invented from the resume arg.
 cat > "$tmp/bin/stubcodex" <<'SH'
 #!/usr/bin/env bash

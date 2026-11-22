@@ -17,23 +17,17 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 argv=("$@")
-dir="$PWD" resume="" pfile=""
+dir="$PWD" resume="" resume_set=0 pfile="" pfile_set=0 role=""
 while [[ $# -gt 1 ]]; do
   case "$1" in
-    --sandbox|--role) shift 2 ;;
-    --resume) resume="$2"; shift 2 ;;
+    --sandbox) shift 2 ;;
+    --role) role="$2"; shift 2 ;;
+    --resume) resume="$2"; resume_set=1; shift 2 ;;
     --cd) dir="$2"; shift 2 ;;
-    --prompt-file) pfile="$2"; shift 2 ;;
+    --prompt-file) pfile="$2"; pfile_set=1; shift 2 ;;
     *) break ;;
   esac
 done
-# WHY --prompt-file (r20 finding 1): the skills pass the prompt as a file, like the real wrapper; a missing or empty file fails like the real one.
-if [[ -n "$pfile" ]]; then
-  [[ -s "$pfile" ]] || { echo "codex-call: prompt file is missing or empty: $pfile. No call was made; treat as UNREVIEWED." >&2; exit 2; }
-  prompt="$(cat "$pfile")"
-else
-  prompt="${1:-}"
-fi
 # WHY every execution is logged by an EXIT trap: the checkers assert on this log (see evlog.py),
 # so a call that dies, limits or returns garbage must still leave exactly one line. stdout and
 # stderr are captured to files and replayed so the log holds the exact reply the model saw.
@@ -45,7 +39,7 @@ FAKE_LOG="$(dirname "$EVLOG")/calls.log"; export FAKE_LOG
 EVSTART="$(python3 -c 'import time; print(time.time())')"; export EVSTART
 tid="" ; [[ -n "$resume" ]] && tid="$resume"
 exec 3>&1 4>&2
-o="$(mktemp)"; e="$(mktemp)"; pf="$(mktemp)"; printf '%s' "$prompt" > "$pf"
+o="$(mktemp)"; e="$(mktemp)"; pf="$(mktemp)"; prompt=""
 exec >"$o" 2>"$e"
 finish() {
   local rc=$?
@@ -55,6 +49,18 @@ finish() {
   exit "$rc"
 }
 trap finish EXIT
+# WHY the validation sits AFTER the logging trap (r21 finding 3): the checkers decide on the LAST attempt in this log. A bad-argument, missing-role or missing-prompt exit that happened before the trap
+# left no event, so an earlier clean review stayed the last word. Every exit, early or late, now leaves one event with its exit code, like the real wrapper's failures are seen by the proof.
+# The rules mirror scripts/codex-call.sh: empty --resume, both prompt forms, a missing or empty role file or prompt file (--prompt-file r20 finding 1) and no prompt all exit 2 with no verdict.
+if [[ $resume_set -eq 1 && -z "$resume" ]]; then echo "codex-call: empty --resume value (a thread id was expected). Treat as UNREVIEWED." >&2; exit 2; fi
+if [[ -n "$role" && ! -s "$role" ]]; then echo "codex-call: role file is missing, unreadable or empty: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; fi
+if [[ $pfile_set -eq 1 ]]; then
+  if [[ $# -gt 0 ]]; then echo "codex-call: give either --prompt-file or a positional prompt, not both. Treat as UNREVIEWED." >&2; exit 2; fi
+  [[ -n "$pfile" && -s "$pfile" ]] || { echo "codex-call: prompt file is missing or empty: $pfile. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  prompt="$(cat "$pfile")"
+elif [[ $# -lt 1 ]]; then echo "codex-call: no prompt (pass --prompt-file FILE or a prompt). Treat as UNREVIEWED." >&2; exit 2
+else prompt="$1"; fi
+printf '%s' "$prompt" > "$pf"
 # WHY a resume of an unknown thread dies: the real wrapper fails on a thread Codex never issued,
 # so a model that invents or mistypes a thread id must not get a quiet success.
 if [[ -n "$resume" ]] && ! python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; e = wlog.load(sys.argv[2]); sys.exit(0 if sys.argv[3] in wlog.issued_before(e, len(e)) else 1)' "$here" "$EVLOG" "$resume"; then

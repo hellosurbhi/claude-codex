@@ -425,5 +425,11 @@ for rel in doc_files:
 for rel, need in DOCNEED.items():
     if need not in open(os.path.join(root, rel)).read():
         bad.append("%s: does not describe the current review flow (missing %r)" % (rel, need))
+# r21 finding 3: the last attempt decides, so any non-zero wrapper exit (even an early one that never reached Codex) voids an earlier approval; every file that validates a Codex reply must say so.
+VOID = "voids every earlier approval of this state until a later call returns a clean verdict"
+for rel in sorted(os.path.relpath(f, root) for g in ("skills/*/SKILL.md", "commands/*.md") for f in glob.glob(os.path.join(root, g))):
+    ft = open(os.path.join(root, rel)).read()
+    if "**Validate the response**" in ft and VOID not in ft:
+        bad.append("%s: the Validate the response paragraph does not say that any non-zero codex-call.sh exit voids an earlier approval" % rel)
 print("\n".join(bad))
 sys.exit(1 if bad else 0)
