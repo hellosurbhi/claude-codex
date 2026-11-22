@@ -373,6 +373,24 @@ import sys
 p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("replies exactly `VERDICT: APPROVED` with zero findings at any severity", "lists no accepted findings at any severity"))
 PYX
 expect fail "a codex-mcp loop exit that no longer requires APPROVED with zero findings is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; cp "$here/../skills/codex-mcp/reference.md" "$tmp/mir8/skills/codex-mcp/reference.md"
+# r10 finding 2: the review record paragraph is mirrored and enforced
+python3 - "$tmp/mir8/commands/execute-codex.md" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read(); i = t.index("**Review record (every reviewer round)**"); j = t.index("### Route A: Small"); open(p, "w").write(t[:i] + t[j:])
+PYX
+expect fail "a command that lost its Review record paragraph is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" <<'PYX'
+import sys, re
+p = sys.argv[1]; t = open(p).read()
+t2 = re.sub(r"(printf 'REVIEWED-DIFF[^\n]*?git diff \$START_SHA) -- [^|]*\|", r"\1 |", t, count=1); assert t2 != t
+open(p, "w").write(t2)
+PYX
+expect fail "a Review record hash taken over a diff without the secret excludes is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
+python3 - "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("} > .claude/review/final-review.txt", "} > /dev/null", 1))
+PYX
+expect fail "a Review record that no longer writes the record file is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
 expect pass "the pristine copies pass every r10 rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 
 # cc11-main-r2 finding 3: the diff command each workflow prescribes is relative to the repository top, not to the shell's folder.
@@ -1102,8 +1120,7 @@ mkrun; LINEMETA="state=S0 impl=no" line real 0 review "$TID$FIND"; LINEMETA="sta
 expect pass "tdd: a clean implementation review on the final state passes the final-result check" fr --impl
 mkrun; line real 0 review "$TID$CLEAN"
 expect fail "a clean real review that recorded no state at all is not bound to the final state" fr
-expect pass "the real branch runs the bound final-result check once, with --impl for the tdd skills only" sh -c "test \"\$(grep -c 'check-scripted.py\" \"\$out/wrapper.jsonl\" final \"\$real_final_state\" --real \$IMPLFLAG' '$here/review-loop-proof.sh')\" = 1 && grep -q 'case \"\$skill\" in tdd-claude-codex|tdd-execute-codex) IMPLFLAG=--impl' '$here/review-loop-proof.sh'"
-expect pass "execute-codex real prints that no review verdict was checked instead of implying one" grep -q 'NO REVIEW VERDICT CHECKED' "$here/review-loop-proof.sh"
+expect pass "the real branch runs the bound final-result check once, with --impl for tdd-claude-codex only" sh -c "test \"\$(grep -c 'check-scripted.py\" \"\$out/wrapper.jsonl\" final \"\$real_final_state\" --real \$IMPLFLAG' '$here/review-loop-proof.sh')\" = 1 && grep -q 'IMPLFLAG=; \[\[ \$skill == tdd-claude-codex \]\] && IMPLFLAG=--impl' '$here/review-loop-proof.sh'"
 # the shim records the repo state and the impl flag in the event meta, computed by the same state-hash.py and check-impl.py
 mkrun; printf 'def add(a, b):\n    return a + b\n' > "$tmp/run/repo/app.py"
 PROOF_REPO="$tmp/run/repo" REAL_CODEX="$tmp/realbin/codex" viawrap exec --json prompt >/dev/null 2>&1
@@ -1111,6 +1128,54 @@ expect pass "the shim records the final-state hash and impl=yes in the real even
 printf 'x=1\n' > "$tmp/run/repo/app.py"
 PROOF_REPO="$tmp/run/repo" REAL_CODEX="$tmp/realbin/codex" viawrap exec --json prompt >/dev/null 2>&1
 expect pass "the shim records impl=no when add() does not exist" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["meta"].get("impl"))' "$here" "$EVLOG")" = no
+
+# r10 finding 2: tdd-execute-codex and execute-codex review with a Claude code-reviewer agent, not Codex. The real proof therefore (a) binds the LAST Codex
+# test-audit verdict (tdd-execute-codex) and (b) validates the durable review record the skill prescribes: .claude/review/final-review.txt holds
+# `REVIEWED-DIFF: <sha256 of the reviewed diff>` then the reviewer's verbatim reply.
+au() { python3 "$here/check-scripted.py" "$EVLOG" final X --real --audit; }
+mkrun; expect fail "audit: no Codex verdict at all fails the test-audit check" au
+mkrun; LINEMETA="state=S0 impl=no" line real 0 review "${TID}VERDICT: BLOCKED\nHIGH: weak test\n"
+expect fail "audit: a last Codex verdict of BLOCKED with a finding fails" au
+mkrun; LINEMETA="state=S0 impl=no" line real 0 review "${TID}VERDICT: BLOCKED\n"
+expect fail "audit: a bare BLOCKED with no finding is not clean" au
+mkrun; LINEMETA="state=S0 impl=no" line real 0 review "${TID}VERDICT: WARNING\n"
+expect fail "audit: a bare WARNING with no finding is not clean" au
+mkrun; LINEMETA="state=S0 impl=no" line real 0 review "${TID}VERDICT: APPROVED\nCRITICAL: a real finding\n"
+expect fail "audit: APPROVED beside a finding is not clean" au
+mkrun; LINEMETA="state=S0 impl=no" line real 0 review "$TID$FIND"; LINEMETA="state=S0 impl=no" line real 0 review "$TID$CLEAN"
+expect pass "audit: findings then a clean APPROVED with zero findings passes" au
+mkrun; LINEMETA="state=S0 impl=no" line real 0 review "$TID$CLEAN"; LINEMETA="state=S1 impl=yes" line real 0 impl "${TID}Implemented add() in app.py.\n"
+expect pass "audit: a later Codex implementation reply (no verdict) does not displace the clean audit" au
+mkrun; LINEMETA="state=S0 impl=no" line real 0 review "$TID$CLEAN"; LINEMETA="state=S0 impl=no" line real 0 review "$TID$BLOCK"
+expect fail "audit: a clean audit followed by a later BLOCKED verdict fails" au
+mkrun; line real 0 review "$TID$CLEAN"
+expect fail "audit: a clean verdict that recorded no state fails" au
+# the review record: built against a real tiny git repo, hashing the same diff command the skills prescribe
+rr() { python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"; }
+rrhash() { (cd "$tmp/rr" && git add -N app.py 2>/dev/null; git diff "$(git rev-list --max-parents=0 HEAD)" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' | shasum -a 256 | cut -d' ' -f1); }
+rrmk() { rm -rf "$tmp/rr"; mkdir -p "$tmp/rr"; (cd "$tmp/rr" && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$(printf 's\n\nVerified: fixture repo for the review-record cases')" && printf 'def add(a, b):\n    return a + b\n' > app.py); }
+rrrec() { mkdir -p "$tmp/rr/.claude/review"; printf 'REVIEWED-DIFF: %s\n%b' "$1" "$2" > "$tmp/rr/.claude/review/final-review.txt"; }
+rrmk
+expect fail "review record: a missing record fails" rr
+rrmk; rrrec "$(rrhash)" "VERDICT: BLOCKED\nHIGH: real problem\n"
+expect fail "review record: findings in the record fail" rr
+rrmk; rrrec "$(rrhash)" "VERDICT: BLOCKED\n"
+expect fail "review record: a bare BLOCKED in the record fails" rr
+rrmk; rrrec "$(rrhash)" "VERDICT: APPROVED\nMEDIUM: still a finding\n"
+expect fail "review record: APPROVED beside a finding in the record fails" rr
+rrmk; rrrec "$(rrhash)" "VERDICT: APPROVED\n"; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
+expect fail "review record: a clean record for an older diff (file changed afterwards) fails as stale" rr
+rrmk; rrrec "0000000000000000000000000000000000000000000000000000000000000000" "VERDICT: APPROVED\n"
+expect fail "review record: a clean record naming some other diff hash fails" rr
+rrmk; printf 'VERDICT: APPROVED\n' > "$tmp/rr/x"; mkdir -p "$tmp/rr/.claude/review"; cp "$tmp/rr/x" "$tmp/rr/.claude/review/final-review.txt"
+expect fail "review record: a record with no REVIEWED-DIFF line fails" rr
+rrmk; rrrec "$(rrhash)" "VERDICT: APPROVED\n"
+expect pass "review record: APPROVED with zero findings on the final diff passes (new file reached the diff by intent-to-add)" rr
+rrmk; (cd "$tmp/rr" && git add -N app.py); rrrec "$(rrhash)" "VERDICT: APPROVED\n"
+expect pass "review record: the same passes when the agent had already run intent-to-add" rr
+rrmk; printf 'K=1\n' > "$tmp/rr/.env.local"; printf 'k\n' > "$tmp/rr/server.pem"; rrrec "$(rrhash)" "VERDICT: APPROVED\n"
+expect pass "review record: untracked secret-named files never enter the checked diff (they are excluded like the skills prescribe)" rr
+expect pass "the real branch of the proof runs the review-record check for the two skills with a Claude reviewer" sh -c "grep -q 'check-review-record.py' '$here/review-loop-proof.sh' && grep -q -- '--audit' '$here/review-loop-proof.sh'"
 
 # Self-test (round 3 finding 3): these cases need no private reviewer, so they MUST have run (and passed) in every mode, CHECKERS_NO_SPY=1 included.
 for must in "ci.yml declares an explicit contents: read permissions block" "ci.yml checks out with persist-credentials: false" "ci.yml runs the checkers with CHECKERS_NO_SPY=1" \

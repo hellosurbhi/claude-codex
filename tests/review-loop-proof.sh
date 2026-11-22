@@ -187,15 +187,21 @@ if [[ $scenario == real ]]; then
   check "the --resume follow-up returned on the same wrapper-issued thread with a verdict" 'python3 "$here/check-resume.py" "$out/wrapper.jsonl" --real ${NOVERDICT:+--no-verdict}'
   # WHY the final-result check (cc11-main-r8 change B, r9 finding 1): the historical checks above would pass a run whose LAST review was BLOCKED, whose last call failed, or whose last clean verdict was
   # for an earlier state, while the agent still reported APPROVED. It is the SAME mechanism as the scripted branch (check-scripted.py final, bound to the state hash the shim recorded at each call);
-  # for the tdd skills the last clean call must also be the implementation review (impl=yes), because a clean TEST AUDIT followed by implementation edits is not a reviewed implementation.
-  # WHY execute-codex is not held to it: Codex IMPLEMENTS there and the review is a Claude code-reviewer agent, so no review verdict exists in the wrapper log; the line below says so instead of implying one was checked.
+  # for tdd-claude-codex the last clean call must also be the implementation review (impl=yes), because a clean TEST AUDIT followed by implementation edits is not a reviewed implementation.
+  # WHY execute-codex and tdd-execute-codex are not held to the wrapper-log final verdict (r10 finding 2): their implementation review is a Claude code-reviewer agent (skills/tdd-execute-codex/SKILL.md
+  # Route A step 7 and Step B4), so the wrapper log holds no implementation verdict, and Codex only AUDITS the tests there. What each skill prescribes instead is bound here:
+  # (a) tdd-execute-codex: the LAST Codex test-audit verdict was clean (--audit); (b) both: the review record .claude/review/final-review.txt, written after every reviewer round, holds a clean
+  # verdict for a diff hash equal to the diff the run ended with (check-review-record.py), so a stale or findings record, or none, fails.
   real_final_state="$(python3 "$here/state-hash.py" "$repo")"
-  IMPLFLAG=; case "$skill" in tdd-claude-codex|tdd-execute-codex) IMPLFLAG=--impl;; esac
-  if [[ $skill == execute-codex ]]; then
-    echo "NO REVIEW VERDICT CHECKED: execute-codex implements through Codex and is reviewed by a Claude agent, so the wrapper log holds no review verdict (the thread, resume, modules and AUDIT-STATUS checks still ran)"
-  else
-    check "the reported approval agrees with the FINAL reviewer result: the last real call exited 0 with a clean verdict, for the state the run ended in${IMPLFLAG:+, on the implementation}, and nothing came after it" 'python3 "$here/check-scripted.py" "$out/wrapper.jsonl" final "$real_final_state" --real $IMPLFLAG'
-  fi
+  review_base="$(git -C "$repo" rev-list --max-parents=0 HEAD | tail -1)"
+  IMPLFLAG=; [[ $skill == tdd-claude-codex ]] && IMPLFLAG=--impl
+  case "$skill" in
+    execute-codex|tdd-execute-codex)
+      [[ $skill == tdd-execute-codex ]] && check "the last real Codex test-audit verdict exited 0 and was clean (APPROVED, zero findings)" 'python3 "$here/check-scripted.py" "$out/wrapper.jsonl" final "$real_final_state" --real --audit'
+      check "the Claude reviewer's recorded verdict is clean (APPROVED, zero findings) for the diff the run ended with" 'python3 "$here/check-review-record.py" "$repo" "$review_base"';;
+    *)
+      check "the reported approval agrees with the FINAL reviewer result: the last real call exited 0 with a clean verdict, for the state the run ended in${IMPLFLAG:+, on the implementation}, and nothing came after it" 'python3 "$here/check-scripted.py" "$out/wrapper.jsonl" final "$real_final_state" --real $IMPLFLAG';;
+  esac
   echo "LAST_VERDICT: $(python3 "$here/last-verdict.py" "$out/wrapper.jsonl")"
   echo "THREAD_IDS: $(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; print(" ".join(sorted({e["thread_id"] for e in wlog.load(sys.argv[2]) if e["thread_id"]})))' "$here" "$out/wrapper.jsonl")"
   echo "SECONDARY (transcript): resume mentions=$(grep -c -- '--resume' "$out/events.txt")"

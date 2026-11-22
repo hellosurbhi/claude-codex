@@ -154,6 +154,17 @@ Announce routing decision (e.g. "Small change — implementing directly" or "Lar
 
 ---
 
+**Review record (every reviewer round)**: the code-reviewer agent is Claude, so its verdict never reaches the Codex wrapper log, and the final report's `AUDIT-STATUS` line names no state. Each reviewer round of this workflow (every Route A and Route B round and, in the usage-limit chain, the fallback reviewer's out-file) therefore ends, right after its reply arrives and before any fix, by saving that reply with the hash of the exact diff it reviewed. Run this unchanged, after the same intent-to-add step that built the reviewer's diff:
+
+```
+mkdir -p .claude/review
+{ printf 'REVIEWED-DIFF: %s\n' "$(git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' | shasum -a 256 | cut -d' ' -f1)"; cat <<'REVIEW'
+<the reviewer's reply, verbatim>
+REVIEW
+} > .claude/review/final-review.txt
+```
+Each round overwrites the file, so it always holds the latest round. A record counts as approval only when its reply is exactly `VERDICT: APPROVED` with zero findings and its hash is that of the final diff: any edit after a round makes the record stale, which needs a new review round and a new record, and a final report whose record is missing, stale or not clean must end `AUDIT-STATUS: UNREVIEWED`.
+
 ### Route A: Small Change — Claude Implements (GREEN)
 
 **If the plan has 3+ implementation tasks**, dispatch each task to a subagent (sequentially):

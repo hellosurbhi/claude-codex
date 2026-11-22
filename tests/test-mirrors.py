@@ -317,5 +317,26 @@ for f in [os.path.join(root, "skills", "codex-mcp", "SKILL.md"), os.path.join(ro
     t = open(f, encoding="utf-8").read()
     if "`VERDICT: APPROVED` with zero findings" not in t or "lists no finding is not clean" not in t:
         bad.append("%s: the loop exit does not require VERDICT: APPROVED with zero findings" % os.path.relpath(f, root))
+# r10 finding 2: execute-codex and tdd-execute-codex review the implementation with a Claude code-reviewer agent, whose verdict never reaches the wrapper log. The skill therefore prescribes ONE
+# command sequence that saves each reviewer reply with the hash of the exact diff it reviewed (.claude/review/final-review.txt); the proof validates that file. Mirrored skill to command.
+RECHEAD = "**Review record (every reviewer round)**"
+def rec_of(path):
+    t = open(path, encoding="utf-8").read()
+    m = re.search(re.escape(RECHEAD) + r".*?\n```\n.*?\n```\n.*?(?:\n\n|$)", t, re.S)
+    return (m.group(0), t.count(RECHEAD)) if m else (None, t.count(RECHEAD))
+for n in ("execute-codex", "tdd-execute-codex"):
+    base = "$START_SHA" if n.startswith("tdd-") else "HEAD"
+    got = []
+    for f in files(n):
+        rel = os.path.relpath(f, root)
+        b, cnt = rec_of(f)
+        got.append(b)
+        if cnt != 1 or not b:
+            bad.append("%s: expected exactly one Review record paragraph with its command sequence (found %d)" % (rel, cnt)); continue
+        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\n'", "git diff %s %s | shasum -a 256 | cut -d' ' -f1" % (base, EXCL), "> .claude/review/final-review.txt", "<the reviewer's reply, verbatim>", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
+            if k not in b:
+                bad.append("%s: the Review record sequence lacks %r" % (rel, k[:60]))
+    if got[0] != got[1]:
+        bad.append("%s: the Review record paragraph differs between skill and command" % n)
 print("\n".join(bad))
 sys.exit(1 if bad else 0)

@@ -16,6 +16,13 @@ if mode == "rounds":
         if e["exit"] == 0 and e.get("meta", {}).get("round") == str(k + 1):
             k += 1
     sys.exit(0 if k == int(sys.argv[3]) else 1)
+if mode == "final" and "--audit" in sys.argv:
+    # tdd-execute-codex (r10 finding 2): Codex only AUDITS the tests there (a Claude agent reviews the implementation), so what the wrapper log can bind is
+    # that the LAST Codex call that returned a verdict was clean (APPROVED, zero findings), exited 0 and recorded the state it audited. Implementation
+    # replies carry no verdict and are skipped; a later BLOCKED or findings verdict still fails.
+    # WHY not bound to the final state: the implementation legitimately changes the files after the audit; the final review is the review record's job.
+    v = [e for e in evs if wlog.valid_verdict(e) is not None]
+    sys.exit(0 if v and v[-1]["exit"] == 0 and wlog.is_clean(v[-1]) and v[-1].get("meta", {}).get("state") else 1)
 if mode == "final":
     # the LAST execution is a clean reply, given for the state the run ended in (and, with --impl, after add() existed)
     if not evs:
