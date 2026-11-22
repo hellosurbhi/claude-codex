@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # contract: redact-diff v1 (source of truth: hellosurbhi/claude-codex scripts/redact-diff.sh)
-# Usage: redact-diff.sh < raw.diff > masked.diff
+# Usage: redact-diff.sh [--text] < raw > masked
+#   default: the input is a unified diff (prefix and hunk aware). --text: the input is plain text (requirements, instructions): no prefix stripping, no hunk or side state, ONE key state, every other rule identical.
+# WHY an explicit --text flag and no guessing from content (r21 finding 1): the diff prefix parser strips the first hyphen of a plain-text -----BEGIN line, so a plain-text key body survived. The caller says which kind it sends.
+# In diff mode, lines before the first diff --git or @@ header (a preamble, e.g. a commit message or notes) are masked as plain text.
 # Masks the VALUE part of common credential shapes in a unified diff while keeping its structure (the +, - and space prefixes, @@ hunks, file headers).
 # WHY a best-effort mask, not a guarantee: the skills already keep secret-named FILES out of the reviewer's diff with exclude pathspecs, but an inline
 # credential in an ordinary source file (an added line or a deleted one) would still reach an outside reviewer. This script masks the shapes below, the ones
@@ -31,7 +34,10 @@
 #   - obfuscated or encoded secrets (base64 of a key, a key split into string pieces).
 # Treat the output as "fewer secrets", never as "no secrets".
 export LC_ALL=C
-exec awk '
+TEXT=0
+if [ "${1:-}" = "--text" ]; then TEXT=1; shift; fi
+if [ "$#" -ne 0 ]; then echo "usage: redact-diff.sh [--text] < input > output" >&2; exit 2; fi
+exec awk -v TEXT="$TEXT" '
 function rep(c, n,   s, i) { s = ""; for (i = 0; i < n; i++) s = s c; return s }
 # mask the value part of every match of rx (head: leading part of the match kept as is, "" for none) when it is long enough and sits on a word boundary
 function tok(s, rx, headrx, tag, minlen, needdigit,   out, pre, m, head, val, prevc, ok, rs, rl) {
@@ -132,15 +138,20 @@ BEGIN {
   KW = "(password|passwd|passphrase|secret|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)[a-z0-9_-]*[\"\047]?[[:space:]]*[:=]+>?[[:space:]]*"
   KEYB = "-----BEGIN [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----"
   KEYE = "-----END [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----"
-  inkey = 0; ko = 0; kn = 0; comb = 0; inhdr = 0
+  inkey = 0; ko = 0; kn = 0; comb = 0; inhdr = 0; kt = 0; seen = 0
 }
 {
   line = $0
   # WHY no rule prints early (r14 finding 2): every line runs through every rule in sequence and is printed once, at the end. An early print after the key-block rule, the header rule or the
   # END-line rule skipped the remaining redactors, so a password or token elsewhere on the same line survived. File header lines run the credential rules too (a path can carry one) but never open a key block.
-  if (line ~ /^diff --(git|cc|combined) /) { inhdr = 1; ko = 0; kn = 0; comb = 0 }
-  else if (line ~ /^@@/) { inhdr = 0; ko = 0; kn = 0; comb = (line ~ /^@@@/) }
-  if (!inhdr) {
+  if (TEXT || !seen) {
+    # WHY a plain-text path (r21 finding 1): no prefix is stripped, so a -----BEGIN line is seen whole; one key state (kt) serves the whole input. In diff mode this covers the preamble before the first header.
+    if (!TEXT && (line ~ /^diff --(git|cc|combined) / || line ~ /^@@/)) { seen = 1; kt = 0 }
+    else { inkey = kt; line = keys(line, 1); kt = inkey }
+  }
+  if (!TEXT && line ~ /^diff --(git|cc|combined) /) { inhdr = 1; ko = 0; kn = 0; comb = 0 }
+  else if (!TEXT && line ~ /^@@/) { inhdr = 0; ko = 0; kn = 0; comb = (line ~ /^@@@/) }
+  if (!TEXT && seen && !inhdr) {
     # WHY the key state is per side (r18 finding 1): a unified diff interleaves two files. A "-" line belongs to the old file and a "+" line to the new one, a " " line to both. One shared state let an END on a
     # "-" line close the key for the "+" body lines that follow it (a context BEGIN, a replaced body and a reformatted END leaked the whole new key). Now "-" lines read and write ko, "+" lines kn, and a context
     # line (or a line with no prefix) runs on both states (when the sides differ, both are advanced separately and the result of the side that was inside the key is printed), so a context BEGIN opens both sides and a context END closes both. A hunk header or a

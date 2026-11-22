@@ -183,9 +183,9 @@ def block_of(path):
 # r19 finding 1: ONE review input for every reviewer. Every diff workflow builds .claude/review/review-input.diff (the diff after redact-diff.sh) once per round, hands exactly that to the primary
 # reviewer and the tier S fallback, and the fallback block only appends that file: no second git diff, no raw snapshot in any prompt.
 # r20 finding 2: the SAME file is the Codex prompt (--prompt-file) and the tier S context, written under .claude/review, with the requirements and instructions text passed through redact-diff.sh like the diff.
-REVNEED = ['CTX="$R/.claude/review/review-context.txt"', '~/.claude/config/scripts/redact-diff.sh > "$CTX" <<\'EOF\'', 'then cat "$R/.claude/review/review-input.diff" >> "$CTX"', 'echo "review context ready', 'rm -f "$CTX"',
+REVNEED = ['CTX="$R/.claude/review/review-context.txt"', '~/.claude/config/scripts/redact-diff.sh --text > "$CTX" <<\'EOF\'', 'then cat "$R/.claude/review/review-input.diff" >> "$CTX"', 'echo "review context ready', 'rm -f "$CTX"',
            'the review input .claude/review/review-input.diff is missing or empty, or the redaction failed: no context is sent']
-PARANEED = ["`--prompt-file`", "never the prompt as a command argument", "operating system's argument limit", "TASK REQUIREMENTS", "same `~/.claude/config/scripts/redact-diff.sh`", "same best-effort mask", "not a guarantee",
+PARANEED = ["`--prompt-file`", "never the prompt as a command argument", "operating system's argument limit", "TASK REQUIREMENTS", "same `~/.claude/config/scripts/redact-diff.sh`", "`--text` mode", "same best-effort mask", "not a guarantee",
             "`reviewer.sh S`", "`codex-call.sh`"]
 for f in CTXFILES:
     rel, plan = os.path.relpath(f, root), os.path.basename(os.path.dirname(f)) == "plan-codex" or os.path.basename(f) == "plan-codex.md"

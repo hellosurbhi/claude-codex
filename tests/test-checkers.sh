@@ -579,6 +579,35 @@ the task-list and sk-learn notes
 PLACEHOLDERS
 expect pass "redact-diff keeps the line count of the diff" test "$(wc -l < "$fx")" = "$(wc -l < "$tmp/secrets.out")"
 expect pass "redact-diff does not touch a word that merely contains sk-" sh -c 'printf "+x = task-description-for-the-user-that-is-long\n" | "$1" | grep -q "task-description-for-the-user-that-is-long"' _ "$red"
+# r21 finding 1: --text mode (requirements and instructions) has no prefix parser and one key state; diff mode treats the preamble before the first header as plain text.
+tmasked() { local o; o="$(printf '%s\n' "$1" | "$red" --text)"; grep -qF '[REDACTED' <<<"$o" && ! grep -qF -- "$2" <<<"$o"; }
+expect pass "redact-diff --text masks a plain-text PEM block of every key shape, and text after it is untouched" python3 - "$red" <<'PYT'
+import subprocess, sys
+red = sys.argv[1]; fails = []
+for shape in ("PRIVATE KEY", "RSA PRIVATE KEY", "OPENSSH PRIVATE KEY", "PGP PRIVATE KEY BLOCK", "EC PRIVATE KEY"):
+    for n in (1, 2, 4):
+        body = ["KEYBODYLEAK%d" % i for i in range(n)]
+        lines = ["Notes first", "-----BEGIN %s-----" % shape] + body + ["-----END %s-----" % shape, "after = 1"]
+        for mode, args, pre in (("text", ["--text"], ""), ("diff-preamble", [], "")):
+            o = subprocess.run([red] + args, input="\n".join(lines) + "\n", capture_output=True, text=True).stdout.split("\n")
+            if any("KEYBODYLEAK" in x for x in o): fails.append("%s %s n=%d leaks the body" % (mode, shape, n))
+            if o[0] != "Notes first" or o[len(lines) - 1] != "after = 1": fails.append("%s %s n=%d changed the surrounding text: %r" % (mode, shape, n, (o[0], o[len(lines) - 1])))
+            if len(o) - 1 != len(lines): fails.append("%s %s n=%d changed the line count" % (mode, shape, n))
+for f in fails: print("FAIL:", f, file=sys.stderr)
+sys.exit(1 if fails else 0)
+PYT
+expect pass "redact-diff in diff mode still strips the prefix after the first header (a removed -----BEGIN line is handled per side)" python3 - "$red" <<'PYT'
+import subprocess, sys
+red = sys.argv[1]
+L = ["preamble line", "diff --git a/x b/x", "@@ -1,3 +1,2 @@", "------BEGIN PRIVATE KEY-----", "-OLDBODYLEAK", "------END PRIVATE KEY-----", "+x = 1"]
+o = subprocess.run([red], input="\n".join(L) + "\n", capture_output=True, text=True).stdout.split("\n")
+sys.exit(1 if any("OLDBODYLEAK" in x for x in o) or o[-2] != "+x = 1" else 0)
+PYT
+while IFS= read -r case_; do
+  [ -n "$case_" ] || continue
+  expect pass "redact-diff --text masks: ${case_%%|||*}" tmasked "${case_%%|||*}" "${case_##*|||}"
+done < "$tmp/attacks.txt"
+expect pass "redact-diff rejects an unknown argument" sh -c '! "$1" --bogus </dev/null >/dev/null 2>&1' _ "$red"
 printf 'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1,2 +1,2 @@\n keep one\n-old line\n+new line\n' > "$tmp/clean.diff"
 printf 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-hello world\n+hello there, a task-list and ask-me\n' >> "$tmp/clean.diff"
 "$red" < "$tmp/clean.diff" > "$tmp/clean.out"
@@ -801,6 +830,14 @@ for p in sys.argv[1:]:
     open(p, "w").write(t2)
 PYX
 mirneg "a $fam Review context that appends the raw snapshot instead of the review input is caught" 'Review context sequence lacks' "$tmp/mir8"; mirc "$fam"
+# r21 finding 1: the requirements and instructions part is masked in --text mode (a plain-text key block would otherwise keep its body).
+python3 - "$tmp/mir8/skills/$fam/SKILL.md" "$tmp/mir8/commands/$fam.md" <<'PYX'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); t2 = t.replace("redact-diff.sh --text > \"$CTX\"", "redact-diff.sh > \"$CTX\""); assert t2 != t, p
+    open(p, "w").write(t2)
+PYX
+mirneg "a $fam Review context that masks the requirements text without --text is caught" 'Review context sequence lacks' "$tmp/mir8"; mirc "$fam"
 # r20 finding 2: the primary prompt must point the reviewer at the task requirements, and every Codex review call must hand the context file over with --prompt-file (never as an argument).
 python3 - "$tmp/mir8/skills/$fam/SKILL.md" "$tmp/mir8/commands/$fam.md" <<'PYX'
 import sys
