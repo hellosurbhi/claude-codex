@@ -4,8 +4,8 @@
 # exact commands from the skill text and runs them with bash on throwaway repos from a subdirectory, so a missing, reworded or cwd-relative clause fails here instead of passing on wording.
 import os, re, subprocess, sys, tempfile
 text = open(sys.argv[1], encoding="utf-8").read()
-pm = re.search(r"`(git diff --name-only --no-renames <base commit>\.\.HEAD -- [^`]*)`", text)
-sm = re.search(r"`(d=\$\(git diff -U1000000 --no-renames <base commit>\.\.HEAD -- ':\(top\)'\) && [^`]*)`", text)
+pm = re.search(r"`(git diff --name-only [^`]*<base commit>\.\.HEAD -- [^`]*)`", text)
+sm = re.search(r"`(d=\$\(git diff [^`]*<base commit>\.\.HEAD -- ':\(top\)'\) && [^`]*)`", text)
 if not pm or not sm:
     print("path check or content scan command not found in %s" % sys.argv[1]); sys.exit(1)
 def allowed(d, sub, base):
@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory() as d:
         tree = g("write-tree").strip(); par = subprocess.run(["git", "-C", d, "rev-parse", "-q", "--verify", "HEAD"], capture_output=True, text=True).stdout.strip()
         g("update-ref", "HEAD", g(*(["commit-tree", tree, "-m", msg] + (["-p", par] if par else []))).strip())
     def add(name, body):
-        os.makedirs(os.path.dirname(os.path.join(d, name)) or d, exist_ok=True); open(os.path.join(d, name), "w").write(body); g("add", "-f", name)
+        os.makedirs(os.path.dirname(os.path.join(d, name)) or d, exist_ok=True); open(os.path.join(d, name), "wb" if isinstance(body, bytes) else "w").write(body); g("add", "-f", name)
     add("README", "r"); add("app/seed.txt", "s"); commit("base")
     bad = []
     def case(label, want, files, base=None):
@@ -55,6 +55,35 @@ with tempfile.TemporaryDirectory() as d:
     add("app/r5move.js", key); commit("seed move")
     refused("credential-bearing file renamed unchanged", lambda: g("mv", "app/r5move.js", "app/r5moved.js"))
     case("short placeholder value", True, [("app/cfg.js", "const token = 'x';\n")])
+    # round 6: git omits or rewrites file contents in several ways (binary by attribute or by a NUL byte, -diff, textconv, an external diff driver, big files, submodules); the scan must still see the real bytes or refuse.
+    def cfg(k, v): g("config", k, v)
+    def uncfg(k): g("config", "--unset", k)
+    keyline = "const apiKey = \"abcd1234efgh5678ijkl\";\n"
+    add(".gitattributes", "app/r6bin*.js binary\napp/r6nodiff*.js -diff\napp/r6tc*.js diff=strip\n"); commit("attributes")
+    refused("ordinary source file marked binary by .gitattributes, with an inline key", lambda: add("app/r6bin1.js", keyline))
+    refused("file with a NUL byte and an inline key", lambda: add("app/r6nul.js", b"\0\0" + keyline.encode() + b"\0"))
+    refused("file with the -diff attribute and an inline key", lambda: add("app/r6nodiff1.js", keyline))
+    cfg("diff.strip.textconv", "sed -e 's/.*//'")
+    refused("textconv driver that would strip the key", lambda: add("app/r6tc1.js", keyline)); uncfg("diff.strip.textconv")
+    cfg("diff.external", "true")
+    refused("external diff driver that prints nothing", lambda: add("app/r6ext.js", keyline)); uncfg("diff.external")
+    cfg("core.bigFileThreshold", "1")
+    refused("file over core.bigFileThreshold (git calls it binary) with an inline key", lambda: add("app/r6big.js", keyline)); uncfg("core.bigFileThreshold")
+    cfg("color.ui", "always"); cfg("diff.wsErrorHighlight", "all")
+    refused("colored diff with trailing whitespace after an inline key", lambda: add("app/r6color.js", keyline.rstrip("\n") + "   \n")); uncfg("color.ui"); uncfg("diff.wsErrorHighlight")
+    def gitlink(name="app/r6sub"):
+        g("update-index", "--add", "--cacheinfo", "160000,%s,%s" % ("a" * 40, name))
+    refused("gitlink (submodule) change", gitlink)
+    cfg("diff.ignoreSubmodules", "all")
+    refused("gitlink change hidden by diff.ignoreSubmodules=all", lambda: gitlink("app/r6sub2")); uncfg("diff.ignoreSubmodules")
+    cfg("diff.submodule", "log")
+    refused("gitlink change shown as a log by diff.submodule=log", lambda: gitlink("app/r6sub3")); uncfg("diff.submodule")
+    # the PATH check must also see a secret-shaped gitlink path that diff.ignoreSubmodules=all would hide
+    cfg("diff.ignoreSubmodules", "all"); base = g("rev-parse", "HEAD").strip(); gitlink("app/secrets-sub"); commit("secret-shaped gitlink")
+    if not allowed(d, "app", base)[1]: bad.append("path check missed a secret-shaped gitlink path under diff.ignoreSubmodules=all")
+    uncfg("diff.ignoreSubmodules")
+    # a genuine binary file with no credential keeps tier R available (invalid UTF-8 and NUL bytes must not make the scan fail)
+    case("genuine binary file with no credential", True, [("app/r6photo.bin", bytes(range(256)) * 4 + b"\xff\xfe\0\x80")])
     # unresolvable base: the scan must not exit 1
     ok, _, rc = allowed(d, "app", "0" * 40)
     if ok: bad.append("unresolvable base commit: tier R allowed (scan exit %s)" % rc)
