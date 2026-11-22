@@ -50,8 +50,11 @@ function tok(s, rx, headrx, tag, minlen, needdigit,   out, pre, m, head, val, pr
 }
 # a value that is a placeholder or ordinary code, never a credential: ${VAR} $VAR <name> {name}, an already-masked value, a boolean or null and name( or name[ (a call or an index)
 function placeholder(v) {
-  return (v == "" || v ~ /^[$<{]/ || v ~ /^\[REDACTED/ || tolower(v) ~ /^(true|false|null|none|nil|undefined)["\047]?$/ || v ~ /^[A-Za-z_][A-Za-z0-9_.]*[(\[]/)
+  return (v == "" || varref(v) || v ~ /^\[REDACTED/ || tolower(v) ~ /^(true|false|null|none|nil|undefined)["\047]?$/ || (v ~ /^[A-Za-z_][A-Za-z0-9_.]*[(\[]/ && v !~ /[)\]][^)\]},;]/))
 }
+# WHY the whole value must be the reference (r18 hostile read): the old test looked at the first character only, so password=$uper$ecret99, password=${HOME}hunter2 and password=<hunter2 passed as "code" and a real
+# secret that merely starts with $ < or { stayed in the diff. Now $NAME, ${...}, <...> and {...} count only when they span the value, and a call or index (name( or name[) only when nothing but closers follows its first closer.
+function varref(v) { return (v ~ /^[$][A-Za-z_][A-Za-z0-9_]*$/ || v ~ /^[$][{][^}]*[}]$/ || v ~ /^<[^<>]*>$/ || v ~ /^[{][^{}]*[}]$/) }
 # WHY no shape test here: a value that follows an explicit label (Bearer, or Basic and Token after an Authorization header) is a credential whatever it looks like,
 # so it is masked at any length with any characters up to the next quote or whitespace. The old digit-and-12-characters test let "Bearer abcdefghijklmnop" through.
 # rx is matched against a lowercase copy (the label is case-insensitive); the same offsets are used on the original text (LC_ALL=C keeps lengths equal).
@@ -102,9 +105,9 @@ function assign(s,   k, ch, ls, out, hs, hl, head, rest, c, q, e, val, tail, lea
     } else if (match(rest, /^[^"\047[:space:]&]+/)) {
       # WHY the value runs past , ; ) } ] (only a TRAILING run of them is split off): a password may contain them, and stopping at the first one left the rest of the secret in the diff.
       val = substr(rest, 1, RLENGTH); tail = substr(rest, RLENGTH + 1)
-      if (match(val, /[,;)}\]]+$/)) { tail = substr(val, RSTART) tail; val = substr(val, 1, RSTART - 1) }
+      if (!varref(val) && match(val, /[,;)}\]]+$/)) { tail = substr(val, RSTART) tail; val = substr(val, 1, RSTART - 1) }
     } else { tail = rest }
-    skip = quoted ? (val == "" || tolower(val) ~ /^(true|false|null|none|nil|undefined)["\047]?$/ || val ~ /^\[REDACTED/ || val ~ /^[$]/) : placeholder(val)
+    skip = quoted ? (val == "" || tolower(val) ~ /^(true|false|null|none|nil|undefined)["\047]?$/ || val ~ /^\[REDACTED/ || varref(val)) : placeholder(val)
     out = out head lead (skip ? val : "[REDACTED]") trail
     s = tail
   }

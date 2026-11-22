@@ -462,6 +462,12 @@ PASSWORD=LEAKpw|||LEAKpw
 GET /x?password=LEAKpw&user=bob|||LEAKpw
 github_pat_AbCdEfGhIjKl|||AbCdEfGhIjKl
 AKIAABCDEFGHIJKLMNOP|||ABCDEFGHIJKLMNOP
+password=$uper$ecret99|||uper$ecret99
+password=${HOME}LEAKtailpw|||LEAKtailpw
+password="$uper$ecretQ7"|||uper$ecretQ7
+password=<LEAKangle|||LEAKangle
+password={LEAKbrace|||LEAKbrace
+token = get_token()LEAKcall|||LEAKcall
 ATTACKS
 while IFS= read -r case_; do
   [ -n "$case_" ] || continue
