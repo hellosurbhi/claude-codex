@@ -363,6 +363,13 @@ cp "$here/../commands/claude-codex.md" "$tmp/mir8/commands/claude-codex.md"; pri
 mirneg "a Gemini instruction injected into a command is caught" 'names an outside reviewer or a content scan outside.*gemini' "$tmp/mir8"
 cp "$here/../commands/claude-codex.md" "$tmp/mir8/commands/claude-codex.md"
 expect pass "the pristine copy of the skills and commands passes the outside-reviewer rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
+# r24 finding 2: a contract version named anywhere must equal the script's own line 2.
+sed 's/contract stays v3/contract stays v2/' "$here/../README.md" > "$tmp/mir8/README.md"
+mirneg "a README that says the contract stays v2 while the script is v3 is caught" 'README.md:[0-9]+: names contract v2 but scripts/codex-call.sh line 2 is v3' "$tmp/mir8"
+cp "$here/../README.md" "$tmp/mir8/README.md"
+sed 's/(`# contract: codex-call v3 /(`# contract: codex-call v4 /' "$here/../README.md" > "$tmp/mir8/README.md"
+mirneg "a README that names codex-call v4 while the script is v3 is caught" 'names contract v4 but scripts/codex-call.sh line 2 is v3' "$tmp/mir8"
+cp "$here/../README.md" "$tmp/mir8/README.md"
 # cc11-main-r9 finding 2: the tier S fallback must carry the Codex context (task requirements, instructions, carried and contested findings), not a bare diff.
 mirc() { cp "$here/../commands/$1.md" "$tmp/mir8/commands/$1.md"; cp "$here/../skills/$1/SKILL.md" "$tmp/mir8/skills/$1/SKILL.md"; }
 python3 - "$tmp/mir8/skills/tdd-claude-codex/SKILL.md" <<'PY'

@@ -452,5 +452,23 @@ for rel in sorted(os.path.relpath(f, root) for g in ("skills/*/SKILL.md", "comma
     ft = open(os.path.join(root, rel)).read()
     if "**Validate the response**" in ft and VOID not in ft:
         bad.append("%s: the Validate the response paragraph does not say that any non-zero codex-call.sh exit voids an earlier approval" % rel)
+# r24 finding 2: README line 120 said the contract "stays v2" while the script (line 2) was v3. Every "codex-call vN" and "contract stays vN" in the repo must equal the script's own contract line.
+# WHY the script is read from the repo this test lives in when the scanned root has none: the negative-case fixtures copy only skills, commands and README.
+script = os.path.join(root, "scripts", "codex-call.sh")
+if not os.path.exists(script):
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "codex-call.sh")
+m = re.match(r"# contract: codex-call v(\d+) ", open(script).read().splitlines()[1])
+if not m:
+    bad.append("scripts/codex-call.sh: line 2 is not a '# contract: codex-call v<N>' line")
+else:
+    CV = re.compile(r"(?:codex-call v|contract stays v)(\d+)")
+    for g in ("README.md", "skills/*/*", "commands/*.md", "scripts/*", "tests/*"):
+        for f in sorted(glob.glob(os.path.join(root, g))):
+            if not os.path.isfile(f) or os.path.basename(f) in ("test-mirrors.py", "test-checkers.sh"):  # these two hold the deliberately wrong versions the negative cases mutate in
+                continue
+            for n, line in enumerate(open(f, encoding="utf-8", errors="replace").read().splitlines(), 1):
+                for v in CV.findall(line):
+                    if v != m.group(1):
+                        bad.append("%s:%d: names contract v%s but scripts/codex-call.sh line 2 is v%s" % (os.path.relpath(f, root), n, v, m.group(1)))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)
