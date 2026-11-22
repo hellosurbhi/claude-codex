@@ -18,20 +18,26 @@
 # the real path would replace the live wrapper. So the run is told, once, to use
 # the fake at that path. The skill text that decides when to re-review is untouched.
 #
-# WHY bypassPermissions and not allow rules (cc11 real run at bd3bce6 ended UNREVIEWED; confirmed with claude 2.1.323 probes): the skills
-# keep the plan at .claude/plan/<name>.md, and a headless `claude -p` run DENIES every write to an EXISTING file under .claude/ ("sensitive
-# file") for Edit, Write and a Bash redirect alike. What was tried first: acceptEdits with Edit(.claude/plan/**), Edit(./.claude/plan/**),
-# Edit(/.claude/plan/**), an absolute // rule, Edit(.claude/**), Edit(.claude/plan/p.md), and a PreToolUse allow hook; every one was still
-# denied (a Write(...) rule is rejected outright, only Edit rules are read). Only bypassPermissions let the edit through. A real session
-# shows the user a prompt for the same write and the user approves it, so unattended approval is what this stands in for. The run is a
-# scratch repo, and Bash was already allowed without limit. What breaks if this goes back to acceptEdits: the first round of findings can
-# never be fixed in the plan file, so the loop ends UNREVIEWED every time.
+# SAFETY: the `real` scenario runs a headless agent with permission PROMPTS OFF (bypassPermissions), confined by the PreToolUse hook tests/proof-confine-hook.py to
+# its scratch repo (deny by default; see that file). Every other scenario keeps acceptEdits.
+#
+# WHY bypassPermissions at all (cc11 real run at bd3bce6 ended UNREVIEWED; confirmed with claude 2.1.323 probes): the skills keep the plan at .claude/plan/<name>.md,
+# and a headless `claude -p` run DENIES every write to an EXISTING file under .claude/ ("sensitive file") for Edit, Write and a Bash redirect alike. What was tried
+# first: acceptEdits with Edit(.claude/plan/**), Edit(./.claude/plan/**), Edit(/.claude/plan/**), an absolute // rule, Edit(.claude/**), Edit(.claude/plan/p.md) and a
+# PreToolUse allow hook; every one was still denied (a Write(...) rule is rejected outright, only Edit rules are read). Only bypassPermissions let the edit through.
+# A real session shows the user a prompt for the same write and the user approves it, so unattended approval is what this stands in for.
+# WHY the hook is what makes that safe: probed with claude 2.1.323 that a PreToolUse hook still runs and still denies a tool call under bypassPermissions (a deny-all
+# hook blocked even the Read, and the edit never happened). The run therefore refuses to start unless the hook file exists, is executable and denies an out-of-bounds
+# probe call fed to it directly, and it fails afterwards if the hook logged no decision. What breaks if this goes back to acceptEdits: the first round of findings can
+# never be fixed in the plan file, so the loop ends UNREVIEWED every time. What breaks if the hook is loosened: an unprompted agent with the owner's home in reach.
 set -euo pipefail
 src="$1" skill="$2" scenario="$3"
 here="$(cd "$(dirname "$0")" && pwd)"
 # WHY resolved before any cd: the script cd's into the scratch repo, so a relative
 # source or output path would silently point somewhere else afterwards.
 [[ "$src" == installed ]] || src="$(cd "$src" && pwd)"
+# WHY the real scenario needs a path that does not exist yet: the agent runs with prompts off, so its whole sandbox must be a directory this script created itself.
+if [[ $scenario == real && -n "${4:-}" && -e "$4" ]]; then echo "real scenario: the out dir must not exist, the proof creates it: $4" >&2; exit 2; fi
 out="${4:-$(mktemp -d "${TMPDIR:-/tmp}/review-loop-proof.XXXXXX")}"
 mkdir -p "$out"; out="$(cd "$out" && pwd)"
 # WHY refuse a non-empty out dir instead of wiping it: the caller supplies the
@@ -129,9 +135,21 @@ if [[ $scenario == real ]]; then
   # WHY the wrapper logs its early exits into the shim's log (r23): a call that fails before it reaches codex (bad arguments, a missing prompt file) never touches the shim, so without this an earlier clean review stood as the last word.
   export CODEX_CALL_EVENT_LOG="$EVLOG"
 fi
-claude -p "$task" --model sonnet --setting-sources "$sources" \
-  --permission-mode bypassPermissions \
-  --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill" \
+if [[ $scenario == real ]]; then
+  hook="$here/proof-confine-hook.py"
+  if [[ ! -f "$hook" || ! -x "$hook" ]]; then echo "REJECT: the confinement hook is missing or not executable: $hook" >&2; exit 2; fi
+  export PROOF_SCRATCH_ROOT="$repo" PROOF_HOOK_LOG="$out/hook.log"; : > "$PROOF_HOOK_LOG"
+  # WHY two probes through the real hook file before any model runs: a hook that allows everything (or crashes open) would leave the agent unconfined. The out-of-bounds
+  # write must be denied and the in-bounds plan write allowed; no model is involved.
+  probe() { python3 -c 'import json,sys; print(json.dumps({"tool_name":"Write","cwd":sys.argv[1],"tool_input":{"file_path":sys.argv[2]}}))' "$repo" "$1" | "$hook" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["permissionDecision"])'; }
+  if [[ "$(probe "$out/../outside-probe.txt" 2>/dev/null)" != deny || "$(probe "$repo/.claude/plan/probe.md" 2>/dev/null)" != allow ]]; then echo "REJECT: the confinement hook probe failed (out-of-bounds call not denied or in-bounds call not allowed)" >&2; exit 2; fi
+  : > "$PROOF_HOOK_LOG"
+  printf '{"hooks":{"PreToolUse":[{"matcher":".*","hooks":[{"type":"command","command":"python3 %s"}]}]}}\n' "$hook" > "$out/proof-settings.json"
+  perm=(--permission-mode bypassPermissions --settings "$out/proof-settings.json" --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill")
+else
+  perm=(--permission-mode acceptEdits --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill Edit(./.claude/plan/**) Edit(.claude/plan/**)")
+fi
+claude -p "$task" --model sonnet --setting-sources "$sources" "${perm[@]}" \
   --append-system-prompt "$seam" --no-session-persistence --output-format stream-json --verbose > "$out/stream.jsonl" 2> "$out/session.err" && claude_rc=0 || claude_rc=$?
 python3 - "$out" <<'PY'
 import json, sys
@@ -180,6 +198,11 @@ all_markers() {
 # writing calls.log would leave an earlier CLEAN standing as the last word (r17).
 rounds_in_order() { python3 "$here/check-scripted.py" "$out/wrapper.jsonl" rounds "$FAKE_ROUNDS"; }
 check "claude session exited 0" '[[ $claude_rc -eq 0 ]]'
+if [[ $scenario == real ]]; then
+  check "the confinement hook ran (it logged at least one decision)" '[[ -s "$out/hook.log" ]]'
+  echo "HOOK DECISIONS: allow=$(grep -c '^ALLOW' "$out/hook.log" || true) deny=$(grep -c '^DENY' "$out/hook.log" || true)"
+  grep '^DENY' "$out/hook.log" | sed 's/^/HOOK /' || true
+fi
 check "session produced a report" '[[ -s "$out/session.txt" ]]'
 if [[ $scenario == real ]]; then
   NOVERDICT=; [[ $skill == execute-codex ]] && NOVERDICT=1

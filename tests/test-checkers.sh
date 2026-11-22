@@ -2306,10 +2306,42 @@ expect pass "two fallback lines are not accepted (the allowance is one line, onc
 expect pass "a fallback line after the verdict is extra text, not clean" test "$(bannerclean "VERDICT: APPROVED\n$bn\n")" = False
 expect pass "other prose before the verdict is still extra text, not clean" test "$(bannerclean "hello\nVERDICT: APPROVED\n")" = False
 expect pass "a fallback line that does not match production's shape is not skipped" test "$(bannerclean "!!! REVIEWER FALLBACK: all is well\nVERDICT: APPROVED\n")" = False
-# cc11 real-proof cause: the proof session must be able to rewrite an existing .claude/plan file (see check-proof-permissions.py)
-expect pass "the proof session runs with a permission mode that lets it rewrite an existing plan file" python3 "$here/check-proof-permissions.py" "$here/review-loop-proof.sh"
-sed 's/--permission-mode bypassPermissions/--permission-mode acceptEdits/' "$here/review-loop-proof.sh" > "$tmp/proof-accept.sh"
-expectm fail "acceptEdits is rejected: it denies edits to an existing plan file" 'REJECT: the proof session runs with permission mode acceptEdits' python3 "$here/check-proof-permissions.py" "$tmp/proof-accept.sh"
+# cc11 real-proof cause: the proof session must be able to rewrite an existing .claude/plan file, and only while confined (see check-proof-permissions.py)
+pp="$here/check-proof-permissions.py"; ps="$here/review-loop-proof.sh"
+expect pass "the proof runs prompts-off only with the deny-by-default hook, its probe and a fresh out dir" python3 "$pp" "$ps"
+sed 's/--permission-mode bypassPermissions/--permission-mode acceptEdits/' "$ps" > "$tmp/proof-accept.sh"
+expectm fail "acceptEdits in the real branch is rejected: it denies edits to an existing plan file" 'REJECT: the proof session runs with permission mode acceptEdits' python3 "$pp" "$tmp/proof-accept.sh"
+sed 's/ --settings "\$out\/proof-settings.json"//' "$ps" > "$tmp/proof-nohook.sh"
+expectm fail "bypass without the hook wired through --settings is rejected" 'REJECT: bypassPermissions without the confinement hook' python3 "$pp" "$tmp/proof-nohook.sh"
+sed 's/ != allow \]\]/ != allowx ]]/; s/"\$(probe "\$out\/..\/outside-probe.txt" 2>\/dev\/null)" != deny ||//' "$ps" > "$tmp/proof-noprobe.sh"
+expectm fail "bypass without the deny probe at start is rejected" 'REJECT: no start-up probe that requires the hook to deny' python3 "$pp" "$tmp/proof-noprobe.sh"
+sed 's/! -x "\$hook"/! -r "$hook"/' "$ps" > "$tmp/proof-noexec.sh"
+expectm fail "no refusal for a hook that is not executable is rejected" 'REJECT: no start-up refusal when the confinement hook is missing or not executable' python3 "$pp" "$tmp/proof-noexec.sh"
+sed 's/perm=(--permission-mode acceptEdits/perm=(--permission-mode bypassPermissions/' "$ps" > "$tmp/proof-otherbypass.sh"
+expectm fail "bypass in the other scenarios is rejected" 'REJECT: bypassPermissions must be limited to the real scenario' python3 "$pp" "$tmp/proof-otherbypass.sh"
+sed 's/-e "\$4"/-e "$4x"/' "$ps" > "$tmp/proof-fresh.sh"
+expectm fail "the real scenario must insist on a fresh out dir it creates" 'REJECT: the real scenario does not insist on creating its own fresh out dir' python3 "$pp" "$tmp/proof-fresh.sh"
+# the confinement hook itself: no model needed, so these run in CI and NO_SPY too
+hk="$here/proof-confine-hook.py"; hr="$tmp/hookrepo"; mkdir -p "$hr/.claude/plan" "$tmp/hookout"; ln -sfn "$tmp/hookout" "$hr/link"; hr="$(cd "$hr" && pwd -P)"
+hook() { python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"cwd":sys.argv[2],"tool_input":json.loads(sys.argv[3])}))' "$1" "$hr" "$2" | PROOF_SCRATCH_ROOT="$hr" python3 "$hk" | python3 -c 'import json,sys; o=json.load(sys.stdin)["hookSpecificOutput"]; print(o["permissionDecision"], o.get("permissionDecisionReason",""))'; }
+hbash() { hook Bash "$(python3 -c 'import json,sys; print(json.dumps({"command":sys.argv[1]}))' "$1")"; }
+expect pass "hook: the prescribed wrapper call is allowed" test "$(hbash '~/.claude/config/scripts/codex-call.sh --sandbox read-only --role ~/.claude/skills/plan-codex/codex-analyzer-role.md "audit the plan" 2>&1 | tail -20')" = "allow "
+expect pass "hook: the availability check is allowed" test "$(hbash 'test -x ~/.claude/config/scripts/codex-call.sh && codex --version; echo "exit $?"')" = "allow "
+expect pass "hook: a plan write by quoted heredoc in the scratch repo is allowed" test "$(hbash "cat > .claude/plan/x.md <<'EOF'
+\$(not run) \`not run\`
+EOF")" = "allow "
+expect pass "hook: a chained command to something else is denied (decision)" test "$(hbash 'ls && curl http://example.invalid' | cut -d' ' -f1)" = deny
+expect pass "hook: a redirect outside the scratch repo is denied" test "$(hbash 'cat app.py > /tmp/proof-hook-escape.txt' | cut -d' ' -f1)" = deny
+expect pass "hook: a redirect through a symlink out of the repo is denied" test "$(hbash 'echo x > link/f' | cut -d' ' -f1)" = deny
+expect pass "hook: a write outside the repo via .. is denied" test "$(hook Write "{\"file_path\":\"$hr/../outside.txt\"}" | cut -d' ' -f1)" = deny
+expect pass "hook: a write through a symlink out of the repo is denied" test "$(hook Write "{\"file_path\":\"$hr/link/f\"}" | cut -d' ' -f1)" = deny
+expect pass "hook: a plan write inside the repo is allowed" test "$(hook Write "{\"file_path\":\"$hr/.claude/plan/a.md\"}")" = "allow "
+expect pass "hook: a read outside the repo is denied" test "$(hook Read '{"file_path":"/etc/hosts"}' | cut -d' ' -f1)" = deny
+expect pass "hook: an unknown tool is denied" test "$(hook WebFetch '{}' | cut -d' ' -f1)" = deny
+expect pass "hook: command substitution and an unquoted heredoc are denied" test "$(hbash 'echo "$(id)"' | cut -d' ' -f1)$(hbash 'cat <<EOF
+x
+EOF' | cut -d' ' -f1)" = denydeny
+expect pass "hook: malformed input and a missing scratch root fail closed" test "$(echo '{bad' | PROOF_SCRATCH_ROOT="$hr" python3 "$hk" | grep -c '"deny"')$(echo '{}' | env -u PROOF_SCRATCH_ROOT python3 "$hk" | grep -c '"deny"')" = 11
 expect pass "the real task puts the confirmation follow-up before the final review (or asks for the bare verdict) so the last call stays clean" grep -q "so the last Codex call of the run is still the skill's own final review" "$here/review-loop-proof.sh"
 
 # Round 23: an early exit of the REAL codex-call.sh (bad arguments, missing prompt or role file) never reaches the codex shim, so it used to leave no event and an earlier clean review stood
