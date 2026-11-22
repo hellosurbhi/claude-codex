@@ -341,6 +341,11 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "{\\"type\\":\\"thread.started\\",\
 PATH="$tmp/errbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>"$tmp/errout.txt"
 expect pass "codex-call.sh reports a message-less JSON error event whole (usage_limit visible)" grep -q "usage_limit" "$tmp/errout.txt"
 expect pass "codex-call.sh carries the v2 contract line" grep -qx '# contract: codex-call v2 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)' "$here/../scripts/codex-call.sh"
+# cc11-main-r7 finding 1: every credential shape the README says the scan refuses has a refused fixture, and every fixture is promised (mechanical, so the two cannot drift).
+expect pass "every credential shape the README promises has a refused fixture in check-content-scan.py and vice versa" python3 "$here/check-content-scan.py" --readme "$here/../README.md"
+r7tmp=$(mktemp); sed 's/Slack tokens; /Slack tokens; Stripe live keys; /' "$here/../README.md" > "$r7tmp"
+expect fail "the README parity check fails when the README promises a shape with no fixture" python3 "$here/check-content-scan.py" --readme "$r7tmp"
+rm -f "$r7tmp"
 # cc11-main-r5 finding 2: the README must name the position the contract line really has (line 1 is the shebang).
 expect pass "the README places the codex-call.sh contract line on the line it really is on" test "$(sed -n 2p "$here/../scripts/codex-call.sh" | cut -c1-22)" = "# contract: codex-call" -a -n "$(grep -F 'The second line of `scripts/codex-call.sh` is a contract line' "$here/../README.md")"
 

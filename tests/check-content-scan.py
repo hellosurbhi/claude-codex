@@ -3,6 +3,39 @@
 # source file. The skill therefore prescribes TWO checks: the secret-shaped-path check (prints nothing) and this content scan of the added lines (exit status exactly 1). This extracts BOTH
 # exact commands from the skill text and runs them with bash on throwaway repos from a subdirectory, so a missing, reworded or cwd-relative clause fails here instead of passing on wording.
 import os, re, subprocess, sys, tempfile
+# cc11-main-r7: EVERY credential shape the README promises the scan refuses has a fixture here, keyed by the id the README bullet uses; test-checkers.sh compares the two lists (--list-shapes),
+# so a promised shape without a fixture, or a fixture the README never mentions, fails instead of drifting.
+VALUE = "abcd1234efgh5678ijkl"
+SHAPES = [
+    ("private-key-block", "-----BEGIN RSA PRIVATE KEY-----\n"), ("aws-access-key-id", "id AKIAABCDEFGHIJKLMNOP\n"), ("github-token", "t ghp_" + "a" * 36 + "\n"),
+    ("github-fine-grained-token", "t github_pat_11ABC\n"), ("sk-key", "k sk-" + "a" * 24 + "\n"), ("slack-token", "t xoxb-123\n"), ("google-api-key", "k AIza" + "a" * 35 + "\n"),
+] + [("name-" + n, "const %s = \"%s\";\n" % (n, VALUE)) for n in ("key", "api_key", "apiKey", "secret_key", "access_key", "client_secret", "auth_token", "password", "passwd", "pwd", "private_key", "API-KEY", "Token", "SECRET")] + [
+    ("value-double-quoted", "password = \"correct-horse-battery\"\n"), ("value-single-quoted", "PASSWORD: 'correct-horse-battery'\n"), ("value-backtick-quoted", "const secret = `%s`;\n" % VALUE),
+    ("value-unquoted-env", "API_KEY=%s\n" % VALUE), ("value-unquoted-yaml", "key: %s\n" % VALUE), ("value-php-arrow", "'key' => '%s',\n" % VALUE), ("value-json", "{\"token\": \"%s\"}\n" % VALUE),
+    ("value-go-define", "secret := \"%s\"\n" % VALUE), ("value-with-spaces", "password = \"correct horse battery staple\"\n"),
+]
+# README phrase -> fixture id prefixes. The README sentence "The scan looks for: A; B; ...;" is parsed, so a shape promised there with no fixture (or promised nowhere) fails.
+PROMISED = {"private key blocks": ["private-key-block"], "AWS access key ids": ["aws-access-key-id"], "GitHub tokens": ["github-token", "github-fine-grained-token"], "OpenAI-style sk- keys": ["sk-key"],
+            "Slack tokens": ["slack-token"], "Google API keys": ["google-api-key"], "quoted assignment": ["name-", "value-double-quoted", "value-single-quoted", "value-backtick-quoted", "value-with-spaces", "value-json"],
+            "unquoted assignment": ["value-unquoted-", "value-php-arrow", "value-go-define"]}
+def readme_check(readme):
+    m = re.search(r"The scan looks for: (.*?)\. Short values", open(readme, encoding="utf-8").read(), re.S)
+    if not m: return ["README has no 'The scan looks for: ... . Short values' sentence"]
+    items = [re.sub(r"\s*\(.*?\)", "", i).replace("`", "").strip() for i in re.split(r";\s*(?:and )?", m.group(1))]
+    items = ["quoted assignment" if i.startswith("an assignment to any name") else "unquoted assignment" if i.startswith("the same names") else i for i in items]
+    bad = ["README promises '%s' but the fixture table has no entry for it" % i for i in items if i not in PROMISED]
+    ids = [i for i, _ in SHAPES]
+    for i in items:
+        for pre in PROMISED.get(i, []):
+            if not any(x.startswith(pre) for x in ids): bad.append("README promises '%s' but no fixture id starts with %s" % (i, pre))
+    covered = [pre for i in items for pre in PROMISED.get(i, [])]
+    bad += ["fixture %s is covered by no README promise" % x for x in ids if not any(x.startswith(pre) for pre in covered)]
+    return bad
+if sys.argv[1:2] == ["--readme"]:
+    r = readme_check(sys.argv[2])
+    print("\n".join(r)); sys.exit(1 if r else 0)
+if sys.argv[1:] == ["--list-shapes"]:
+    print("\n".join(i for i, _ in SHAPES)); sys.exit(0)
 text = open(sys.argv[1], encoding="utf-8").read()
 pm = re.search(r"`(git diff --name-only [^`]*<base commit>\.\.HEAD -- [^`]*)`", text)
 sm = re.search(r"`(d=\$\(git diff [^`]*<base commit>\.\.HEAD -- ':\(top\)'\) && [^`]*)`", text)
@@ -34,10 +67,10 @@ with tempfile.TemporaryDirectory() as d:
     case("clean diff", True, [("app/clean.js", "const a = 1;\nconst note = 'hello';\n")])
     case("inline key in a normal .js file", False, [("app/api.js", "const apiKey = \"abcd1234efgh5678ijkl\";\n")])
     case("secret-shaped path", False, [("app/Secrets.json", "{}")])
-    for label, body in (("private key block", "-----BEGIN RSA PRIVATE KEY-----\n"), ("AWS key id", "id AKIAABCDEFGHIJKLMNOP\n"),
-                        ("GitHub token", "t ghp_" + "a" * 36 + "\n"), ("GitHub fine-grained token", "t github_pat_11ABC\n"), ("sk- key", "k sk-" + "a" * 24 + "\n"),
-                        ("Slack token", "t xoxb-123\n"), ("Google key", "k AIza" + "a" * 35 + "\n"), ("single-quoted password", "PASSWORD: 'correct-horse-battery'\n")):
-        case("added %s" % label, False, [("app/%s.js" % label.replace(" ", "_"), body)])
+    for sid, body in SHAPES:
+        case("shape %s" % sid, False, [("app/shape_%s.js" % sid, body)])
+    for sid, body in (("short placeholder assignment", "const token = 'x';\n"), ("numeric key", "key = 1\n"), ("a name that only ends in key-like letters", "const monkeyCount = 5;\n"), ("short env value", "KEY=abc\n")):
+        case("not a credential: %s" % sid, True, [("app/ok_%s.js" % sid.replace(" ", "_"), body)])
     # round 5: the scan covers the WHOLE payload (added, removed and context lines), so removing a credential or leaving it on an unchanged line next to a change is still refused.
     def refused(label, setup):
         base = g("rev-parse", "HEAD").strip(); setup(); commit(label); ok, paths, rc = allowed(d, "app", base)
