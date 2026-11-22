@@ -133,7 +133,10 @@ python3 -c 'import json,os,sys; p=json.loads(os.environ["EV_PROV"]); sys.exit(0 
 # to the implementation phase, exactly as the fake does. The repo is PROOF_REPO (set by review-loop-proof.sh), else the git top of the working directory.
 prepo="${PROOF_REPO:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}"
 impl=no; python3 "$here/check-impl.py" "$prepo/app.py" 2>/dev/null && impl=yes
-EV_META="state=$(python3 "$here/state-hash.py" "$prepo" 2>/dev/null) impl=$impl"; export EV_META
+# WHY audit= is recorded here, from the sandbox the call asked for (r11 finding 2): a Codex test audit runs read-only and an implementation call needs workspace-write, so check-scripted.py
+# --audit can pick the latest audit ATTEMPT, including one that failed or returned no verdict, without reading its reply.
+audit=yes; for a in "${argv[@]+"${argv[@]}"}"; do [[ $a == workspace-write ]] && audit=no; done
+EV_META="state=$(python3 "$here/state-hash.py" "$prepo" 2>/dev/null) impl=$impl audit=$audit"; export EV_META
 python3 "$here/evlog.py" "$EVLOG" "$kind" "$logrc" "$resume" "$tid" "$pf" "$so" "$so.err" -- "${argv[@]}"
 cat "$o"; cat "$e" >&2
 exit "$rc"

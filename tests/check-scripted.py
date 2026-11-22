@@ -17,12 +17,13 @@ if mode == "rounds":
             k += 1
     sys.exit(0 if k == int(sys.argv[3]) else 1)
 if mode == "final" and "--audit" in sys.argv:
-    # tdd-execute-codex (r10 finding 2): Codex only AUDITS the tests there (a Claude agent reviews the implementation), so what the wrapper log can bind is
-    # that the LAST Codex call that returned a verdict was clean (APPROVED, zero findings), exited 0 and recorded the state it audited. Implementation
-    # replies carry no verdict and are skipped; a later BLOCKED or findings verdict still fails.
+    # tdd-execute-codex (r10 finding 2, r11 finding 2): Codex only AUDITS the tests there (a Claude agent reviews the implementation). The LATEST audit attempt must
+    # have exited 0 with a clean verdict (APPROVED, zero findings) and recorded the state it audited. An audit attempt is a call the shim marked audit=yes at call time
+    # (it asked for the read-only sandbox); implementation calls are marked audit=no and are skipped, whatever they returned.
+    # WHY marked at call time and not "has a verdict": a failed or malformed re-audit has no valid verdict, so filtering by verdict dropped it and left an earlier clean audit standing.
     # WHY not bound to the final state: the implementation legitimately changes the files after the audit; the final review is the review record's job.
-    v = [e for e in evs if wlog.valid_verdict(e) is not None]
-    sys.exit(0 if v and v[-1]["exit"] == 0 and wlog.is_clean(v[-1]) and v[-1].get("meta", {}).get("state") else 1)
+    a = [e for e in evs if e.get("meta", {}).get("audit") == "yes"]
+    sys.exit(0 if a and a[-1]["exit"] == 0 and wlog.is_clean(a[-1]) and a[-1].get("meta", {}).get("state") else 1)
 if mode == "final":
     # the LAST execution is a clean reply, given for the state the run ended in (and, with --impl, after add() existed)
     if not evs:

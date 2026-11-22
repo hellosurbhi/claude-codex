@@ -1183,28 +1183,43 @@ expect pass "the shim records the final-state hash and impl=yes in the real even
 printf 'x=1\n' > "$tmp/run/repo/app.py"
 PROOF_REPO="$tmp/run/repo" REAL_CODEX="$tmp/realbin/codex" viawrap exec --json prompt >/dev/null 2>&1
 expect pass "the shim records impl=no when add() does not exist" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["meta"].get("impl"))' "$here" "$EVLOG")" = no
+audmeta() { python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["meta"].get("audit"))' "$here" "$EVLOG"; }
+PROOF_REPO="$tmp/run/repo" REAL_CODEX="$tmp/realbin/codex" viawrap exec --json --sandbox read-only prompt >/dev/null 2>&1
+expect pass "the shim marks a read-only call as an audit attempt at call time" test "$(audmeta)" = yes
+PROOF_REPO="$tmp/run/repo" REAL_CODEX="$tmp/realbin/codex" viawrap exec --json --sandbox workspace-write prompt >/dev/null 2>&1
+expect pass "the shim marks a workspace-write call as no audit at call time" test "$(audmeta)" = no
 
 # r10 finding 2: tdd-execute-codex and execute-codex review with a Claude code-reviewer agent, not Codex. The real proof therefore (a) binds the LAST Codex
 # test-audit verdict (tdd-execute-codex) and (b) validates the durable review record the skill prescribes: .claude/review/final-review.txt holds
 # `REVIEWED-DIFF: <sha256 of the reviewed diff>` then the reviewer's verbatim reply.
 au() { python3 "$here/check-scripted.py" "$EVLOG" final X --real --audit; }
 mkrun; expect fail "audit: no Codex verdict at all fails the test-audit check" au
-mkrun; LINEMETA="state=S0 impl=no" line real 0 review "${TID}VERDICT: BLOCKED\nHIGH: weak test\n"
+mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "${TID}VERDICT: BLOCKED\nHIGH: weak test\n"
 expect fail "audit: a last Codex verdict of BLOCKED with a finding fails" au
-mkrun; LINEMETA="state=S0 impl=no" line real 0 review "${TID}VERDICT: BLOCKED\n"
+mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "${TID}VERDICT: BLOCKED\n"
 expect fail "audit: a bare BLOCKED with no finding is not clean" au
-mkrun; LINEMETA="state=S0 impl=no" line real 0 review "${TID}VERDICT: WARNING\n"
+mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "${TID}VERDICT: WARNING\n"
 expect fail "audit: a bare WARNING with no finding is not clean" au
-mkrun; LINEMETA="state=S0 impl=no" line real 0 review "${TID}VERDICT: APPROVED\nCRITICAL: a real finding\n"
+mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "${TID}VERDICT: APPROVED\nCRITICAL: a real finding\n"
 expect fail "audit: APPROVED beside a finding is not clean" au
-mkrun; LINEMETA="state=S0 impl=no" line real 0 review "$TID$FIND"; LINEMETA="state=S0 impl=no" line real 0 review "$TID$CLEAN"
+mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "$TID$FIND"; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"
 expect pass "audit: findings then a clean APPROVED with zero findings passes" au
-mkrun; LINEMETA="state=S0 impl=no" line real 0 review "$TID$CLEAN"; LINEMETA="state=S1 impl=yes" line real 0 impl "${TID}Implemented add() in app.py.\n"
+mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S1 impl=yes audit=no" line real 0 impl "${TID}Implemented add() in app.py.\n"
 expect pass "audit: a later Codex implementation reply (no verdict) does not displace the clean audit" au
-mkrun; LINEMETA="state=S0 impl=no" line real 0 review "$TID$CLEAN"; LINEMETA="state=S0 impl=no" line real 0 review "$TID$BLOCK"
+mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "$TID$BLOCK"
 expect fail "audit: a clean audit followed by a later BLOCKED verdict fails" au
-mkrun; line real 0 review "$TID$CLEAN"
+mkrun; LINEMETA="audit=yes" line real 0 review "$TID$CLEAN"
 expect fail "audit: a clean verdict that recorded no state fails" au
+# r11 finding 2: an audit ATTEMPT is told apart from an implementation call by the audit= marker the shim records at call time (the sandbox the call asked for),
+# never by whether a verdict came back, so a failed or malformed re-audit cannot be filtered away before the latest one is chosen.
+mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S0 impl=no audit=yes" line real 1 review "codex-call: UNREVIEWED"
+expect fail "audit: a clean audit followed by a failed re-audit fails" au
+mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "${TID}no verdict here at all\n"
+expect fail "audit: a clean audit followed by a malformed re-audit fails" au
+mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S1 impl=yes audit=no" line real 1 impl "codex-call: UNREVIEWED"
+expect pass "audit: a clean audit followed by a failed implementation call still passes" au
+mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 1 review "codex-call: UNREVIEWED"; LINEMETA="state=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"
+expect pass "audit: a failed audit followed by a clean re-audit passes" au
 # the review record: built against a real tiny git repo, hashing the same diff command the skills prescribe
 rr() { python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"; }
 rrhash() { (cd "$tmp/rr" && git add -N app.py 2>/dev/null; git diff "$(git rev-list --max-parents=0 HEAD)" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' | shasum -a 256 | cut -d' ' -f1); }
