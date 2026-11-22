@@ -17,20 +17,23 @@
 set -euo pipefail
 command -v python3 >/dev/null || { echo "codex-call: python3 is required (it parses the Codex event stream). Treat as UNREVIEWED." >&2; exit 2; }
 # WHY the repository top and not $PWD (cc11-main-r2 finding 3): Codex reviews relative to --cd, so a review started from a subfolder saw only that folder.
-sandbox=read-only role="" resume="" dir="$(git rev-parse --show-toplevel 2>/dev/null || printf "%s" "$PWD")"
+sandbox=read-only role="" resume="" resume_set=0 dir="$(git rev-parse --show-toplevel 2>/dev/null || printf "%s" "$PWD")"
 while [[ $# -gt 1 ]]; do
   case "$1" in
     --sandbox) sandbox="$2"; shift 2 ;;
     --role) role="$2"; shift 2 ;;
-    --resume) resume="$2"; shift 2 ;;
+    --resume) resume="$2"; resume_set=1; shift 2 ;;
     --cd) dir="$2"; shift 2 ;;
     *) break ;;
   esac
 done
+# WHY an explicitly empty --resume is an error and not "start a new session" (r19 finding 2): a caller that lost its thread id would silently open a fresh session and the continued review
+# would run without the context it relied on. "Not passed" (resume_set=0) is still a new session; "passed but empty" never reaches codex.
+if [[ $resume_set -eq 1 && -z "$resume" ]]; then echo "codex-call: empty --resume value (a thread id was expected). Treat as UNREVIEWED." >&2; exit 2; fi
 prompt="$1"
 [[ -n "$role" ]] && prompt="$(cat "$role")"$'\n\n'"$prompt"
 out="$(mktemp)"; trap 'rm -f "$out"' EXIT
-if [[ -n "$resume" ]]; then
+if [[ $resume_set -eq 1 ]]; then
   # WHY the profile, sandbox and cwd go BEFORE `resume`: the resume subcommand has no
   # -p/-s/-C flags of its own, and relying on the stored thread settings left a
   # continued audit without an explicit review profile or read-only policy
@@ -47,7 +50,7 @@ tid, msg, done, errs = "", "", False, []
 for line in open(sys.argv[1]):
     try: e = json.loads(line)
     except ValueError: continue
-    if e.get("type") == "thread.started": tid = e["thread_id"]
+    if e.get("type") == "thread.started": tid = str(e.get("thread_id") or "")
     if e.get("type") == "turn.completed": done = True
     if e.get("type") == "turn.failed":
         done = False
@@ -59,6 +62,9 @@ for line in open(sys.argv[1]):
 # WHY require turn.completed: a dropped connection mid-run leaves an earlier progress
 # message ("I'll read the plan...") as the last agent_message; returning that would
 # look like a verdict-less answer instead of a dead call.
+# WHY a completed turn with no thread id is a failed call (r19 finding 2): the caller would print an empty THREAD_ID, and a later resume with it would start a new session and lose the review context.
+if msg and done and sys.argv[2] == "0" and not tid:
+    sys.exit("codex-call: Codex completed the turn but reported no thread id, so the review cannot be resumed. Treat as UNREVIEWED (no verdict).")
 if not msg or not done or sys.argv[2] != "0":
     # WHY print the CLI's own non-JSON lines: auth, profile and quota errors arrive
     # there, and the scratch file is deleted on exit, so this is the only copy.

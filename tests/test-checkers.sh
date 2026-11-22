@@ -803,6 +803,26 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "{\\"type\\":\\"thread.started\\",\
 PATH="$tmp/errbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>"$tmp/errout.txt"
 expect pass "codex-call.sh reports a message-less JSON error event whole (usage_limit visible)" grep -q "usage_limit" "$tmp/errout.txt"
 expect pass "codex-call.sh carries the v2 contract line" grep -qx '# contract: codex-call v2 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)' "$here/../scripts/codex-call.sh"
+# r19 finding 2: a completed turn with no thread id is a failed call (a later resume would start a new session and lose the review context), and an explicitly empty --resume is rejected instead of starting a new session
+mkdir -p "$tmp/tidbin"
+cat > "$tmp/tidbin/codex" <<'FAKE'
+#!/usr/bin/env bash
+echo called >> "$TIDCALLS"
+if [ -n "${FAKE_TID_JSON:-}" ]; then printf '%s\n' "$FAKE_TID_JSON"; fi
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"VERDICT: APPROVED"}}' '{"type":"turn.completed"}'
+FAKE
+chmod +x "$tmp/tidbin/codex"
+tidcc() { PATH="$tmp/tidbin:$PATH" TIDCALLS="$tmp/tidcalls.txt" bash "$here/../scripts/codex-call.sh" "$@"; }
+tidrun() { rm -f "$tmp/tidcalls.txt"; FAKE_TID_JSON="$1" tidcc "${@:2}" >"$tmp/tidout.txt" 2>"$tmp/tiderr.txt"; local rc=$?; cat "$tmp/tiderr.txt" >&2; return $rc; }
+tidrun '{"type":"thread.started","thread_id":"t9"}' "p"
+expect pass "codex-call.sh control: a completed turn with a thread id prints THREAD_ID and the message" grep -qx 'THREAD_ID: t9' "$tmp/tidout.txt"
+expectm fail "codex-call.sh rejects a completed turn whose thread id is empty" 'no thread id' tidrun '{"type":"thread.started","thread_id":""}' "p"
+expect pass "the empty-thread-id rejection says so and prints no verdict" sh -c 'grep -q "no thread id" "$1" && ! grep -q "VERDICT" "$2" && ! grep -q "THREAD_ID" "$2"' _ "$tmp/tiderr.txt" "$tmp/tidout.txt"
+expectm fail "codex-call.sh rejects a completed turn with no thread.started event" 'no thread id' tidrun "" "p"
+expectm fail "codex-call.sh rejects an explicitly empty --resume" 'empty --resume' tidrun '{"type":"thread.started","thread_id":"t9"}' --resume "" "p"
+expect pass "the empty --resume rejection names the argument and never calls codex" sh -c 'grep -q "empty --resume" "$1" && [ ! -e "$2" ]' _ "$tmp/tiderr.txt" "$tmp/tidcalls.txt"
+tidrun '{"type":"thread.started","thread_id":"t9"}' --resume t9 "p"
+expect pass "control: a non-empty --resume still resumes" grep -qx 'THREAD_ID: t9' "$tmp/tidout.txt"
 # cc11-main-r5 finding 2: the README must name the position the contract line really has (line 1 is the shebang).
 expect pass "the README places the codex-call.sh contract line on the line it really is on" test "$(sed -n 2p "$here/../scripts/codex-call.sh" | cut -c1-22)" = "# contract: codex-call" -a -n "$(grep -F 'The second line of `scripts/codex-call.sh` is a contract line' "$here/../README.md")"
 
