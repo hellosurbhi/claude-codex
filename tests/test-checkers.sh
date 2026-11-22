@@ -970,6 +970,27 @@ expect pass "a missing prompt file calls no codex and prints no verdict" sh -c '
 expectm fail "codex-call.sh rejects an empty prompt file" 'prompt file' bigcc --prompt-file "$tmp/emptyprompt.txt"
 expect pass "an empty prompt file calls no codex and prints no verdict" sh -c '[ ! -e "$1" ] && ! grep -q "VERDICT\|THREAD_ID" "$2"' _ "$tmp/bigcalls.txt" "$tmp/bigout.txt"
 expectm fail "codex-call.sh rejects a prompt file together with a positional prompt" 'both' bigcc --prompt-file "$tmp/bigprompt.txt" "also positional"
+# r21 finding 2: a failure anywhere before the send stops the call (nothing is sent, no verdict). One case per swallowed-failure site.
+nocall() { [ ! -e "$tmp/bigcalls.txt" ] && ! grep -q "VERDICT\|THREAD_ID" "$tmp/bigout.txt"; }
+expectm fail "codex-call.sh: a missing role file stops the call" 'role file' bigcc --role "$tmp/no-such-role.txt" "short prompt"
+expect pass "a missing role file sends nothing and prints no verdict" nocall
+: > "$tmp/emptyrole.txt"
+expectm fail "codex-call.sh: an empty role file stops the call" 'role file' bigcc --role "$tmp/emptyrole.txt" "short prompt"
+expect pass "an empty role file sends nothing and prints no verdict" nocall
+printf 'ROLE' > "$tmp/unreadrole.txt"; chmod 000 "$tmp/unreadrole.txt"
+if [ "$(id -u)" != 0 ]; then
+  expectm fail "codex-call.sh: an unreadable role file stops the call" 'role file' bigcc --role "$tmp/unreadrole.txt" "short prompt"
+  expect pass "an unreadable role file sends nothing and prints no verdict" nocall
+  cp "$tmp/bigrole.txt" "$tmp/unreadprompt.txt"; chmod 000 "$tmp/unreadprompt.txt"
+  expectm fail "codex-call.sh: an unreadable prompt file stops the call" 'prompt file' bigcc --prompt-file "$tmp/unreadprompt.txt"
+  expect pass "an unreadable prompt file sends nothing and prints no verdict" nocall
+fi
+mkdir -p "$tmp/rolefile-dir"
+expectm fail "codex-call.sh: a role path that is a directory stops the call" 'role file' bigcc --role "$tmp/rolefile-dir" "short prompt"
+mkdir -p "$tmp/nomktemp"; printf '#!/bin/sh\nexit 1\n' > "$tmp/nomktemp/mktemp"; chmod +x "$tmp/nomktemp/mktemp"
+expectm fail "codex-call.sh: temp files that cannot be created stop the call" 'temp file' bash -c 'PATH="$1:$2:$PATH" BIGCALLS="$3" BIGARGS="$4" BIGSHA="$5" bash "$6" "short prompt" 2>&1 >/dev/null; exit "${PIPESTATUS[0]}"' _ "$tmp/nomktemp" "$tmp/bigbin" "$tmp/bigcalls.txt" "$tmp/bigargs.txt" "$tmp/bigsha.txt" "$here/../scripts/codex-call.sh"
+expect pass "a failure to write the result stops with a nonzero exit (python output step is not swallowed)" sh -c '! PATH="$1:$PATH" BIGCALLS="$2" BIGARGS="$3" BIGSHA="$4" bash "$5" "short prompt" >/dev/full 2>/dev/null' _ "$tmp/bigbin" "$tmp/bigcalls.txt" "$tmp/bigargs.txt" "$tmp/bigsha.txt" "$here/../scripts/codex-call.sh"
+expect pass "a codex stream with a non-object JSON line still gives a nonzero exit and no verdict" sh -c 'mkdir -p "$1/nb"; printf "%s\n" "#!/usr/bin/env bash" "cat >/dev/null" "echo 5" "echo \"[1]\"" > "$1/nb/codex"; chmod +x "$1/nb/codex"; o="$(PATH="$1/nb:$PATH" bash "$2" "p" 2>/dev/null)"; rc=$?; [ "$rc" -ne 0 ] && ! printf "%s" "$o" | grep -q "VERDICT\|THREAD_ID"' _ "$tmp" "$here/../scripts/codex-call.sh"
 # cc11-main-r5 finding 2: the README must name the position the contract line really has (line 1 is the shebang).
 expect pass "the README places the codex-call.sh contract line on the line it really is on" test "$(sed -n 2p "$here/../scripts/codex-call.sh" | cut -c1-22)" = "# contract: codex-call" -a -n "$(grep -F 'The second line of `scripts/codex-call.sh` is a contract line' "$here/../README.md")"
 

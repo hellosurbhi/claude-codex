@@ -40,10 +40,25 @@ if [[ $pfile_set -eq 1 ]]; then
   if [[ $# -gt 0 ]]; then echo "codex-call: give either --prompt-file or a positional prompt, not both. Treat as UNREVIEWED." >&2; exit 2; fi
   if [[ -z "$pfile" || ! -s "$pfile" ]]; then echo "codex-call: prompt file is missing or empty: ${pfile:-<empty name>}. No call was made; treat as UNREVIEWED." >&2; exit 2; fi
 elif [[ $# -lt 1 ]]; then echo "codex-call: no prompt (pass --prompt-file FILE or a prompt). Treat as UNREVIEWED." >&2; exit 2; fi
-out="$(mktemp)"; pin="$(mktemp)"; trap 'rm -f "$out" "$pin"' EXIT
-if [[ $pfile_set -eq 1 ]]; then cp "$pfile" "$pin"; else printf '%s' "$1" > "$pin"; fi
+# WHY every step below checks its own status (r21 finding 2): `A && B` and a command substitution inside printf do not trip `set -e` when A (or the inner cat) fails, so a missing role file used to
+# send the prompt WITHOUT its role text, and a failed temp-file write used to go on. Each step now stops with a message and exit 2, before anything is sent.
 if [[ -n "$role" ]]; then
-  { printf '%s\n\n' "$(cat "$role")"; cat "$pin"; } > "$pin.role" && mv "$pin.role" "$pin"
+  if [[ ! -f "$role" || ! -r "$role" || ! -s "$role" ]]; then echo "codex-call: role file is missing, unreadable or empty: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; fi
+  role_text="$(cat "$role")" || { echo "codex-call: could not read the role file: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  [[ -n "$role_text" ]] || { echo "codex-call: role file has no text: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+fi
+out=""; pin=""; trap 'rm -f "$out" "$pin" "$pin.role"' EXIT
+out="$(mktemp)" || { echo "codex-call: could not create a temp file (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
+pin="$(mktemp)" || { echo "codex-call: could not create a temp file (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
+if [[ $pfile_set -eq 1 ]]; then
+  cp "$pfile" "$pin" || { echo "codex-call: could not read the prompt file: $pfile. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+else
+  printf '%s' "$1" > "$pin" || { echo "codex-call: could not write the prompt to a temp file. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+fi
+[[ -s "$pin" ]] || { echo "codex-call: the prompt is empty after reading it. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+if [[ -n "$role" ]]; then
+  { printf '%s\n\n' "$role_text" && cat "$pin"; } > "$pin.role" || { echo "codex-call: could not build the prompt with the role text. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  mv "$pin.role" "$pin" || { echo "codex-call: could not build the prompt with the role text. No call was made; treat as UNREVIEWED." >&2; exit 2; }
 fi
 if [[ $resume_set -eq 1 ]]; then
   # WHY the profile, sandbox and cwd go BEFORE `resume`: the resume subcommand has no
