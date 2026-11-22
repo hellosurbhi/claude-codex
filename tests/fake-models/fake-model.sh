@@ -46,6 +46,8 @@ case "$name" in
     if [[ $nonreview == 1 ]]; then echo "fake-model: not a review invocation" > "$errf"; rc=2; log; exit "$rc"; fi
     case "${FAKE_CLAUDE_MODE:-clean}" in
       fail) echo "partial reply on stdout" > "$outf"; rc=3 ;;
+      # WHY (cc11-main-r1 finding 1): the installed reviewer.sh discards the model's exit status, so a failed call can still print an approval; this mode reproduces that.
+      failapproved) printf 'VERDICT: APPROVED\n' > "$outf"; rc=3 ;;
       findings) printf 'VERDICT: APPROVED\nMEDIUM: rename x\n' > "$outf" ;;
       *) printf 'VERDICT: APPROVED\n' > "$outf" ;;
     esac ;;

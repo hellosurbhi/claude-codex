@@ -248,6 +248,14 @@ mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp
 FAKE_CLAUDE_MODE=fail bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "a failed model run fails the launcher and its output stays in the model event" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); m=[e for e in es if e["wrapper"]=="model"][-1]; print(es[-1]["wrapper"]=="spy" and es[-1]["exit"]!=0 and m["exit"]==3 and "partial reply on stdout" in m["stdout"])' "$here" "$EVLOG")" = "True"
 
+# cc11-main-r1 finding 1: a model call that exits nonzero after printing VERDICT: APPROVED is no verdict, so a later claim of review is rejected.
+mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
+FAKE_CLAUDE_MODE=failapproved bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+expect fail "a nonzero model call that printed VERDICT: APPROVED is not accepted as a review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
+bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
+expect pass "control: the same call with a zero exit and the same approval is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+
 # r17: the reviewed diff must match the remaining change exactly (whitespace, operators, the file set).
 rv() { mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; }
 rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py
