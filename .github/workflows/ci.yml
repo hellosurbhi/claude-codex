@@ -34,3 +34,7 @@ jobs:
         # WHY CHECKERS_NO_SPY=1: the spy cases drive the private installed reviewer.sh, which a public clone does not have.
         # The suite skips only those cases and prints how many, so a silent skip is visible in the log.
         run: CHECKERS_NO_SPY=1 bash tests/test-checkers.sh
+      - name: Checker suite never touches private tooling (tripwire home)
+        # WHY (r32): CHECKERS_NO_SPY=1 must not execute anything from ~/.claude or a real model CLI. An empty home cannot prove that, so this run
+        # puts tripwires there (and first on PATH) and fails if one fires. It repeats the suite, which is what makes the proof cover every case.
+        run: bash tests/check-no-spy-tripwire.sh
