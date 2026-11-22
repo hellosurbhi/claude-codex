@@ -23,9 +23,9 @@ except OSError:
 m = re.fullmatch(r"REVIEWED-DIFF: ([0-9a-f]{64})", lines[0].strip()) if lines else None
 if not m:
     print("first line is not REVIEWED-DIFF: <sha256>", file=sys.stderr); sys.exit(1)
-# WHY the second line (r17 finding 1): the hash is of the raw snapshot, but a fallback reviewer sees it only after redaction, so the record must say which form the reviewer saw; the checker cannot know which reviewer ran, so it only requires a valid claim.
-if len(lines) < 2 or lines[1].strip() not in ("REVIEWED-AS: raw-snapshot", "REVIEWED-AS: redacted-snapshot"):
-    print("second line is not REVIEWED-AS: raw-snapshot or REVIEWED-AS: redacted-snapshot", file=sys.stderr); sys.exit(1)
+# WHY the second line is exactly `redacted-snapshot` (r19 finding 1, replacing r17's raw-or-redacted choice): the hash is of the raw snapshot, but EVERY reviewer (the primary and the tier S fallback alike) is handed only that snapshot after redact-diff.sh, so a record that claims `raw-snapshot` describes a review the workflow no longer allows. The checker cannot know which reviewer ran, so it requires the one valid claim.
+if len(lines) < 2 or lines[1].strip() != "REVIEWED-AS: redacted-snapshot":
+    print("second line is not REVIEWED-AS: redacted-snapshot", file=sys.stderr); sys.exit(1)
 if wlog.verdict_state("\n".join(lines[2:])) != "clean":
     print("the recorded reply is not a clean verdict (APPROVED with zero findings)", file=sys.stderr); sys.exit(1)
 # WHY the whole .claude/review directory is excluded from the diff (r11 finding 3, r14 finding 3): the skill writes the record and the reviewed.diff snapshot around hashing, so a tracked or intent-to-add file there would sit inside the hashed diff and change it on every write,

@@ -377,13 +377,13 @@ import sys
 for p in sys.argv[1:]:
     t = open(p).read(); open(p, "w").write(t.replace(">> \"$CTX\"", "> \"$CTX\""))
 PY
-mirneg "a fallback sequence whose diff overwrites the context file instead of appending is caught" 'Fallback input sequence lacks .*set -o pipefail; git diff HEAD' "$tmp/mir8"; mirc claude-codex
+mirneg "a fallback sequence whose input overwrites the context file instead of appending is caught" 'Fallback input sequence lacks .if R=' "$tmp/mir8"; mirc claude-codex
 python3 - "$tmp/mir8/skills/claude-codex/SKILL.md" "$tmp/mir8/commands/claude-codex.md" <<'PY'
 import sys
 for p in sys.argv[1:]:
     t = open(p).read(); open(p, "w").write(t.replace(" | ~/.claude/config/scripts/redact-diff.sh >", " >"))
 PY
-mirneg "a fallback sequence that skips redact-diff.sh is caught" 'Fallback input sequence lacks .*set -o pipefail; git diff HEAD' "$tmp/mir8"; mirc claude-codex
+mirneg "a Review input that skips redact-diff.sh is caught" 'Review input sequence lacks .*set -o pipefail; git diff HEAD' "$tmp/mir8"; mirc claude-codex
 # r11 finding 1: scripts/redact-diff.sh masks credential values in a diff (added AND deleted lines), keeps the diff structure, leaves a clean diff byte-identical.
 red="$here/../scripts/redact-diff.sh"
 fx="$tmp/secrets.diff"
@@ -584,11 +584,13 @@ printf 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-hell
 "$red" < "$tmp/clean.diff" > "$tmp/clean.out"
 expect pass "a clean diff comes out byte-identical" cmp -s "$tmp/clean.diff" "$tmp/clean.out"
 # a fallback sequence run for real: with the script missing no context file survives and the reviewer is never called.
-sendtry() { # $1 = redactor path; runs the claude-codex fallback lines with a stub reviewer that records its call
+sendtry() { # $1 = redactor path; runs the claude-codex Review input block, then its fallback lines, with a stub reviewer that records its call
   python3 - "$here/../skills/claude-codex/SKILL.md" "$1" "$tmp/sendtry.sh" "$tmp/reviewer-called" <<'PY'
 import re, sys
 t = open(sys.argv[1]).read()
+ri = re.search(r"\*\*Review input \(every reviewer call\)\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
 b = re.search(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
+b = ri + "\n" + b
 b = b.replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[2]).replace("~/.claude/config/scripts/reviewer.sh S", "cp \"$CTX\" " + sys.argv[4] + " #")
 b = b.replace("<out-file>", "x")
 open(sys.argv[3], "w").write(b + "\n")
@@ -618,7 +620,7 @@ PYFB
     ok) printf 'two\n' >> "$tmp/fbrepo/f.txt"; printf 'a plan\n' > "$tmp/fbrepo/.claude/plan/feat.md"; fbsnap ;;
     nosnap) printf 'two\n' >> "$tmp/fbrepo/f.txt" ;;
     drift) printf 'two\n' >> "$tmp/fbrepo/f.txt"; fbsnap; printf 'three\n' >> "$tmp/fbrepo/f.txt" ;;
-    emptysnap) printf 'two\n' >> "$tmp/fbrepo/f.txt"; mkdir -p "$tmp/fbrepo/.claude/review"; : > "$tmp/fbrepo/.claude/review/reviewed.diff" ;;
+    emptysnap) printf 'two\n' >> "$tmp/fbrepo/f.txt"; mkdir -p "$tmp/fbrepo/.claude/review"; : > "$tmp/fbrepo/.claude/review/review-input.diff" ;;
     emptydiff) printf 'a plan\n' > "$tmp/fbrepo/.claude/plan/feat.md" ;;
     emptyplan) : > "$tmp/fbrepo/.claude/plan/feat.md" ;;
     noplan) printf 'two\n' >> "$tmp/fbrepo/f.txt" ;;
@@ -626,7 +628,7 @@ PYFB
   rm -f "$tmp/fb-called"; ( cd "$tmp/fbrepo" && TMPDIR="$tmp/fbtmp" START_SHA="$(git rev-parse HEAD)" bash "$tmp/fb.sh" >/dev/null 2>&1 )
   FBLEFT="$(ls -A "$tmp/fbtmp" | wc -l | tr -d ' ')"; [ -f "$tmp/fb-called" ]
 }
-fbsnap() { mkdir -p "$tmp/fbrepo/.claude/review"; git -C "$tmp/fbrepo" diff HEAD > "$tmp/fbrepo/.claude/review/reviewed.diff"; }  # what step 1 of the review record leaves behind
+fbsnap() { mkdir -p "$tmp/fbrepo/.claude/review"; git -C "$tmp/fbrepo" diff HEAD > "$tmp/fbrepo/.claude/review/review-input.diff"; }  # what the Review input block (or step 1 of the review record) leaves behind: the one masked input every reviewer gets
 fbclean() { fbtry "$1" "$2" || true; [ "$FBLEFT" -eq 0 ]; }  # true when no context or scratch file survived
 for fbf in skills/claude-codex/SKILL.md skills/execute-codex/SKILL.md skills/tdd-claude-codex/SKILL.md skills/tdd-execute-codex/SKILL.md skills/codex-mcp/SKILL.md skills/codex-mcp/reference.md commands/claude-codex.md commands/execute-codex.md commands/tdd-claude-codex.md commands/tdd-execute-codex.md; do
   expect pass "$fbf: the fallback block reaches the reviewer for a real change" fbtry "$here/../$fbf" ok
@@ -634,14 +636,13 @@ for fbf in skills/claude-codex/SKILL.md skills/execute-codex/SKILL.md skills/tdd
   expect pass "$fbf: an empty diff leaves no context file behind" fbclean "$here/../$fbf" emptydiff
 done
 fbdrift() { fbtry "$1" drift && grep -q "^+two" "$tmp/fb-called" && ! grep -q "^+three" "$tmp/fb-called"; }
-# r17 finding 1: the execute-family fallback is built FROM the step 1 snapshot, never from a second git diff, so the hash saved in the record identifies what the reviewer was given.
-for fbf in skills/execute-codex/SKILL.md skills/tdd-execute-codex/SKILL.md commands/execute-codex.md commands/tdd-execute-codex.md; do
-  expect pass "$fbf: the fallback context holds the snapshot bytes although the tree changed after the snapshot" fbdrift "$here/../$fbf"
-done
-for fbf in skills/execute-codex/SKILL.md skills/tdd-execute-codex/SKILL.md commands/execute-codex.md commands/tdd-execute-codex.md; do
-  expect fail "$fbf: the fallback never reaches the reviewer without a snapshot" fbtry "$here/../$fbf" nosnap
-  expect fail "$fbf: the fallback never reaches the reviewer with an empty snapshot" fbtry "$here/../$fbf" emptysnap
-  expect pass "$fbf: a missing snapshot leaves no context file behind" fbclean "$here/../$fbf" nosnap
+# r19 finding 1: EVERY diff workflow's fallback is built FROM the one review input (.claude/review/review-input.diff), never from a second git diff, so the fallback and the primary reviewer see the same masked bytes.
+FBDIFF="skills/claude-codex/SKILL.md skills/execute-codex/SKILL.md skills/tdd-claude-codex/SKILL.md skills/tdd-execute-codex/SKILL.md skills/codex-mcp/SKILL.md skills/codex-mcp/reference.md commands/claude-codex.md commands/execute-codex.md commands/tdd-claude-codex.md commands/tdd-execute-codex.md"
+for fbf in $FBDIFF; do
+  expect pass "$fbf: the fallback context holds the review input bytes although the tree changed after it was built" fbdrift "$here/../$fbf"
+  expect fail "$fbf: the fallback never reaches the reviewer without a review input" fbtry "$here/../$fbf" nosnap
+  expect fail "$fbf: the fallback never reaches the reviewer with an empty review input" fbtry "$here/../$fbf" emptysnap
+  expect pass "$fbf: a missing review input leaves no context file behind" fbclean "$here/../$fbf" nosnap
 done
 for fbf in skills/plan-codex/SKILL.md commands/plan-codex.md; do
   expect pass "$fbf: the fallback block reaches the reviewer for a real plan" fbtry "$here/../$fbf" ok
@@ -703,20 +704,22 @@ for p in sys.argv[1:]:
     open(p, "w").write(t2)
 PYX
 mirneg "a Review record hash computed inside the redirect (not into H first) is caught" 'Review record sequence lacks .*REVIEWED-DIFF: %s' "$tmp/mir8"; mirc execute-codex
-python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
+for fam in execute-codex claude-codex tdd-claude-codex tdd-execute-codex; do
+python3 - "$tmp/mir8/skills/$fam/SKILL.md" "$tmp/mir8/commands/$fam.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
-    t = open(p).read(); t2 = t.replace('(set -o pipefail; ~/.claude/config/scripts/redact-diff.sh < "$R/.claude/review/reviewed.diff" > "$DF")', '(set -o pipefail; git diff HEAD | ~/.claude/config/scripts/redact-diff.sh > "$DF")'); assert t2 != t
+    t = open(p).read(); t2 = t.replace('cat "$R/.claude/review/review-input.diff" >> "$CTX"', 'git diff HEAD | ~/.claude/config/scripts/redact-diff.sh >> "$CTX"'); assert t2 != t
     open(p, "w").write(t2)
 PYX
-mirneg "an execute-codex fallback that rebuilds its input with a second git diff is caught" 'runs a second git diff' "$tmp/mir8"; mirc execute-codex
-python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
+mirneg "a $fam fallback that rebuilds its input with a second git diff is caught" 'runs a second git diff' "$tmp/mir8"; mirc "$fam"
+done
+python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" "$tmp/mir8/commands/tdd-execute-codex.md" "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
-    t = open(p).read(); t2 = t.replace('the contents of `.claude/review/reviewed.diff`, the snapshot', 'the output of a fresh diff, the snapshot', 1); assert t2 != t
+    t = open(p).read(); t2 = t.replace('the contents of `.claude/review/review-input.diff`, the redacted snapshot', 'the output of a fresh diff, the redacted snapshot', 1); assert t2 != t
     open(p, "w").write(t2)
 PYX
-mirneg "a reviewer input that is not the step 1 snapshot is caught" 'must be the contents of .claude/review/reviewed.diff' "$tmp/mir8"; mirc tdd-execute-codex
+mirneg "a reviewer input that is not the redacted review input is caught" 'must be the contents of .claude/review/review-input.diff' "$tmp/mir8"; mirc tdd-execute-codex; mirc execute-codex
 python3 - "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
 import sys
 p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("} > .claude/review/final-review.txt", "} > /dev/null", 1))
@@ -773,6 +776,58 @@ assert s.count(a) == 2
 k = s.rindex(a); open(p, "w").write(s[:k] + s[k+len(a):])
 PYX
 mirneg "a Review record step 2 that no longer resolves the repo root is caught" 'must resolve the repo root' "$tmp/mir8"; mirc tdd-execute-codex
+# r19 finding 1: the PRIMARY reviewer gets the same masked input as the fallback. Reintroducing a prompt that tells the reviewer to run git diff itself (the unredacted tree), or one that
+# sends the raw snapshot, is caught in each family: claude-codex, tdd-claude-codex (Codex reviews) and tdd-execute-codex (Codex audits the tests; the Claude reviewer reads the snapshot).
+for fam in claude-codex tdd-claude-codex tdd-execute-codex; do
+python3 - "$tmp/mir8/skills/$fam/SKILL.md" "$tmp/mir8/commands/$fam.md" <<'PYX'
+import re, sys
+for p in sys.argv[1:]:
+    t = open(p).read()
+    t2, n = re.subn(r"(?m)^The diff to review is in the DIFF section at the end of this prompt \(the contents of `\.claude/review/review-input\.diff`[^\n]*$", "Run `git diff HEAD` to see all uncommitted changes, then review them.", t, count=1); assert n == 1, p
+    open(p, "w").write(t2)
+PYX
+mirneg "a $fam Codex prompt that tells the reviewer to run git diff itself is caught" 'tells the reviewer to run git diff itself|expected [0-9]+ Codex diff prompt' "$tmp/mir8"; mirc "$fam"
+python3 - "$tmp/mir8/skills/$fam/SKILL.md" "$tmp/mir8/commands/$fam.md" <<'PYX'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); t2 = t.replace("<the contents of `.claude/review/review-input.diff`>", "<the contents of `.claude/review/reviewed.diff`>"); assert t2 != t, p
+    open(p, "w").write(t2)
+PYX
+mirneg "a $fam Codex prompt whose DIFF section is the raw snapshot is caught" 'expected [0-9]+ Codex diff prompt' "$tmp/mir8"; mirc "$fam"
+done
+python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); t2 = t.replace("Send every reviewer `.claude/review/review-input.diff` (the primary reviewer and the tier S fallback alike), never a fresh `git diff` and never `.claude/review/reviewed.diff`", "Send the reviewer `.claude/review/reviewed.diff`, never a fresh `git diff`"); assert t2 != t, p
+    open(p, "w").write(t2)
+PYX
+mirneg "an execute-codex code-reviewer sent the raw snapshot is caught" 'the raw snapshot is sent to a reviewer|Review record sequence lacks' "$tmp/mir8"; mirc execute-codex
+python3 - "$tmp/mir8/skills/claude-codex/SKILL.md" "$tmp/mir8/commands/claude-codex.md" <<'PYX'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); t2 = t.replace("Codex runs locally with read access to the working tree, so redaction governs what we put in the prompt, not what a local tool could open", "Redaction keeps every credential away from the reviewer"); assert t2 != t, p
+    open(p, "w").write(t2)
+PYX
+mirneg "a text that overclaims what redaction protects (no local-read caveat) is caught" 'lacks the honest limit of redaction' "$tmp/mir8"; mirc claude-codex
+# The prescribed blocks, run for real on an ordinary source file holding an inline credential (one added line, one deleted line): the reviewer input must carry neither value.
+pinrun() { # $1 = skill file, $2 = block title, $3 = base ref kind (head|root); leaves the review input at $tmp/pin/.claude/review/review-input.diff
+  python3 - "$1" "$2" "$red" "$tmp/pin.sh" <<'PYX'
+import re, sys
+t = open(sys.argv[1]).read(); i = t.index(sys.argv[2])
+b = re.search(r"```\n(.*?)\n```", t[i:], re.S).group(1).replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[3])
+open(sys.argv[4], "w").write(b + "\n")
+PYX
+  rm -rf "$tmp/pin"; mkdir -p "$tmp/pin"
+  ( cd "$tmp/pin" && git init -q && printf 'def f():\n    return 1\n\nOLD_SERVICE_PASSWORD = "oldSecretValue4242"\n' > app.py && git add app.py && git -c user.name=t -c user.email=t@t commit -q -m "$(printf 'base\n\nVerified: fixture repo for the review input credential cases')" && \
+    printf 'def f():\n    return 2\n\nNEW_SERVICE_PASSWORD = "newSecretValue9191"\n' > app.py && SHA="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $SHA/g; s/\"\${START_SHA:?}\"/$SHA/g" "$tmp/pin.sh" | bash -e >/dev/null 2>&1 )
+}
+pinclean() { pinrun "$1" "$2" && f="$tmp/pin/.claude/review/review-input.diff" && [ -s "$f" ] && ! grep -qF "newSecretValue9191" "$f" && ! grep -qF "oldSecretValue4242" "$f" && grep -qF '[REDACTED' "$f" && grep -qF "return 2" "$f"; }
+for f in skills/claude-codex/SKILL.md commands/claude-codex.md skills/tdd-claude-codex/SKILL.md commands/tdd-claude-codex.md skills/codex-mcp/SKILL.md; do
+  expect pass "$f: the Review input a Codex primary reviewer gets masks an added and a deleted inline credential and keeps the code change" pinclean "$here/../$f" "**Review input (every reviewer call)**"
+done
+for f in skills/execute-codex/SKILL.md commands/execute-codex.md skills/tdd-execute-codex/SKILL.md commands/tdd-execute-codex.md; do
+  expect pass "$f: the review input step 1 builds for every reviewer masks an added and a deleted inline credential" pinclean "$here/../$f" "**Review record (every reviewer round)**"
+done
 expect pass "the pristine copies pass every r10 rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 
 # cc11-main-r2 finding 3: the diff command each workflow prescribes is relative to the repository top, not to the shell's folder.
@@ -1608,16 +1663,17 @@ expectm fail "audit: a clean audit whose tree changed while it ran fails" 'REJEC
 rr() { python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"; }
 rrhash() { (cd "$tmp/rr" && git add -N app.py 2>/dev/null; git diff "$(git rev-list --max-parents=0 HEAD)" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' | shasum -a 256 | cut -d' ' -f1); }
 rrmk() { rm -f "$tmp/rrout.txt"; rm -rf "$tmp/rr"; mkdir -p "$tmp/rr"; (cd "$tmp/rr" && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$(printf 's\n\nVerified: fixture repo for the review-record cases')" && printf 'def add(a, b):\n    return a + b\n' > app.py); }
-rrrec() { mkdir -p "$tmp/rr/.claude/review"; printf 'REVIEWED-DIFF: %s\nREVIEWED-AS: %s\n%b' "$1" "${RRAS:-raw-snapshot}" "$2" > "$tmp/rr/.claude/review/final-review.txt"; }
+rrrec() { mkdir -p "$tmp/rr/.claude/review"; printf 'REVIEWED-DIFF: %s\nREVIEWED-AS: %s\n%b' "$1" "${RRAS:-redacted-snapshot}" "$2" > "$tmp/rr/.claude/review/final-review.txt"; }
 rrmk
 # r13 finding 2: run the prescribed two-step sequence itself (extracted from the skill) against the fixture repo. The base is the root commit, so the command's HEAD base is swapped for it.
-python3 - "$here/../skills/execute-codex/SKILL.md" "$tmp/step1.sh" "$tmp/step2.sh" <<'PYX'
+python3 - "$here/../skills/execute-codex/SKILL.md" "$tmp/step1.sh" "$tmp/step2.sh" "$red" <<'PYX'
 import re, sys
 t = open(sys.argv[1]).read(); i = t.index("**Review record (every reviewer round)**")
 f = re.findall(r"```\n(.*?)\n```", t[i:], re.S)[:2]
-open(sys.argv[2], "w").write(f[0] + "\n"); open(sys.argv[3], "w").write(f[1] + "\n")
+# WHY the redactor path swap: the block names the installed ~/.claude/config/scripts/redact-diff.sh, absent in an empty-HOME run, so the repo copy stands in
+open(sys.argv[2], "w").write(f[0].replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[4]) + "\n"); open(sys.argv[3], "w").write(f[1] + "\n")
 PYX
-rrstep() { (cd "$tmp/rr" && git add -N app.py && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/<raw-snapshot or redacted-snapshot>/raw-snapshot/; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" | bash -e) >> "$tmp/rrout.txt" 2>&1; }
+rrstep() { (cd "$tmp/rr" && git add -N app.py && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/XXNOPLACEHOLDER//; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" | bash -e) >> "$tmp/rrout.txt" 2>&1; }
 rrmk; rrstep step1.sh; rrstep step2.sh
 expect pass "the prescribed sequence on an unchanged tree writes a record the checker accepts" rr
 rrmk; rrstep step1.sh; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"; rrstep step2.sh
@@ -1628,20 +1684,20 @@ rrmk; rrstep step1.sh; rrstep step2.sh; printf '\ndef sub(a, b):\n    return a -
 expectm fail "an earlier round's record does not approve a later edit" 'the record'\''s diff hash is not the hash of the fi' rr
 # r14 finding 1: a pipeline failure or an empty diff voids the round at step 1 AND at step 2, removes any old record and records nothing. rrstepx runs the extracted block with NO `set -e` (the block must handle
 # its own failures) and, when FAILSUB is given, with a stub git whose subcommand FAILSUB exits 1.
-rrstepx() { (cd "${RRCWD:-$tmp/rr}" && { [ ! -e "$tmp/rr/app.py" ] || git -C "$tmp/rr" add -N app.py; } && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/<raw-snapshot or redacted-snapshot>/raw-snapshot/; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" > "$tmp/x-$1" && if [[ -n "${2:-}" ]]; then FAILSUB="$2" PATH="$tmp/stubgit:$PATH" bash "$tmp/x-$1"; else bash "$tmp/x-$1"; fi) >> "$tmp/rrout.txt" 2>&1; }
+rrstepx() { (cd "${RRCWD:-$tmp/rr}" && { [ ! -e "$tmp/rr/app.py" ] || git -C "$tmp/rr" add -N app.py; } && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/XXNOPLACEHOLDER//; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" > "$tmp/x-$1" && if [[ -n "${2:-}" ]]; then FAILSUB="$2" PATH="$tmp/stubgit:$PATH" bash "$tmp/x-$1"; else bash "$tmp/x-$1"; fi) >> "$tmp/rrout.txt" 2>&1; }
 rrstale() { rrrec "$(rrhash)" "VERDICT: APPROVED\n"; }
 rrmk; rrstale; rrstepx step1.sh diff; rrstepx step2.sh
 expect fail "a git diff that fails at step 1 leaves no record (the old record is removed and no snapshot is kept)" test -e "$tmp/rr/.claude/review/final-review.txt" -o -s "$tmp/rr/.claude/review/reviewed.diff"
-expect pass "control: step 1 reported no snapshot (the block itself said so)" grep -Eq "no snapshot" "$tmp/rrout.txt"
+expect pass "control: step 1 reported no review input (the block itself said so)" grep -Eq "no review input" "$tmp/rrout.txt"
 rrmk; rrstepx step1.sh; rrstale; rrstepx step2.sh diff
 expect fail "a git diff that fails at step 2 leaves no record (the old record is removed)" test -e "$tmp/rr/.claude/review/final-review.txt"
 expect pass "control: step 2 reported the void (the block itself said so)" grep -Eq "this round is void" "$tmp/rrout.txt"
 rrmk; rrstale; rrstepx step1.sh diff; rrstepx step2.sh diff
 expect fail "a git diff that fails at both steps leaves no record, whatever hash empty input has" test -e "$tmp/rr/.claude/review/final-review.txt"
-expect pass "control: both steps reported their failure (the block itself said so)" grep -Eq "no snapshot.*this round is void|this round is void.*no snapshot|no snapshot" "$tmp/rrout.txt"
+expect pass "control: both steps reported their failure (the block itself said so)" grep -Eq "no review input.*this round is void|this round is void.*no review input|no review input" "$tmp/rrout.txt"
 rrmk; rm -f "$tmp/rr/app.py"; rrstale 2>/dev/null; rrstepx step1.sh; rrstepx step2.sh
 expect fail "an empty diff leaves no record and no snapshot" test -e "$tmp/rr/.claude/review/final-review.txt" -o -e "$tmp/rr/.claude/review/reviewed.diff"
-expect pass "control: an empty diff was refused at step 1 (the block itself said so)" grep -Eq "no snapshot" "$tmp/rrout.txt"
+expect pass "control: an empty diff was refused at step 1 (the block itself said so)" grep -Eq "no review input" "$tmp/rrout.txt"
 rrmk; rrstepx step1.sh; rrstepx step2.sh
 expect pass "the same block with a working git and a real diff still records" rr
 # r15 finding 2: both steps resolve the repository root first. From a subfolder the record must land at the root (not in a stray subfolder .claude), the hash must match the root diff and a failed
@@ -1657,11 +1713,11 @@ expect fail "a failing toplevel lookup records nothing, at the root or in the su
 expect pass "control: a failing toplevel lookup is reported by the block" grep -q "no repo root" "$tmp/rrout.txt"
 # r17 finding 1: the record names which form of the snapshot the reviewer saw (REVIEWED-AS), so a redacted fallback round is never recorded as if the reviewer saw the raw bytes.
 rrmk; rrstepx step1.sh; rrstepx step2.sh
-expect pass "the block records a REVIEWED-AS line right under REVIEWED-DIFF" test "$(sed -n 2p "$tmp/rr/.claude/review/final-review.txt")" = "REVIEWED-AS: raw-snapshot"
+expect pass "the block records a REVIEWED-AS line right under REVIEWED-DIFF" test "$(sed -n 2p "$tmp/rr/.claude/review/final-review.txt")" = "REVIEWED-AS: redacted-snapshot"
 rrmk; H0="$(rrhash)"; RRAS=redacted-snapshot rrrec "$H0" "VERDICT: APPROVED\n"
 expect pass "a record naming the redacted snapshot is accepted" rr
 rrmk; H0="$(rrhash)"; RRAS="the tree" rrrec "$H0" "VERDICT: APPROVED\n"
-expectm fail "a record whose REVIEWED-AS is neither raw-snapshot nor redacted-snapshot is rejected" 'second line is not REVIEWED-AS' rr
+expectm fail "a record whose REVIEWED-AS is anything but redacted-snapshot is rejected" 'second line is not REVIEWED-AS' rr
 rrmk; H0="$(rrhash)"; mkdir -p "$tmp/rr/.claude/review"; printf 'REVIEWED-DIFF: %s\nVERDICT: APPROVED\n' "$H0" > "$tmp/rr/.claude/review/final-review.txt"
 expectm fail "a record with no REVIEWED-AS line is rejected" 'second line is not REVIEWED-AS' rr
 # r18 finding 2: only .claude/review is left out of the hashed diff; any other new file under .claude/ (a command, a hook, a skill) is part of what the reviewer must have seen
@@ -1671,24 +1727,26 @@ mkdir -p "$tmp/rr/.claude/commands"; printf 'run something\n' > "$tmp/rr/.claude
 expectm fail "a new untracked .claude/commands/x.md after the review makes the record stale" 'stale record' rr
 rrmk; (cd "$tmp/rr" && git config core.excludesFile /dev/null); H0="$(rrhash)"; rrrec "$H0" "VERDICT: APPROVED\n"; printf 'x\n' > "$tmp/rr/.claude/review/reviewed.diff"
 expect pass "a new file inside .claude/review (the snapshot itself) does not make the record stale" rr
-rrmk; rrstepx step1.sh; (cd "$tmp/rr" && sed "s/git diff HEAD/git diff $(git rev-list --max-parents=0 HEAD)/g; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED/" "$tmp/step2.sh" | bash >/dev/null 2>&1)
-expectm fail "a block run with the REVIEWED-AS placeholder left unedited records something the checker rejects" 'second line is not REVIEWED-AS' rr
+# r19 finding 1: the old raw-snapshot claim is no longer valid, because no reviewer is ever handed the raw snapshot.
+rrmk; H0="$(rrhash)"; RRAS=raw-snapshot rrrec "$H0" "VERDICT: APPROVED\n"
+expectm fail "a record claiming raw-snapshot (the retired form) is rejected" 'second line is not REVIEWED-AS: redacted-snapshot' rr
 # r14 hostile read: a reviewer reply that contains the old heredoc terminator line must not end the record early and run the rest of the reply as shell commands
 rm -f "$tmp/pwned"
-rrmk; rrstepx step1.sh; (cd "$tmp/rr" && sed "s/git diff HEAD/git diff $(git rev-list --max-parents=0 HEAD)/g; s|<raw-snapshot or redacted-snapshot>|raw-snapshot|; s|<the reviewer's reply, verbatim>|VERDICT: APPROVED\nREVIEW\ntouch $tmp/pwned\nLOW: x|" "$tmp/step2.sh" | bash >/dev/null 2>&1)
+rrmk; rrstepx step1.sh; (cd "$tmp/rr" && sed "s/git diff HEAD/git diff $(git rev-list --max-parents=0 HEAD)/g; s|XXNOPLACEHOLDER||; s|<the reviewer's reply, verbatim>|VERDICT: APPROVED\nREVIEW\ntouch $tmp/pwned\nLOW: x|" "$tmp/step2.sh" | bash >/dev/null 2>&1)
 expect fail "a reply holding a terminator-looking line never runs the rest of the reply as commands" test -e "$tmp/pwned"
 expect pass "that reply is stored verbatim in the record" grep -qxF "touch $tmp/pwned" "$tmp/rr/.claude/review/final-review.txt"
 # r14 hostile read: the tdd block with START_SHA unset must not hash some other diff (an empty base reads the index, not the run's changes)
-python3 - "$here/../skills/tdd-execute-codex/SKILL.md" "$tmp/tstep1.sh" "$tmp/tstep2.sh" <<'PYX'
+python3 - "$here/../skills/tdd-execute-codex/SKILL.md" "$tmp/tstep1.sh" "$tmp/tstep2.sh" "$red" <<'PYX'
 import re, sys
 t = open(sys.argv[1]).read(); i = t.index("**Review record (every reviewer round)**")
 f = re.findall(r"```\n(.*?)\n```", t[i:], re.S)[:2]
-open(sys.argv[2], "w").write(f[0] + "\n"); open(sys.argv[3], "w").write(f[1] + "\n")
+# WHY the redactor path swap: the block names the installed ~/.claude/config/scripts/redact-diff.sh, absent in an empty-HOME run, so the repo copy stands in
+open(sys.argv[2], "w").write(f[0].replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[4]) + "\n"); open(sys.argv[3], "w").write(f[1] + "\n")
 PYX
 rrmk; (cd "$tmp/rr" && git add -N app.py && env -u START_SHA bash "$tmp/tstep1.sh" >> "$tmp/rrout.txt" 2>&1; env -u START_SHA bash "$tmp/tstep2.sh" >> "$tmp/rrout.txt" 2>&1)
 expect fail "the tdd block with START_SHA unset leaves no snapshot and no record" test -s "$tmp/rr/.claude/review/reviewed.diff" -o -e "$tmp/rr/.claude/review/final-review.txt"
 expect pass "control: the tdd block named the unset START_SHA (the block itself said so)" grep -q "START_SHA" "$tmp/rrout.txt"
-rrmk; (cd "$tmp/rr" && git add -N app.py && START_SHA="$(git rev-list --max-parents=0 HEAD)" bash "$tmp/tstep1.sh" >/dev/null 2>&1; sed "s/<raw-snapshot or redacted-snapshot>/raw-snapshot/; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED/" "$tmp/tstep2.sh" > "$tmp/tstep2b.sh"; START_SHA="$(git rev-list --max-parents=0 HEAD)" bash "$tmp/tstep2b.sh" >/dev/null 2>&1)
+rrmk; (cd "$tmp/rr" && git add -N app.py && START_SHA="$(git rev-list --max-parents=0 HEAD)" bash "$tmp/tstep1.sh" >/dev/null 2>&1; sed "s/XXNOPLACEHOLDER//; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED/" "$tmp/tstep2.sh" > "$tmp/tstep2b.sh"; START_SHA="$(git rev-list --max-parents=0 HEAD)" bash "$tmp/tstep2b.sh" >/dev/null 2>&1)
 expect pass "the tdd block with START_SHA set records" rr
 # r14 finding 3: the whole .claude/review/ directory (record, snapshot, anything added later) is outside the hashed diff, so tracking any of it never turns an unchanged round stale
 rrsnap() { mkdir -p "$tmp/rr/.claude/review"; printf 'snapshot\n' > "$tmp/rr/.claude/review/reviewed.diff"; printf 'other\n' > "$tmp/rr/.claude/review/notes.txt"; }

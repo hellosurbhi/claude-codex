@@ -106,7 +106,7 @@ cp scripts/codex-call.sh ~/.claude/config/scripts/codex-call.sh
 chmod +x ~/.claude/config/scripts/codex-call.sh
 ```
 
-The fallback also needs the diff redaction script at one fixed path. It masks inline credential values (private keys, cloud and API tokens, Bearer tokens, JWTs, password and secret assignments) in the diff before the diff goes into the tier S context file. It is a best-effort mask on top of the path exclusions, not a guarantee. If it is missing the fallback sends nothing:
+The diff redaction script is needed at one fixed path by every diff review, not only the fallback. It masks inline credential values (private keys, cloud and API tokens, Bearer tokens, JWTs, password and secret assignments) in the diff before it goes into any reviewer prompt, the Codex primary included. It is a best-effort mask on top of the path exclusions, not a guarantee, and Codex runs locally with read access to the working tree, so it limits what we put in the prompt, not what a local tool could open. If it is missing, no reviewer is called:
 
 ```bash
 cp scripts/redact-diff.sh ~/.claude/config/scripts/redact-diff.sh
@@ -236,7 +236,7 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
 └── config/
     └── scripts/
         ├── codex-call.sh            # codex exec wrapper every skill calls (install step 3)
-        └── redact-diff.sh           # masks credential values in the fallback diff (install step 3)
+        └── redact-diff.sh           # masks credential values in the diff every reviewer receives (install step 3)
 ```
 
 The tests are not installed. They live in this repository only:

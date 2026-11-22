@@ -5,7 +5,8 @@
 # plus a secret-named file that must stay out.
 import os, re, shlex, subprocess, sys, tempfile
 text = open(sys.argv[1], encoding="utf-8").read()
-cmds = re.findall(r"`(git diff (?:HEAD|\$START_SHA) -- [^`]*)`", text)
+# r19 finding 1: the command now lives in a code fence (the Review input and step 1 blocks, with `"${START_SHA:?}"` as the base) as well as in backticked prose, so match the command itself: base, `--`, then the quoted pathspecs.
+cmds = [m.group(0).strip() for m in re.finditer(r"git diff (?:HEAD|\"\$\{START_SHA:\?\}\"|\$START_SHA) -- (?:'[^']*'\s*)+", text)]
 if not cmds:
     print("no reviewer diff command in %s" % sys.argv[1]); sys.exit(1)
 rc = 0
@@ -18,7 +19,7 @@ for c in cmds:
         for n in ("front/a.py", "back/b.py", "back/deep/c.py", "front/.env"):
             os.makedirs(os.path.dirname(os.path.join(d, n)), exist_ok=True); open(os.path.join(d, n), "w").write("1")
         run("add", "-N", "-f", "front/a.py", "back/b.py", "back/deep/c.py", "front/.env")
-        argv = shlex.split(c.replace("$START_SHA", sha))
+        argv = shlex.split(c.replace('"${START_SHA:?}"', sha).replace("$START_SHA", sha))
         out = sorted(subprocess.run(argv[:2] + ["--name-only"] + argv[2:], cwd=os.path.join(d, "front"), capture_output=True, text=True).stdout.split())
         if out != ["back/b.py", "back/deep/c.py", "front/a.py"]:
             print("from a subfolder %r printed %s" % (c[:50], out)); rc = 1

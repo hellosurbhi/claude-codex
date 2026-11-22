@@ -91,7 +91,7 @@ Pass the installed path `~/.claude/skills/tdd-claude-codex/codex-analyzer-role.m
 - `prompt`:
 
 ```
-Run `git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'` to see newly created test files. Review the tests ONLY (no implementation exists yet).
+The diff to review is in the DIFF section at the end of this prompt (the contents of `.claude/review/review-input.diff`, built by the Review input paragraph: the newly created test files, credential values masked). Review the tests ONLY (no implementation exists yet). Do not run `git diff` yourself.
 
 Task requirements (paste the task text or the saved task path content here, with any secret, credential or `.env` value removed first):
 <TASK_REQUIREMENTS>
@@ -112,13 +112,25 @@ MEDIUM: <findings>
 LOW: <findings>
 
 Omit any severity line with no findings (never write placeholder lines such as "HIGH: none", and never a severity header with no text after it). A clean review is exactly the one line `VERDICT: APPROVED`.
+
+DIFF:
+<the contents of `.claude/review/review-input.diff`>
 ```
 
 Save the returned `THREAD_ID` (separate from the implementation review THREAD_ID).
 
 **Failed audit**: a Codex call that errors, times out, exits without a final message (`codex-call.sh` exits non-zero with "UNREVIEWED") or replies with output that is no verdict under the Validate the response grammar below (empty output, no valid first `VERDICT:` line, a second `VERDICT:` line), is NOT an approval and never "no findings". Read the error, fix the cause, then retry or switch to another independent reviewer (a fresh Codex thread without `--resume`, or, when Codex is over its usage limit or returns no verdict, `~/.claude/config/scripts/reviewer.sh S <context-file> <out-file>` (built by the Fallback input paragraph: task requirements, review instructions, carried and contested findings, then the sanitized diff), a Sonnet review that needs no Codex quota; the work stays pending until some reviewer returns a clean verdict on the current head). Keep going until a verdict arrives; there is no retry count (owner mandate 2026-11-12). When the verdict comes from a fresh Codex thread, its new `THREAD_ID` replaces the saved reviewer `THREAD_ID` only (never an implementation `THREAD_ID`) for every later review `--resume`. Outside reviewers (Gemini, CodeRabbit) are never called from these skills, because a skill cannot prove a diff is free of credentials; they run only inside the reviewer script's own chain. A finding you contest is settled only by an authorized reviewer's concession or verification, recorded in writing with its evidence (a Codex thread when one is available; when a fallback reviewer is the active reviewer, any reviewer authorized for the repo, tier S included, with no Codex thread required). Stop and report "test audit incomplete, the tests are UNREVIEWED: <blocker>" only for a specific blocker Claude cannot resolve itself, such as missing credentials or every reviewer being unavailable for a reason the error text names (a call that merely died, timed out or returned nothing, even several times in a row, is never a blocker: keep retrying and switching reviewers; a Codex usage limit is never a blocker while tier S can run), and name the blocker when you do. Phase 4 starts only after a clean audit, or after that named blocker with the tests labeled UNREVIEWED in the delivery report and in your final message. A `reviewer.sh` call yields a verdict only when the call itself exits 0: a nonzero exit is no verdict whatever it printed, even a `VERDICT: APPROVED` line (the installed reviewer.sh can print one after its model call failed), so check the exit status of the call and treat a nonzero exit as a failed review. A reviewer result counts only when the command exited 0 AND the output parses as a verdict under the Validate the response grammar. Anything else is no verdict.
 
-**Fallback input (tier S)**: the fallback reviewer sees only the one file you hand it, so every tier S call uses ONE context file, built exactly as below and never a bare diff. It carries what the Codex call carried: the sanitized task requirements (the task or plan text, every task of a multi-task run, with any secret, credential or `.env` value removed), the review or audit instructions you sent to Codex (for a test audit, its Evaluate list), every carried finding (raised in an earlier round and still open) and every contested finding with your reasoning, then the sanitized diff, made after the same intent-to-add step for the files this task created as the Codex call. Rebuild the file for every round so it holds the CURRENT diff and the current findings. The diff goes through `~/.claude/config/scripts/redact-diff.sh` before it is appended: that script is a best-effort mask of inline credential values (private key blocks, cloud and API tokens, Bearer tokens, JWTs, password and secret assignments) on top of the path exclusions, not a guarantee, and the paths stay excluded. If the script is missing or exits non-zero, or the diff is empty, the context file is deleted and no context is sent, so there is no verdict from the fallback and the work stays unreviewed.
+**Review input (every reviewer call)**: every reviewer, the Codex call above and the tier S fallback below alike, is handed ONE input, built exactly as below after the intent-to-add step for the files this task created, and never the output of a fresh `git diff` run by the reviewer or by you. The diff goes through `~/.claude/config/scripts/redact-diff.sh`, a best-effort mask of inline credential values (private key blocks, cloud and API tokens, Bearer tokens, JWTs, password and secret assignments) on top of the path exclusions, not a guarantee, and the paths stay excluded. Only the masked output `.claude/review/review-input.diff` is ever placed in a prompt or a context file. Codex runs locally with read access to the working tree, so redaction governs what we put in the prompt, not what a local tool could open, so redaction governs what we put in the prompt, not what a local tool could open. If the script is missing or exits non-zero, or the diff is empty, the file is removed and nothing is dispatched to any reviewer, Codex or fallback: there is no verdict and the work stays unreviewed. Rebuild it before every round so it holds the CURRENT diff. Run it unchanged:
+
+```
+if R="$(git rev-parse --show-toplevel)" && [ -n "$R" ]; then (cd "$R" || exit 1
+mkdir -p .claude/review; rm -f .claude/review/review-input.diff
+(set -o pipefail; git diff "${START_SHA:?}" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' | ~/.claude/config/scripts/redact-diff.sh > .claude/review/review-input.diff) && [ -s .claude/review/review-input.diff ] && echo "review input ready: send the contents of .claude/review/review-input.diff to every reviewer" || { rm -f .claude/review/review-input.diff; echo "no review input (the diff or its redaction failed, or the diff is empty): do NOT dispatch any reviewer, fix the cause and run this again"; }
+); else echo "no repo root (git rev-parse --show-toplevel failed): do NOT dispatch any reviewer, run this again from inside the repository"; fi
+```
+
+**Fallback input (tier S)**: the fallback reviewer sees only the one file you hand it, so every tier S call uses ONE context file, built exactly as below and never a bare diff. It carries what the Codex call carried: the sanitized task requirements (the task or plan text, every task of a multi-task run, with any secret, credential or `.env` value removed), the review or audit instructions you sent to Codex (for a test audit, its Evaluate list), every carried finding (raised in an earlier round and still open) and every contested finding with your reasoning, then the review input: the contents of `.claude/review/review-input.diff` (the Review input paragraph), the same masked bytes the Codex call received, never a second `git diff` and never the raw diff. Rebuild the file for every round so it holds the CURRENT diff and the current findings. The best-effort mask is the one the Review input paragraph describes. If the review input is missing or empty, the context file is deleted and no context is sent, so there is no verdict from the fallback and the work stays unreviewed.
 
 ```
 CTX="$(mktemp)"
@@ -134,9 +146,8 @@ OPEN FINDINGS:
 
 DIFF:
 EOF
-DF="$(mktemp)"
-(set -o pipefail; git diff "${START_SHA:?}" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' | ~/.claude/config/scripts/redact-diff.sh > "$DF") && [ -s "$DF" ] && cat "$DF" >> "$CTX" || { rm -f "$CTX"; echo "the diff or its redaction failed, or the diff is empty: no context is sent"; }
-rm -f "$DF"
+if R="$(git rev-parse --show-toplevel)" && [ -s "$R/.claude/review/review-input.diff" ] && cat "$R/.claude/review/review-input.diff" >> "$CTX"; then :
+else rm -f "$CTX"; echo "the review input .claude/review/review-input.diff is missing or empty: no context is sent"; fi
 [ -f "$CTX" ] && ~/.claude/config/scripts/reviewer.sh S "$CTX" <out-file>
 ```
 
@@ -208,7 +219,7 @@ Call `codex-call.sh` with:
 - `prompt`:
 
 ```
-Run `git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'` to see all changes made during this session, then review them.
+The diff to review is in the DIFF section at the end of this prompt (the contents of `.claude/review/review-input.diff`, built by the Review input paragraph: all changes made during this session, credential values masked). Review it. Do not run `git diff` yourself.
 
 Return ONLY a structured verdict in this exact format — no explanations, no prose:
 
@@ -220,6 +231,9 @@ MEDIUM: <findings>
 LOW: <findings>
 
 Omit any severity line with no findings (never write placeholder lines such as "HIGH: none", and never a severity header with no text after it). A clean review is exactly the one line `VERDICT: APPROVED`.
+
+DIFF:
+<the contents of `.claude/review/review-input.diff`>
 ```
 
 Save the returned `THREAD_ID` for follow-up replies.
@@ -258,9 +272,12 @@ Address ALL accepted findings before re-reviewing:
 - Before re-calling, run `git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'`); then re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
-Run `git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'` again to see the updated changes, then re-review.
+The diff to review is in the DIFF section at the end of this prompt (the contents of `.claude/review/review-input.diff`, built by the Review input paragraph: the updated changes after the fixes, rebuilt and with credential values masked). Re-review it. Do not run `git diff` yourself.
 
 Return ONLY the structured verdict in the same format.
+
+DIFF:
+<the contents of `.claude/review/review-input.diff`>
 ```
 
 One review per round, not one review per fix.
