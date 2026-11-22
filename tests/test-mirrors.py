@@ -179,5 +179,13 @@ for n in ("tdd-claude-codex", "tdd-execute-codex"):
         i = t.find("Test Audit")
         if "<TASK_REQUIREMENTS>" not in t[i:i + 6000].split("Return ONLY a structured verdict")[0]:
             bad.append("%s: the test-audit prompt does not include the sanitized <TASK_REQUIREMENTS>" % os.path.relpath(f, root))
+# WHY (CodeRabbit thread 4): on the 3+ task path an accepted review finding dispatched a Claude subagent with feedback but never told it to
+# go through codex-call.sh, so Route B's "implementation goes through Codex" broke exactly on fixes. Each fix subagent starts or resumes ITS task's thread.
+for n in ("execute-codex", "tdd-execute-codex"):
+    for f in files(n):
+        t = open(f, encoding="utf-8").read()
+        for m in re.finditer(r"3\+ task path .{0,40}dispatch a Claude subagent[^\n]*", t):
+            if not ("codex-call.sh" in m.group(0) and "that task's own" in m.group(0)):
+                bad.append("%s: the 3+ task fix path does not make each fix subagent call codex-call.sh on its own task's Codex thread" % os.path.relpath(f, root))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)
