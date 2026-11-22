@@ -1290,9 +1290,21 @@ expect pass "real execute-codex run with the four correct modules passes the acc
 expectm fail "real claude-codex run with no app.py add fails the acceptance step" 'REJECT: add\(\) failed its checks' bash "$here/check-behavior.sh" claude-codex "$bw/empty" real
 expectm fail "real claude-codex run whose add is a stub fails the acceptance step" 'REJECT: add\(\) failed its checks' bash "$here/check-behavior.sh" claude-codex "$bw/stub" real
 expect pass "real claude-codex run with a working add passes the acceptance step" bash "$here/check-behavior.sh" claude-codex "$bw/impl" real
-for sk in tdd-claude-codex tdd-execute-codex codex-mcp; do
+expect fail "real codex-mcp run with no add fails the acceptance step" bash "$here/check-behavior.sh" codex-mcp "$bw/empty" real
+expect pass "real codex-mcp run with a working add passes the acceptance step" bash "$here/check-behavior.sh" codex-mcp "$bw/impl" real
+# r17 finding 2: both TDD workflows are asked for tests too, so a working add() alone is not enough. Requires test_app.py, a passing unittest run with at least one test, and a call to add() in it.
+for d in tdd tdd-failing tdd-noadd tdd-zero; do mkdir -p "$bw/$d"; cp "$bw/impl/app.py" "$bw/$d/app.py"; done
+printf 'import unittest\nfrom app import add\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n' > "$bw/tdd/test_app.py"
+printf 'import unittest\nfrom app import add\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 6)\n' > "$bw/tdd-failing/test_app.py"
+printf 'import unittest\nclass T(unittest.TestCase):\n    def test_nothing(self):\n        self.assertTrue(True)\n' > "$bw/tdd-noadd/test_app.py"
+printf 'import unittest\nfrom app import add\n' > "$bw/tdd-zero/test_app.py"
+for sk in tdd-claude-codex tdd-execute-codex; do
   expect fail "real $sk run with no add fails the acceptance step" bash "$here/check-behavior.sh" $sk "$bw/empty" real
-  expect pass "real $sk run with a working add passes the acceptance step" bash "$here/check-behavior.sh" $sk "$bw/impl" real
+  expect pass "real $sk run with a working add and a passing test passes the acceptance step" bash "$here/check-behavior.sh" $sk "$bw/tdd" real
+  expectm fail "real $sk run with a working add but no test file is rejected" 'REJECT: test_app.py is missing' bash "$here/check-behavior.sh" $sk "$bw/impl" real
+  expectm fail "real $sk run whose requested test fails is rejected" 'REJECT: the requested tests did not pass' bash "$here/check-behavior.sh" $sk "$bw/tdd-failing" real
+  expectm fail "real $sk run whose test file runs no test is rejected" 'REJECT: the requested tests did not pass' bash "$here/check-behavior.sh" $sk "$bw/tdd-zero" real
+  expectm fail "real $sk run whose passing test never calls add() is rejected" 'REJECT: test_app.py never calls add' bash "$here/check-behavior.sh" $sk "$bw/tdd-noadd" real
 done
 expectm fail "real plan-codex run with no plan file fails the acceptance step" 'check-behavior: no non-empty plan file about add' bash "$here/check-behavior.sh" plan-codex "$bw/empty" real
 expectm fail "real plan-codex run with an empty plan file fails the acceptance step" 'check-behavior: no non-empty plan file about add' bash "$here/check-behavior.sh" plan-codex "$bw/noplan" real

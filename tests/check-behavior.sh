@@ -4,7 +4,8 @@
 # conversation that created none of the four requested modules passed. Every scenario branch of review-loop-proof.sh now calls this before it exits, and test-checkers.sh
 # drives it on fabricated work dirs, so the acceptance rule is tested without spending Codex quota. What each skill is held to mirrors the task text the proof sends:
 #   execute-codex in the real and usage-limit scenarios -> the four modules (check-modules.py); every other execute-codex run -> the small add() in app.py
-#   claude-codex, tdd-claude-codex, tdd-execute-codex, codex-mcp -> a module-level add() in app.py that really adds (check-impl.py)
+#   claude-codex, codex-mcp -> a module-level add() in app.py that really adds (check-impl.py)
+#   tdd-claude-codex, tdd-execute-codex -> that, AND the requested test_app.py exists, passes under unittest with at least one test and calls add() (check-tests.py)
 #   plan-codex -> a non-empty plan file under .claude/plan/ that is about the add() request
 set -u
 skill="${1:-}" repo="${2:-}" scenario="${3:-}"
@@ -14,7 +15,10 @@ case "$skill" in
   execute-codex)
     if [[ $scenario == real || $scenario == usage-limit ]]; then exec python3 "$here/check-modules.py" "$repo"; fi
     exec python3 "$here/check-impl.py" "$repo/app.py" ;;
-  claude-codex|tdd-claude-codex|tdd-execute-codex|codex-mcp) exec python3 "$here/check-impl.py" "$repo/app.py" ;;
+  tdd-claude-codex|tdd-execute-codex)
+    python3 "$here/check-impl.py" "$repo/app.py" || exit 1
+    exec python3 "$here/check-tests.py" "$repo" ;;
+  claude-codex|codex-mcp) exec python3 "$here/check-impl.py" "$repo/app.py" ;;
   plan-codex)
     for f in "$repo"/.claude/plan/*.md; do
       [[ -s "$f" ]] && grep -qiw 'add' "$f" && exit 0
