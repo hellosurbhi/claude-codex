@@ -32,6 +32,10 @@
 # never be fixed in the plan file, so the loop ends UNREVIEWED every time. What breaks if the hook is loosened: an unprompted agent with the owner's home in reach.
 set -euo pipefail
 src="$1" skill="$2" scenario="$3"
+# WHY only plan-codex in real (cc11 r37): the confined real run has been proven end to end for this skill and no other. The others call the wrapper with --prompt-file, review-snapshot.sh,
+# workspace-write implementation calls and the reviewer.sh tiers, none of which has a confined real pass behind it, so accepting them would let the README claim more than was run.
+# What breaks if this list grows without a real passing run per skill: the proof says "real" for a flow nobody has seen work under the sandbox.
+if [[ $scenario == real && $skill != plan-codex ]]; then echo "real scenario: only plan-codex is proven under confinement (got $skill). Use a scripted scenario for $skill." >&2; exit 2; fi
 here="$(cd "$(dirname "$0")" && pwd)"
 # WHY resolved before any cd: the script cd's into the scratch repo, so a relative
 # source or output path would silently point somewhere else afterwards.
@@ -145,7 +149,34 @@ if [[ $scenario == real ]]; then
   probe() { python3 -c 'import json,sys; print(json.dumps({"tool_name":"Write","cwd":sys.argv[1],"tool_input":{"file_path":sys.argv[2]}}))' "$repo" "$1" | "$hook" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["permissionDecision"])'; }
   if [[ "$(probe "$out/../outside-probe.txt" 2>/dev/null)" != deny || "$(probe "$repo/.claude/plan/probe.md" 2>/dev/null)" != allow ]]; then echo "REJECT: the confinement hook probe failed (out-of-bounds call not denied or in-bounds call not allowed)" >&2; exit 2; fi
   : > "$PROOF_HOOK_LOG"
-  printf '{"hooks":{"PreToolUse":[{"matcher":".*","hooks":[{"type":"command","command":"python3 %s"}]}]}}\n' "$hook" > "$out/proof-settings.json"
+  # WHY the OS sandbox is the primary boundary and the hook the second layer (cc11 r37): three review rounds in a row found holes in a shell-parsing hook, and a parser cannot be the only
+  # thing between a prompts-off agent and the owner's home. Claude Code's own Bash sandbox (macOS Seatbelt, checked against the 2.1.323 docs and probed here) confines every Bash child
+  # process to writes inside the scratch repo whatever the command line looks like. failIfUnavailable stops a silent fall-back to no sandbox, allowUnsandboxedCommands=false removes the
+  # model's dangerouslyDisableSandbox retry, and network stays closed. Read, Edit and Write are not sandboxed by Claude Code, so they stay under the hook.
+  # WHY exactly one excluded command, the tilde spelling the skills use: codex-call.sh cannot run inside the sandbox (probed: its mktemp is refused, and codex needs the network and its
+  # own state), and the pattern is matched as text, so only the `~/.claude/config/scripts/codex-call.sh` form the skills write runs outside; the absolute spelling stays sandboxed and
+  # fails. The hook restricts that one command to the wrapper's grammar, and codex then runs under its own read-only or workspace-write sandbox.
+  # What breaks if allowWrite is widened or the probe below is dropped: a hook bypass is again unconfined code execution in the owner's home.
+  sbx_settings() { # <file> <hook-or-empty> <write-dir> <wrapper>
+    python3 - "$@" <<'PY'
+import json, sys
+s = {"sandbox": {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False, "autoAllowBashIfSandboxed": True,
+     "excludedCommands": [sys.argv[4] + " *"],
+     "filesystem": {"allowWrite": [sys.argv[3]], "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"]}, "network": {"allowedDomains": []}}}
+if sys.argv[2]:
+    s["hooks"] = {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "python3 " + sys.argv[2]}]}]}
+json.dump(s, open(sys.argv[1], "w"), indent=1)
+PY
+  }
+  wrapper='~/.claude/config/scripts/codex-call.sh'
+  # WHY a probe where only the sandbox can say no: a separate throwaway claude call WITHOUT the hook runs one fixed command that writes inside its own probe dir (control) and then
+  # outside it. The control file must exist (the command really ran), the outside file must not, and the refusal text must come from the OS. The canary sits next to the repo and not
+  # under the default temp dir (which Claude Code always allows), so a refusal here is the allowlist at work.
+  pd="$out/sbx-probe"; mkdir -p "$pd"; canary="$out/sbx-canary-outside.txt"
+  sbx_settings "$out/sbx-probe-settings.json" "" "$pd" "$wrapper"
+  (cd "$pd" && claude -p "Run exactly this one Bash command and nothing else, then reply done: echo ctl > sbx-ctl.txt; { echo x > $canary; } 2> sbx-err.txt" --model sonnet --setting-sources "" --settings "$out/sbx-probe-settings.json" --permission-mode bypassPermissions --allowedTools Bash --no-session-persistence < /dev/null > "$out/sbx-probe.out" 2>&1) || true
+  if [[ ! -s "$pd/sbx-ctl.txt" || -e "$canary" ]] || ! grep -qi "not permitted" "$pd/sbx-err.txt" 2>/dev/null; then echo "REJECT: the OS sandbox did not refuse a write outside the scratch dir (see $out/sbx-probe.out; an out dir under Claude Code's own temp dir is always writable, so choose another); the run is not started" >&2; exit 2; fi
+  sbx_settings "$out/proof-settings.json" "$hook" "$repo" "$wrapper"
   perm=(--permission-mode bypassPermissions --settings "$out/proof-settings.json" --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill")
 else
   perm=(--permission-mode acceptEdits --allowedTools "Bash Read Edit Write Glob Grep Task Agent Skill Edit(./.claude/plan/**) Edit(.claude/plan/**)")

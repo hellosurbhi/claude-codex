@@ -19,12 +19,23 @@ if "--permission-mode bypassPermissions" in other_b:
 pm = re.search(r"--permission-mode (\S+)", real_b)
 if not pm or pm.group(1) != "bypassPermissions":
     reject("the proof session runs with permission mode %s, which denies edits to an existing .claude/plan file" % (pm.group(1) if pm else "default"))
-if "proof-confine-hook.py" not in real_b or '--settings "$out/proof-settings.json"' not in real_b or '"PreToolUse"' not in real_b or '"matcher":".*"' not in real_b:
+if "proof-confine-hook.py" not in real_b or '--settings "$out/proof-settings.json"' not in real_b or '"PreToolUse"' not in real_b or '"matcher": ".*"' not in real_b:
     reject("bypassPermissions without the confinement hook wired through --settings as a PreToolUse hook on every tool")
 if '[[ ! -f "$hook" || ! -x "$hook" ]]' not in real_b:
     reject("no start-up refusal when the confinement hook is missing or not executable")
 if not re.search(r'!= deny \|\| .*!= allow \]\].*exit 2', real_b):
     reject("no start-up probe that requires the hook to deny an out-of-bounds call")
+# WHY the sandbox is checked on the script text (cc11 r37): the OS sandbox is the primary boundary, the hook only the second layer. Each missing piece has its own REJECT line.
+if '"enabled": True' not in real_b or '"failIfUnavailable": True' not in real_b:
+    reject("the real branch does not enable the OS sandbox with failIfUnavailable (it could silently run unsandboxed)")
+if '"allowUnsandboxedCommands": False' not in real_b:
+    reject("the OS sandbox allows the unsandboxed retry (dangerouslyDisableSandbox)")
+if '"allowWrite": [sys.argv[3]]' not in real_b or not re.search(r'sbx_settings "\$out/proof-settings.json" "\$hook" "\$repo"', real_b):
+    reject("the OS sandbox write allowlist is not exactly the scratch repo")
+if '"excludedCommands": [sys.argv[4] + " *"]' not in real_b or "wrapper='~/.claude/config/scripts/codex-call.sh'" not in real_b:
+    reject("the OS sandbox excludes more than the one wrapper (codex-call.sh)")
+if not re.search(r'-e "\$canary" \]\].*not permitted.*exit 2', real_b, re.S) or 'sbx_settings "$out/sbx-probe-settings.json" ""' not in real_b:
+    reject("no start-up probe that requires the sandbox itself to refuse a write outside the scratch repo (hook-free probe run)")
 if "-e \"$4\"" not in src or "exit 2" not in src[src.index('-e "$4"'):src.index('-e "$4"') + 220]:
     reject("the real scenario does not insist on creating its own fresh out dir")
 if "the confinement hook ran" not in src:

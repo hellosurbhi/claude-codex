@@ -2338,6 +2338,18 @@ sed 's/def check_wrapper(/def check_wrapperx(/' "$here/proof-confine-hook.py" > 
 expectm fail "a hook without the wrapper option-grammar check is rejected" 'REJECT: the confinement hook lacks the wrapper option-grammar check' python3 "$pp" "$ps" "$tmp/hook-nowrapper.py"
 sed 's/expansion inside double quotes/expansion elsewhere/' "$here/proof-confine-hook.py" > "$tmp/hook-noexp.py"
 expectm fail "a hook without the double-quote expansion denial is rejected" 'REJECT: the confinement hook lacks the denial of expansion inside double quotes' python3 "$pp" "$ps" "$tmp/hook-noexp.py"
+# cc11 r37: the hook is a second layer; the OS sandbox (Claude Code's Seatbelt Bash sandbox) is the primary boundary, and the checker must insist on it
+sed 's/"failIfUnavailable": True/"failIfUnavailable": False/' "$ps" > "$tmp/proof-sbx-optional.sh"
+expectm fail "a sandbox that may silently fall back to unsandboxed is rejected" 'REJECT: the real branch does not enable the OS sandbox with failIfUnavailable' python3 "$pp" "$tmp/proof-sbx-optional.sh"
+sed 's/"allowUnsandboxedCommands": False/"allowUnsandboxedCommands": True/' "$ps" > "$tmp/proof-sbx-retry.sh"
+expectm fail "a sandbox the model can retry outside of is rejected" 'REJECT: the OS sandbox allows the unsandboxed retry' python3 "$pp" "$tmp/proof-sbx-retry.sh"
+sed 's/"allowWrite": \[sys.argv\[3\]\]/"allowWrite": [sys.argv[3], "\/"]/' "$ps" > "$tmp/proof-sbx-wide.sh"
+expectm fail "a sandbox write allowlist wider than the scratch repo is rejected" 'REJECT: the OS sandbox write allowlist is not exactly the scratch repo' python3 "$pp" "$tmp/proof-sbx-wide.sh"
+sed 's/"excludedCommands": \[sys.argv\[4\] + " \*"\]/"excludedCommands": ["*"]/' "$ps" > "$tmp/proof-sbx-excl.sh"
+expectm fail "a sandbox that excludes more than the one wrapper is rejected" 'REJECT: the OS sandbox excludes more than the one wrapper' python3 "$pp" "$tmp/proof-sbx-excl.sh"
+sed 's/-e "\$canary"/-e "\$canaryx"/' "$ps" > "$tmp/proof-sbx-noprobe.sh"
+expectm fail "no start-up probe where the sandbox itself refuses a write outside the scratch repo is rejected" 'REJECT: no start-up probe that requires the sandbox itself to refuse' python3 "$pp" "$tmp/proof-sbx-noprobe.sh"
+expect pass "the real scenario refuses a skill it has not proven (exit 2, names the proven skill)" sh -c 'o=$("$1" installed claude-codex real "$2/never-created" 2>&1); rc=$?; [ $rc -eq 2 ] && echo "$o" | grep -q "plan-codex"' _ "$ps" "$tmp"
 # the confinement hook itself: no model needed, so these run in CI and NO_SPY too
 hk="$here/proof-confine-hook.py"; hr="$tmp/hookrepo"; mkdir -p "$hr/.claude/plan" "$tmp/hookout"; ln -sfn "$tmp/hookout" "$hr/link"; hr="$(cd "$hr" && pwd -P)"
 hook() { python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"cwd":sys.argv[2],"tool_input":json.loads(sys.argv[3])}))' "$1" "$hr" "$2" | PROOF_SCRATCH_ROOT="$hr" python3 "$hk" | python3 -c 'import json,sys; o=json.load(sys.stdin)["hookSpecificOutput"]; print(o["permissionDecision"], o.get("permissionDecisionReason",""))'; }
