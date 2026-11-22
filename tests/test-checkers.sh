@@ -360,12 +360,12 @@ import sys
 for p in sys.argv[1:]:
     t = open(p).read(); open(p, "w").write(t.replace("TASK REQUIREMENTS:", "NOTES:"))
 PY
-mirneg "a fallback input sequence without the task requirements section is caught" 'Fallback input sequence lacks .TASK REQUIREMENTS:' "$tmp/mir8"; mirc tdd-claude-codex
+mirneg "a Review context sequence without the task requirements section is caught" 'Review context sequence lacks .TASK REQUIREMENTS:' "$tmp/mir8"; mirc tdd-claude-codex
 python3 - "$tmp/mir8/commands/tdd-execute-codex.md" <<'PY'
 import sys, re; p = sys.argv[1]; t = open(p).read()
-open(p, "w").write(re.sub(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n.*?\n```\n", "", t, flags=re.S))
+open(p, "w").write(re.sub(r"\*\*Review context \(every reviewer call\)\*\*:.*?\n```\n.*?\n```\n", "", t, flags=re.S))
 PY
-mirneg "a command that lost its Fallback input paragraph is caught" 'has a tier S fallback but no Fallback input paragraph' "$tmp/mir8"; mirc tdd-execute-codex
+mirneg "a command that lost its Review context paragraph is caught" 'has a tier S fallback but no Fallback input paragraph' "$tmp/mir8"; mirc tdd-execute-codex
 python3 - "$tmp/mir8/skills/plan-codex/SKILL.md" "$tmp/mir8/commands/plan-codex.md" <<'PY'
 import sys
 for p in sys.argv[1:]:
@@ -377,7 +377,7 @@ import sys
 for p in sys.argv[1:]:
     t = open(p).read(); open(p, "w").write(t.replace(">> \"$CTX\"", "> \"$CTX\""))
 PY
-mirneg "a fallback sequence whose input overwrites the context file instead of appending is caught" 'Fallback input sequence lacks .if R=' "$tmp/mir8"; mirc claude-codex
+mirneg "a Review context sequence whose input overwrites the context file instead of appending is caught" 'Review context sequence lacks .then cat' "$tmp/mir8"; mirc claude-codex
 python3 - "$tmp/mir8/skills/claude-codex/SKILL.md" "$tmp/mir8/commands/claude-codex.md" <<'PY'
 import sys
 for p in sys.argv[1:]:
@@ -589,10 +589,12 @@ sendtry() { # $1 = redactor path; runs the claude-codex Review input block, then
 import re, sys
 t = open(sys.argv[1]).read()
 ri = re.search(r"\*\*Review input \(every reviewer call\)\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
-b = re.search(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
+b = re.search(r"\*\*(?:Review context \(every reviewer call\)|Fallback input \(tier S\))\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
 b = ri + "\n" + b
 b = b.replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[2]).replace("~/.claude/config/scripts/reviewer.sh S", "cp \"$CTX\" " + sys.argv[4] + " #")
 b = b.replace("<out-file>", "x")
+# WHY the dispatch is simulated here: the diff families' block only BUILDS the one context file (the dispatch lines live in the paragraph); the stub reviewer receives exactly that file.
+b += "\n[ -s \"$CTX\" ] && cp \"$CTX\" " + sys.argv[4] + "\n"
 open(sys.argv[3], "w").write(b + "\n")
 PY
   # self-contained throwaway repo (one committed file plus an uncommitted change), so the case needs no history of this repo and works in a shallow clone
@@ -609,9 +611,11 @@ fbtry() { # $1 = file, $2 = state
   python3 - "$1" "$red" "$tmp/fb.sh" "$tmp/fb-called" <<'PYFB'
 import re, sys
 t = open(sys.argv[1]).read()
-b = re.search(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
+b = re.search(r"\*\*(?:Review context \(every reviewer call\)|Fallback input \(tier S\))\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
 b = b.replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[2]).replace("~/.claude/config/scripts/reviewer.sh S", "cp \"$CTX\" " + sys.argv[4] + " #")
 b = b.replace("<out-file>", "x").replace("<feature-name>", "feat").replace("$(mktemp)", "$(mktemp \"$TMPDIR/t.XXXXXX\")")  # BSD mktemp ignores TMPDIR without a template
+if "review-context.txt" in b:
+    b += "\n[ -s \"$CTX\" ] && cp \"$CTX\" " + sys.argv[4] + "\n"  # the diff families' block only builds the file: the stub reviewer receives exactly it
 open(sys.argv[3], "w").write(b + "\n")
 PYFB
   rm -rf "$tmp/fbrepo" "$tmp/fbtmp"; mkdir -p "$tmp/fbrepo" "$tmp/fbtmp"
@@ -629,7 +633,7 @@ PYFB
   FBLEFT="$(ls -A "$tmp/fbtmp" | wc -l | tr -d ' ')"; [ -f "$tmp/fb-called" ]
 }
 fbsnap() { mkdir -p "$tmp/fbrepo/.claude/review"; git -C "$tmp/fbrepo" diff HEAD > "$tmp/fbrepo/.claude/review/review-input.diff"; }  # what the Review input block (or step 1 of the review record) leaves behind: the one masked input every reviewer gets
-fbclean() { fbtry "$1" "$2" || true; [ "$FBLEFT" -eq 0 ]; }  # true when no context or scratch file survived
+fbclean() { fbtry "$1" "$2" || true; [ "$FBLEFT" -eq 0 ] && [ ! -e "$tmp/fbrepo/.claude/review/review-context.txt" ]; }  # true when no context or scratch file survived
 for fbf in skills/claude-codex/SKILL.md skills/execute-codex/SKILL.md skills/tdd-claude-codex/SKILL.md skills/tdd-execute-codex/SKILL.md skills/codex-mcp/SKILL.md skills/codex-mcp/reference.md commands/claude-codex.md commands/execute-codex.md commands/tdd-claude-codex.md commands/tdd-execute-codex.md; do
   expect pass "$fbf: the fallback block reaches the reviewer for a real change" fbtry "$here/../$fbf" ok
   expect fail "$fbf: the fallback block never reaches the reviewer when the diff is empty" fbtry "$here/../$fbf" emptydiff
@@ -776,6 +780,9 @@ assert s.count(a) == 2
 k = s.rindex(a); open(p, "w").write(s[:k] + s[k+len(a):])
 PYX
 mirneg "a Review record step 2 that no longer resolves the repo root is caught" 'must resolve the repo root' "$tmp/mir8"; mirc tdd-execute-codex
+# r20 finding 2: secrets in the task requirements text are masked by the same redaction step that masks the diff (plain text, not only diff lines).
+printf 'Requirements: use password=hunter2secret and DB_PASSWORD: "abc123xyz" ok\n' | bash "$here/../scripts/redact-diff.sh" > "$tmp/req-redacted.txt" 2>/dev/null
+expect pass "task requirements text is masked by the same redaction step as the diff" bash -c '! grep -q "hunter2secret\|abc123xyz" "$1" && grep -q "Requirements" "$1"' _ "$tmp/req-redacted.txt"
 # r19 finding 1: the PRIMARY reviewer gets the same masked input as the fallback. Reintroducing a prompt that tells the reviewer to run git diff itself (the unredacted tree), or one that
 # sends the raw snapshot, is caught in each family: claude-codex, tdd-claude-codex (Codex reviews) and tdd-execute-codex (Codex audits the tests; the Claude reviewer reads the snapshot).
 for fam in claude-codex tdd-claude-codex tdd-execute-codex; do
@@ -790,10 +797,25 @@ mirneg "a $fam Codex prompt that tells the reviewer to run git diff itself is ca
 python3 - "$tmp/mir8/skills/$fam/SKILL.md" "$tmp/mir8/commands/$fam.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
-    t = open(p).read(); t2 = t.replace("<the contents of `.claude/review/review-input.diff`>", "<the contents of `.claude/review/reviewed.diff`>"); assert t2 != t, p
+    t = open(p).read(); t2 = t.replace('then cat "$R/.claude/review/review-input.diff" >> "$CTX"', 'then cat "$R/.claude/review/reviewed.diff" >> "$CTX"'); assert t2 != t, p
     open(p, "w").write(t2)
 PYX
-mirneg "a $fam Codex prompt whose DIFF section is the raw snapshot is caught" 'expected [0-9]+ Codex diff prompt' "$tmp/mir8"; mirc "$fam"
+mirneg "a $fam Review context that appends the raw snapshot instead of the review input is caught" 'Review context sequence lacks' "$tmp/mir8"; mirc "$fam"
+# r20 finding 2: the primary prompt must point the reviewer at the task requirements, and every Codex review call must hand the context file over with --prompt-file (never as an argument).
+python3 - "$tmp/mir8/skills/$fam/SKILL.md" "$tmp/mir8/commands/$fam.md" <<'PYX'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); t2 = t.replace(" The task requirements are in the TASK REQUIREMENTS section of this prompt: judge whether the change satisfies them as well as whether it is correct.", ""); assert t2 != t, p
+    open(p, "w").write(t2)
+PYX
+mirneg "a $fam Codex prompt that does not point at the task requirements is caught" 'point the reviewer at the TASK REQUIREMENTS section' "$tmp/mir8"; mirc "$fam"
+python3 - "$tmp/mir8/skills/$fam/SKILL.md" "$tmp/mir8/commands/$fam.md" <<'PYX'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); t2 = t.replace("--prompt-file", "--prompt-text"); assert t2 != t, p
+    open(p, "w").write(t2)
+PYX
+mirneg "a $fam Codex call that no longer passes the context file with --prompt-file is caught" 'does not pass the Review context file with --prompt-file|lacks .`--prompt-file`' "$tmp/mir8"; mirc "$fam"
 done
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys

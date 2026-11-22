@@ -1,7 +1,7 @@
 # Usage: test-mirrors.py [repo-root]   exit 0 when every mirrored review-loop instruction is identical in every copy.
 # WHY a manifest test: the same instruction lives in skills/<n>/SKILL.md and commands/<n>.md (and several times per file);
 # hand-checking copies kept missing one per review round (r17 to r20). Here a copy that differs or is missing fails (r20).
-import json, os, re, sys
+import glob, json, os, re, sys
 root = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 NAMES = ["claude-codex", "execute-codex", "plan-codex", "tdd-claude-codex", "tdd-execute-codex"]
 DIFF_NAMES = [n for n in NAMES if n != "plan-codex"]
@@ -173,17 +173,20 @@ for f in sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root,
 # cc11-main-r9 finding 2: the tier S fallback must receive the SAME context the Codex call received, not only a diff. A bare diff loses the task requirements (so a test audit cannot check
 # requirement coverage), the review or audit instructions and the carried and contested findings (so a fallback round cannot verify a fix or settle a dispute). Every fallback line therefore
 # names the context file and what it carries, and every file with a fallback holds the ONE prescribed command sequence that builds it (the fenced block is mirrored skill to command).
-CTXKEY = "built by the Fallback input paragraph: task requirements, review instructions, carried and contested findings, then the sanitized diff"
+CTXKEY = "built by the Review context paragraph: task requirements, review instructions, carried and contested findings, then the sanitized diff"
 CTXPKEY = "built by the Fallback input paragraph: audit instructions, carried and contested findings, then the current plan text"
 CTXFILES = sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root, "skills", "codex-mcp", x) for x in ("SKILL.md", "reference.md")))
 def block_of(path):
     t = open(path, encoding="utf-8").read()
-    m = re.search(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n.*?\n```\n", t, re.S)
+    m = re.search(r"\*\*(?:Review context \(every reviewer call\)|Fallback input \(tier S\))\*\*:.*?\n```\n.*?\n```\n", t, re.S)
     return m.group(0) if m else None
 # r19 finding 1: ONE review input for every reviewer. Every diff workflow builds .claude/review/review-input.diff (the diff after redact-diff.sh) once per round, hands exactly that to the primary
 # reviewer and the tier S fallback, and the fallback block only appends that file: no second git diff, no raw snapshot in any prompt.
-REVNEED = ['if R="$(git rev-parse --show-toplevel)" && [ -s "$R/.claude/review/review-input.diff" ] && cat "$R/.claude/review/review-input.diff" >> "$CTX"; then :',
-           'the review input .claude/review/review-input.diff is missing or empty: no context is sent']
+# r20 finding 2: the SAME file is the Codex prompt (--prompt-file) and the tier S context, written under .claude/review, with the requirements and instructions text passed through redact-diff.sh like the diff.
+REVNEED = ['CTX="$R/.claude/review/review-context.txt"', '~/.claude/config/scripts/redact-diff.sh > "$CTX" <<\'EOF\'', 'then cat "$R/.claude/review/review-input.diff" >> "$CTX"', 'echo "review context ready', 'rm -f "$CTX"',
+           'the review input .claude/review/review-input.diff is missing or empty, or the redaction failed: no context is sent']
+PARANEED = ["`--prompt-file`", "never the prompt as a command argument", "operating system's argument limit", "TASK REQUIREMENTS", "same `~/.claude/config/scripts/redact-diff.sh`", "same best-effort mask", "not a guarantee",
+            "`reviewer.sh S`", "`codex-call.sh`"]
 for f in CTXFILES:
     rel, plan = os.path.relpath(f, root), os.path.basename(os.path.dirname(f)) == "plan-codex" or os.path.basename(f) == "plan-codex.md"
     text = open(f, encoding="utf-8").read()
@@ -199,17 +202,17 @@ for f in CTXFILES:
             continue
         # WHY the quoted ${START_SHA:?} (round 15 finding 3): an unset START_SHA made `git diff $START_SHA` read the index, not the run's changes; the :? form fails the pipeline and sends nothing.
         base = "\"${START_SHA:?}\"" if "tdd-" in rel else "HEAD"
-        need = ['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "OPEN FINDINGS:"] + (["AUDIT INSTRUCTIONS:", '[ -s .claude/plan/<feature-name>.md ] && cat .claude/plan/<feature-name>.md >> "$CTX" || { rm -f "$CTX"', "the plan file is missing, empty or unreadable: no context is sent", "PLAN:"] if plan else
-                ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:"] + REVNEED + ["[ -f \"$CTX\" ] && ~/.claude/config/scripts/reviewer.sh S", "best-effort mask", "no context is sent"])
+        need = ["OPEN FINDINGS:"] + (['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "AUDIT INSTRUCTIONS:", '[ -s .claude/plan/<feature-name>.md ] && cat .claude/plan/<feature-name>.md >> "$CTX" || { rm -f "$CTX"', "the plan file is missing, empty or unreadable: no context is sent", "PLAN:"] if plan else
+                ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:"] + REVNEED + PARANEED + ["best-effort mask", "no context is sent"])
         for k in need:
             if k not in b:
-                bad.append("%s: the Fallback input sequence lacks %r" % (rel, k[:50]))
+                bad.append("%s: the %s sequence lacks %r" % (rel, "Fallback input" if plan else "Review context", k[:50]))
         if not plan:
             code = re.search(r"```\n(.*?)\n```", b, re.S).group(1)
             if "git diff" in code:
                 bad.append("%s: the Fallback input sequence runs a second git diff (it must append .claude/review/review-input.diff instead)" % rel)
-        if len(re.findall(r"\*\*Fallback input \(tier S\)\*\*", text)) != 1:
-            bad.append("%s: expected exactly one Fallback input paragraph" % rel)
+        if len(re.findall(r"\*\*(?:Review context \(every reviewer call\)|Fallback input \(tier S\))\*\*", text)) != 1 or ("Fallback input (tier S)" in text) != plan:
+            bad.append("%s: expected exactly one %s paragraph" % (rel, "Fallback input" if plan else "Review context"))
 for n in NAMES:
     sk, cm = files(n)
     if block_of(sk) != block_of(cm):
@@ -382,8 +385,16 @@ for n in PROMPTSITES:
             bad.append("%s: a reviewer prompt tells the reviewer to run git diff itself (it must be handed the redacted review input)" % rel)
         if "Send the reviewer `.claude/review/reviewed.diff`" in t or "never a fresh `git diff`: it must judge exactly the bytes hashed" in t:
             bad.append("%s: the raw snapshot is sent to a reviewer" % rel)
-        if t.count("The diff to review is in the DIFF section at the end of this prompt (the contents of `.claude/review/review-input.diff`") != PROMPTSITES[n] or t.count("<the contents of `.claude/review/review-input.diff`") < PROMPTSITES[n]:
+        if t.count("The diff to review is in the DIFF section at the end of this prompt (the contents of `.claude/review/review-input.diff`") != PROMPTSITES[n]:
             bad.append("%s: expected %d Codex diff prompt(s) carrying the redacted review input under a DIFF section" % (rel, PROMPTSITES[n]))
+        # r20 finding 2: the primary prompt names the requirements section (the reviewer judges the change against the request, not only against itself) in every family.
+        if t.count("The task requirements are in the TASK REQUIREMENTS section of this prompt") != PROMPTSITES[n]:
+            bad.append("%s: expected %d Codex prompt(s) that point the reviewer at the TASK REQUIREMENTS section" % (rel, PROMPTSITES[n]))
+        # r20 finding 1: every Codex review call hands the context file over with --prompt-file; no prompt template ends with a pasted DIFF placeholder (the file builder appends the diff).
+        if t.count("<the contents of `.claude/review/review-input.diff`>") != 0:
+            bad.append("%s: a Codex prompt still ends with a pasted diff placeholder (the Review context file carries the diff)" % rel)
+        if PROMPTSITES[n] and t.count("--prompt-file") < PROMPTSITES[n]:
+            bad.append("%s: a Codex review call does not pass the Review context file with --prompt-file" % rel)
         if LIMIT not in t:
             bad.append("%s: lacks the honest limit of redaction (Codex has local read access)" % rel)
         if not n.endswith("execute-codex"):

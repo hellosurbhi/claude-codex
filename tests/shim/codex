@@ -14,7 +14,8 @@ argv=("$@")
 o="$(mktemp)"; e="$(mktemp)"; pf="$(mktemp)"; so="$(mktemp)"; sin="$(mktemp)"
 trap 'rm -f "$o" "$e" "$pf" "$so" "$so.err" "$so.meta" "$sin"' EXIT
 # WHY stdin is saved first (r20 finding 1): codex-call.sh now sends the prompt on stdin (`-`); the real codex gets the same bytes and the log records them as the prompt.
-[[ -t 0 ]] || cat > "$sin"
+# WHY only when the last argument is `-`: a caller that passes the prompt as an argument leaves stdin open and never closes it, so an unconditional cat hangs forever.
+[[ "${*: -1}" == "-" ]] && cat > "$sin"
 EVLOG="${EVLOG:-$(cd "$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")/.." && pwd)/wrapper.jsonl}"
 EVSTART="$(python3 -c 'import time; print(time.time())')"; export EVSTART
 # Non-codex-exec calls (login status, --version) are replayed and not logged.
