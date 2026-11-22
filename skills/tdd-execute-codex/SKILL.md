@@ -183,21 +183,22 @@ Announce routing decision (e.g. "Small change — implementing directly" or "Lar
 **Review record (every reviewer round)**: the code-reviewer agent is Claude, so its verdict never reaches the Codex wrapper log, and the final report's `AUDIT-STATUS` line names no state. Each reviewer round of this workflow (every Route A and Route B round and, in the usage-limit chain, the fallback reviewer's out-file) therefore has two steps that bind the saved reply to the exact diff the reviewer judged. Step 1 runs BEFORE the reviewer is dispatched, after the same intent-to-add step that builds the reviewer's diff. Run it unchanged:
 
 ```
-mkdir -p .claude/review
-H="$(git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)"
+mkdir -p .claude/review; rm -f .claude/review/final-review.txt .claude/review/reviewed.diff
+if H="$(set -o pipefail; git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)" && [ -s .claude/review/reviewed.diff ]; then echo "snapshot ready: send .claude/review/reviewed.diff to the reviewer"
+else rm -f .claude/review/reviewed.diff; echo "no snapshot (the diff failed or is empty): do NOT dispatch the reviewer, fix the cause and run step 1 again"; fi
 ```
-Send the reviewer `.claude/review/reviewed.diff`, never a fresh `git diff`: it must judge exactly the bytes hashed into `H`. Step 2 runs when the reply arrives, before any fix. Run it unchanged, with the reviewer's reply pasted verbatim:
+Dispatch only after it prints "snapshot ready". Send the reviewer `.claude/review/reviewed.diff`, never a fresh `git diff`: it must judge exactly the bytes hashed into `H`. Step 2 runs when the reply arrives, before any fix. Run it unchanged, with the reviewer's reply pasted verbatim:
 
 ```
 H="$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)"
-if [ "$(git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' | shasum -a 256 | cut -d' ' -f1)" = "$H" ]; then
+if N="$(set -o pipefail; git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' | shasum -a 256 | cut -d' ' -f1)" && [ -s .claude/review/reviewed.diff ] && [ "$N" = "$H" ]; then
 { printf 'REVIEWED-DIFF: %s\n' "$H"; cat <<'REVIEW'
 <the reviewer's reply, verbatim>
 REVIEW
 } > .claude/review/final-review.txt
-else rm -f .claude/review/final-review.txt; echo "the tree changed while the reviewer ran: this round is void, there is no verdict for the current tree, review again"; fi
+else rm -f .claude/review/final-review.txt; echo "the diff failed, is empty or the tree changed while the reviewer ran: this round is void, there is no verdict for the current tree, review again"; fi
 ```
-If the tree changed while the reviewer ran, the round is void: nothing is recorded, the earlier diff's approval never carries over, and the next round starts again at step 1. Each round overwrites the file, so it always holds the latest round. The record carries the pre-dispatch hash (taken from the snapshot, never from the tree after the reply), and the whole `.claude/review/` directory is excluded from the hashed diff (the record, the snapshot and anything added there later): a tracked or intent-to-add file in it is rewritten around the hash, so a diff that included it would make every record stale. A record counts as approval only when its reply is exactly `VERDICT: APPROVED` with zero findings and its hash is that of the final diff: any edit after a round makes the record stale, which needs a new review round and a new record, and a final report whose record is missing, stale or not clean must end `AUDIT-STATUS: UNREVIEWED`.
+A failed `git diff`, an empty snapshot or a changed tree voids the round: nothing is recorded, any old record is removed, the earlier diff's approval never carries over, and the next round starts again at step 1. Each round overwrites the file, so it always holds the latest round. The record carries the pre-dispatch hash (taken from the snapshot, never from the tree after the reply), and the whole `.claude/review/` directory is excluded from the hashed diff (the record, the snapshot and anything added there later): a tracked or intent-to-add file in it is rewritten around the hash, so a diff that included it would make every record stale. A record counts as approval only when its reply is exactly `VERDICT: APPROVED` with zero findings and its hash is that of the final diff: any edit after a round makes the record stale, which needs a new review round and a new record, and a final report whose record is missing, stale or not clean must end `AUDIT-STATUS: UNREVIEWED`.
 
 ### Route A: Small Change — Claude Implements (GREEN)
 

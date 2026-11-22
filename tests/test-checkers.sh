@@ -510,7 +510,7 @@ expect fail "a command that lost its Review record paragraph is caught" python3 
 python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" <<'PYX'
 import sys, re
 p = sys.argv[1]; t = open(p).read()
-t2 = re.sub(r"(H=\"\$\(git diff \$START_SHA) -- [^|]*\|", r"\1 |", t, count=1); assert t2 != t
+t2 = re.sub(r"(H=\"\$\(set -o pipefail; git diff \$START_SHA) -- [^|]*\|", r"\1 |", t, count=1); assert t2 != t
 open(p, "w").write(t2)
 PYX
 expect fail "a Review record hash taken over a diff without the secret excludes is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
@@ -555,6 +555,28 @@ for p in sys.argv[1:]:
     open(p, "w").write(t2)
 PYX
 expect fail "a Review record that no longer compares the tree after the reply with the pre-dispatch hash is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+# r14 finding 1: both steps check the diff pipeline status and reject an empty snapshot
+python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); t2 = t.replace("""N="$(set -o pipefail; git diff""", """N="$(git diff"""); assert t2 != t
+    open(p, "w").write(t2)
+PYX
+expect fail "a Review record step 2 that no longer checks the diff pipeline status is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); t2 = t.replace("""H="$(set -o pipefail; git diff""", """H="$(git diff"""); assert t2 != t
+    open(p, "w").write(t2)
+PYX
+expect fail "a Review record step 1 that no longer checks the diff pipeline status is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
+python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); t2 = t.replace(""" && [ -s .claude/review/reviewed.diff ] && [ "$N\"""", """ && [ "$N\""""); assert t2 != t
+    open(p, "w").write(t2)
+PYX
+expect fail "a Review record step 2 that accepts an empty snapshot is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
 expect pass "the pristine copies pass every r10 rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 
 # cc11-main-r2 finding 3: the diff command each workflow prescribes is relative to the repository top, not to the shell's folder.
@@ -1375,6 +1397,20 @@ expect fail "the prescribed sequence voids the round when a file is edited while
 expect fail "an edit during the review leaves nothing the checker accepts" rr
 rrmk; rrstep step1.sh; rrstep step2.sh; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
 expect fail "an earlier round's record does not approve a later edit" rr
+# r14 finding 1: a pipeline failure or an empty diff voids the round at step 1 AND at step 2, removes any old record and records nothing. rrstepx runs the extracted block with NO `set -e` (the block must handle
+# its own failures) and, when FAILSUB is given, with a stub git whose subcommand FAILSUB exits 1.
+rrstepx() { (cd "$tmp/rr" && { [ ! -e app.py ] || git add -N app.py; } && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" > "$tmp/x-$1" && if [[ -n "${2:-}" ]]; then FAILSUB="$2" PATH="$tmp/stubgit:$PATH" bash "$tmp/x-$1"; else bash "$tmp/x-$1"; fi) >/dev/null 2>&1; }
+rrstale() { rrrec "$(rrhash)" "VERDICT: APPROVED\n"; }
+rrmk; rrstale; rrstepx step1.sh diff; rrstepx step2.sh
+expect fail "a git diff that fails at step 1 leaves no record (the old record is removed and no snapshot is kept)" test -e "$tmp/rr/.claude/review/final-review.txt" -o -s "$tmp/rr/.claude/review/reviewed.diff"
+rrmk; rrstepx step1.sh; rrstale; rrstepx step2.sh diff
+expect fail "a git diff that fails at step 2 leaves no record (the old record is removed)" test -e "$tmp/rr/.claude/review/final-review.txt"
+rrmk; rrstale; rrstepx step1.sh diff; rrstepx step2.sh diff
+expect fail "a git diff that fails at both steps leaves no record, whatever hash empty input has" test -e "$tmp/rr/.claude/review/final-review.txt"
+rrmk; rm -f "$tmp/rr/app.py"; rrstale 2>/dev/null; rrstepx step1.sh; rrstepx step2.sh
+expect fail "an empty diff leaves no record and no snapshot" test -e "$tmp/rr/.claude/review/final-review.txt" -o -e "$tmp/rr/.claude/review/reviewed.diff"
+rrmk; rrstepx step1.sh; rrstepx step2.sh
+expect pass "the same block with a working git and a real diff still records" rr
 # r14 finding 3: the whole .claude/review/ directory (record, snapshot, anything added later) is outside the hashed diff, so tracking any of it never turns an unchanged round stale
 rrsnap() { mkdir -p "$tmp/rr/.claude/review"; printf 'snapshot\n' > "$tmp/rr/.claude/review/reviewed.diff"; printf 'other\n' > "$tmp/rr/.claude/review/notes.txt"; }
 rrmk; H0="$(rrhash)"; rrsnap; (cd "$tmp/rr" && git add -f .claude/review/reviewed.diff); rrrec "$H0" "VERDICT: APPROVED\n"
