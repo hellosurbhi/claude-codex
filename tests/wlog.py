@@ -99,23 +99,27 @@ def started(e):
     so events of different kinds are comparable; the log position (seq) only breaks ties."""
     return (e.get("ts_start", e["ts"]), e.get("seq", 0))
 
-def review_attempts(events, real=False):
-    """EVERY review attempt of every kind, in start order: the scripted fake (or, with real, the genuine real-codex shim events), a wrapper-failed event of the real wrapper,
-    and the fallback reviewer (spy, `diagnose` excluded: it is not a review). A bare `direct` codex call, the model stand-ins and anything else are not attempts."""
+def review_attempts(events):
+    """EVERY review attempt of every authenticated kind, in start order: the scripted fake, the genuine real-codex shim events, a wrapper-failed event of the real wrapper,
+    and the fallback reviewer (spy, `diagnose` excluded: it is not a review). A bare `direct` codex call, the model stand-ins and anything else are not attempts.
+    WHY no mode here (r26): a flag that dropped a kind of attempt let a failed REAL review after a clean fallback leave the approval standing."""
     def attempt(e):
         w = e["wrapper"]
         if w == "spy":
             return (e.get("argv") or [""])[0] != "diagnose"
-        return is_wrapper_failure(e) or (is_real(e) if real else w == "fake")
+        return is_wrapper_failure(e) or w == "fake" or is_real(e)
     return sorted((e for e in events if attempt(e)), key=started)
 
 def final_review_state(events, real=False):
-    """The ONE decision "this run ended approved": the LAST review attempt of any kind exited 0 with a clean verdict. Returns {"approved": bool, "last": event or None}.
+    """The ONE decision "this run ended approved": the LAST review attempt of any kind exited 0 with a clean verdict, and that attempt is valid approving evidence. Returns {"approved": bool, "last": event or None}.
     Every checker that decides approval calls this and then adds its own binding (state, phase, tree) on `last`; none may filter attempts itself.
-    WHY all kinds in one list (r25): choosing the final review inside a filtered list (spy only, Codex only) let an earlier clean review stand after a LATER failed attempt of another kind."""
-    att = review_attempts(events, real)
+    WHY all kinds in one list (r25, r26): choosing the final review inside a filtered list (spy only, Codex only) let an earlier clean review stand after a LATER failed attempt of another kind.
+    `real` only chooses which clean attempt may be the approval: the spy fallback always may; a scripted fake only when real is False; a genuine real-codex event only when real is True.
+    It never hides a failure: every kind is in the list that decides which attempt is last."""
+    att = review_attempts(events)
     last = att[-1] if att else None
-    return {"approved": bool(last and is_clean(last)), "last": last}
+    evidence = bool(last) and (last["wrapper"] == "spy" or (is_real(last) if real else last["wrapper"] == "fake"))
+    return {"approved": bool(last and evidence and is_clean(last)), "last": last}
 
 def issued_before(evs, i):
     """Thread ids the wrapper itself issued (new, non-resume, successful calls) before event i."""

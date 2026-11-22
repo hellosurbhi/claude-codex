@@ -2168,6 +2168,14 @@ line fake 0 unknown "${TID}VERDICT: BLOCKED\nCRITICAL: x\n"
 expectm fail "r25: a later BLOCKED Codex review also voids the fallback approval" 'REJECT: no valid reviewer call after the quota hit, or the last one is not clean' ral
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"
 expectm fail "r25: the existing tree rule still holds (tree changed after the reviewed state)" 'REJECT: the code tree changed after the reviewed state' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+# r26 finding 2: a clean fallback review followed by a failed REAL Codex event is not approved, in every caller of the shared decision (no mode may hide a kind of attempt).
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"; LINEMETA="state=S1 endstate=S1 impl=yes" line real 1 implementation "codex-call: UNREVIEWED"
+expectm fail "r26: reviewer-after-limit: a clean fallback review then a failed REAL Codex event is not approved" 'REJECT: no valid reviewer call after the quota hit, or the last one is not clean' ral
+expect pass "r26: last-verdict: a clean fallback review then a failed REAL Codex event has no verdict" test "$(python3 "$here/last-verdict.py" "$EVLOG")" = NONE
+mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"; line spy 0 review "$CLEANR"; LINEMETA="state=S1 endstate=S1 impl=yes" line real 1 review "codex-call: UNREVIEWED"
+expect fail "r26: check-scripted final --real: a clean fallback review then a failed REAL Codex event is not approved" python3 "$here/check-scripted.py" "$EVLOG" final S1 --real
+mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
+expect pass "r26: check-scripted final --real control: the clean real review alone is approved (the fail case above is not vacuous)" python3 "$here/check-scripted.py" "$EVLOG" final S1 --real
 # one comparable ordering key: a spy-kind, a wrapper-failed and a fake event written by their real writers in this order sort in this order
 mkrun; python3 "$here/evlog.py" "$EVLOG" spy 0 "" "" /dev/null /dev/null /dev/null -- S in out; wfcall --bogus "p"; python3 "$here/evlog.py" "$EVLOG" fake 0 "" "" /dev/null /dev/null /dev/null --
 expect pass "r25: spy, wrapper-failed and fake events from their real writers share one clock and sort in call order" python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print([e["wrapper"] for e in wlog.review_attempts(wlog.load(sys.argv[2]))]); sys.exit(0 if [e["wrapper"] for e in wlog.review_attempts(wlog.load(sys.argv[2]))]==["spy","wrapper-failed","fake"] else 1)' "$here" "$EVLOG"
