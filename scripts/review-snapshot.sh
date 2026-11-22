@@ -3,19 +3,25 @@
 # Usage: review-snapshot.sh <base>                prints the review snapshot on stdout, exit 0 only when all of it was produced.
 #        review-snapshot.sh --range <base> <head> the committed diff base..head (no excludes), canonical bytes, same flags.
 #        review-snapshot.sh --files <a> <b>       a -U0 diff of two plain files (outside any repo), canonical bytes, same flags.
-# The ONE definition of "the reviewed state" (r28 finding 2): `git diff <base>` of the tracked changes plus a new-file diff for every
-# untracked, non-ignored file, minus secret-named paths (.env*, *secret*, *credential*, *.pem, *.key) and the workflow's own folders
-# (.claude/review, .claude/plan). The skills hash it before the reviewer runs and again after the reply, and tests/check-review-record.py
-# recomputes it with this same script, so the before, after and record states cannot drift apart.
-# WHY untracked files are included here: the old snapshot saw only tracked and intent-to-add changes, so a new source file created while the
-# reviewer ran left the hash unchanged and the record certified a state holding unreviewed code.
-# WHY a throwaway index: `git add -N` on a COPY of the index (GIT_INDEX_FILE) makes git render untracked files as new-file diffs (binary files
-# as git's "Binary files differ" line, paths with spaces intact via NUL-separated input) without touching the user's real index.
-# WHY the copy's mtime is forced into the past (r29 flake): git treats an index entry as "racy" (re-hash its content instead of trusting size and
-# mtime) when the entry's mtime is not older than the index FILE's mtime. A plain `cp` gave the copy a fresh mtime, so a same-size edit made in
-# the same second as the last index write looked unchanged and vanished from the snapshot with exit 0 (about 1 run in 40, when the clock ticked
-# over mid-script). `cp -p` alone would depend on the original's timestamp; touching the copy to the epoch makes EVERY entry racy, so the
-# snapshot always compares content and can never trust a stat match. If the touch fails the script exits non-zero (fail closed).
+# The ONE definition of "the reviewed state" (r28, redesigned r30): the working-tree files on disk as a git tree, diffed against the base tree,
+# minus secret-named paths (.env*, *secret*, *credential*, *.pem, *.key) and the workflow's own folders (.claude/review, .claude/plan). The skills
+# hash it before the reviewer runs and again after the reply, and tests/check-review-record.py recomputes it with this same script.
+# WHY the tree is built from disk into a FRESH index and object directory, and the user's index is never used for content (r30): three rounds
+# found three ways a copy of the user's index lies (racy mtime, then config, then assume-unchanged/skip-worktree flags). A stat-cache diff
+# decides "unchanged" from index state the user or git controls; a tree-vs-tree diff has no stat cache, racy window, flags, fsmonitor,
+# untracked cache, split or sparse index. Plain `cp` of the index, `git add -N` on a copy and a touch to 1970 were all tried first and all
+# left a way for an edited file to be missing. The user's index supplies only which PATHS exist, which are skip-worktree and which are gitlinks.
+# Objects go to a temporary GIT_OBJECT_DIRECTORY (the real store is an alternate, read only), so the real index, refs and objects are untouched.
+# Decisions: ignore rules are the repo's own (.gitignore, .git/info/exclude) and the user's global core.excludesFile/XDG ignore is NOT applied
+# (a file hidden by a private ignore must still be reviewed). Tracked files that are ignored, or deleted on disk, are still compared (the base
+# tree paths are candidates). A skip-worktree path that is ABSENT on disk is left as in the base (sparse checkout: absent by design, never a
+# deletion); a skip-worktree path that exists is read from disk. The executable bit is read from disk (core.fileMode pinned true) and symlinks are
+# recorded as links (core.symlinks pinned true).
+# FAIL CLOSED (non-zero, empty stdout, message on stderr naming the path) when a file carries a filter, ident or working-tree-encoding attribute
+# (clean filters, LFS pointers: user code or a rewrite git cannot undo), when a submodule has any uncommitted or untracked change (checked by running
+# this script inside it), when a directory holds an untracked nested git repository, or for a path with a newline in its name. A clean submodule
+# at another commit shows as the gitlink change. text/eol attributes still normalise line endings the way a commit would (an edit that only
+# flips CRLF/LF of such a file shows no change, as it would not in a commit).
 # WHY fail closed: output is written only after every stage succeeded (built in a temp file, emitted last), so a failed stage leaves stdout empty
 # and the exit nonzero; an empty hash input must never look like a valid snapshot. `set -e` is not used because each status is checked explicitly.
 # WHY every output-shaping setting is pinned HERE and nowhere else (r29): the hash is only evidence if the same state always yields the same
@@ -25,12 +31,13 @@
 # the output. Renames are OFF on purpose: rename detection depends on similarity heuristics and diff.renames, so the reviewer sees a plain
 # delete plus add, which is always complete. core.quotePath=true (the default) makes non-ASCII names print as ASCII octal escapes.
 # Settings that CAN still change the bytes, because they live in the repo itself: .gitattributes `-diff`/`binary` and `diff=<driver>` with
-# `diff.<driver>.binary` (they flip a file to "Binary files differ"), and clean filters that rewrite worktree content on read. Those files are
-# part of the change under review, so editing them shows up in the same snapshot.
+# `diff.<driver>.binary` (they flip a file to "Binary files differ"; --full-index keeps the blob ids in the output, so an edit still changes the
+# bytes). Filters are not in this list: they fail closed, see above.
 set -o pipefail
 export LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1
-unset GIT_EXTERNAL_DIFF GIT_DIFF_OPTS GIT_PAGER
-CFG=(-c core.quotePath=true -c core.autocrlf=false -c core.safecrlf=false -c core.attributesFile=/dev/null -c core.abbrev=auto
+unset GIT_EXTERNAL_DIFF GIT_DIFF_OPTS GIT_PAGER GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+CFG=(-c core.quotePath=true -c core.fileMode=true -c core.symlinks=true -c core.ignoreCase=false -c core.fsmonitor=false
+     -c core.untrackedCache=false -c core.splitIndex=false -c core.sparseCheckout=false -c core.excludesFile=/dev/null -c index.sparse=false -c core.autocrlf=false -c core.safecrlf=false -c core.attributesFile=/dev/null -c core.abbrev=auto
      -c diff.external= -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.renames=false -c diff.algorithm=myers
      -c diff.indentHeuristic=true -c diff.context=3 -c diff.interHunkContext=0 -c diff.relative=false -c diff.submodule=short
      -c diff.ignoreSubmodules=none -c diff.wsErrorHighlight=none -c diff.colorMoved=false -c diff.suppressBlankEmpty=false
@@ -60,15 +67,59 @@ case "$mode" in
     top="$(canon rev-parse --show-toplevel)" || exit 1
     [ -n "$top" ] || exit 1
     cd "$top" || exit 1
-    src="$(canon rev-parse --git-path index)" || exit 1
-    case "$src" in /*) ;; *) src="$top/$src" ;; esac
-    if [ -e "$src" ]; then cp "$src" "$tmp/index" && touch -t 197001020000 "$tmp/index" || exit 1; fi
-    export GIT_INDEX_FILE="$tmp/index"
-    canon ls-files --others --exclude-standard -z > "$tmp/untracked" || exit 1
-    if [ -s "$tmp/untracked" ]; then
-      # Paths the pathspecs below exclude are added too but never rendered.
-      canon add -N --pathspec-from-file="$tmp/untracked" --pathspec-file-nul || exit 1
+    self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    die() { echo "review-snapshot: $*" >&2; exit 1; }
+    base_tree="$(canon rev-parse --verify "$base^{tree}")" || die "cannot resolve $base"
+    real_obj="$(canon rev-parse --path-format=absolute --git-path objects)" || exit 1
+    case "$real_obj" in *:*) die "object directory path contains a colon" ;; esac
+    # What the user's index may tell us: WHICH paths exist in it, which gitlinks it holds and which paths are skip-worktree. Never file content.
+    canon ls-files -z --cached > "$tmp/idx-paths" || exit 1
+    canon ls-files -z -t | while IFS= read -r -d '' rec; do case "$rec" in "S "*) printf '%s\0' "${rec#S }" ;; esac; done > "$tmp/skipwt"
+    [ "${PIPESTATUS[0]}" -eq 0 ] || exit 1
+    canon ls-files -z -s | while IFS= read -r -d '' rec; do case "$rec" in 160000\ *) printf '%s\0' "${rec#*$'\t'}" ;; esac; done > "$tmp/gitlinks"
+    canon ls-tree -r -z "$base_tree" | while IFS= read -r -d '' rec; do case "$rec" in 160000\ *) printf '%s\0' "${rec#*$'\t'}" ;; esac; done >> "$tmp/gitlinks"
+    canon ls-tree -r -z --name-only "$base_tree" > "$tmp/base-paths" || exit 1
+    # Everything on disk that is not ignored, found with an EMPTY index so nothing tracked is skipped (nested repos come out as "dir/").
+    GIT_INDEX_FILE="$tmp/none" canon ls-files --others --exclude-standard -z > "$tmp/others" || exit 1
+    cat "$tmp/others" "$tmp/base-paths" "$tmp/idx-paths" | sort -z -u > "$tmp/cands" || exit 1
+    # Fresh private index and object directory: the user's index and object store are neither read for content nor written.
+    mkdir -p "$tmp/objects/info" "$tmp/objects/pack" || exit 1
+    export GIT_INDEX_FILE="$tmp/index" GIT_OBJECT_DIRECTORY="$tmp/objects" GIT_ALTERNATE_OBJECT_DIRECTORIES="$real_obj"
+    canon read-tree "$base_tree" || exit 1
+    : > "$tmp/upd"; : > "$tmp/rm"; : > "$tmp/info"; : > "$tmp/dirs-done"
+    while IFS= read -r -d '' p; do
+      p="${p%/}"
+      case "$p" in *$'\n'*) die "a path contains a newline: refusing" ;; esac
+      if [ -L "$p" ]; then printf '%s\0' "$p" >> "$tmp/upd"
+      elif [ -d "$p" ]; then
+        grep -qzxF -- "$p" "$tmp/dirs-done" && continue
+        printf '%s\0' "$p" >> "$tmp/dirs-done"
+        if grep -qzxF -- "$p" "$tmp/gitlinks"; then
+          [ -e "$p/.git" ] || continue   # an uninitialized submodule directory: the base gitlink stays as it is
+          sub_out="$(cd -- "./$p" && env -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES "$self" HEAD)" || die "submodule $p: its own snapshot failed"
+          [ -z "$sub_out" ] || die "submodule $p has uncommitted or untracked changes"
+          sub_sha="$(canon -C "$p" rev-parse --verify HEAD)" || die "submodule $p has no HEAD"
+          printf '160000 %s\t%s\0' "$sub_sha" "$p" >> "$tmp/info"
+        elif [ -e "$p/.git" ]; then die "$p is a nested git repository the snapshot cannot bind"
+        else printf '%s\0' "$p" >> "$tmp/rm"   # a plain directory where the base had a file
+        fi
+      elif [ -f "$p" ]; then printf '%s\0' "$p" >> "$tmp/upd"
+      elif [ -e "$p" ]; then die "$p is not a regular file, symlink or directory"
+      else
+        grep -qzxF -- "$p" "$tmp/skipwt" && continue   # absent by design (sparse checkout): leave the base entry, never a deletion
+        printf '%s\0' "$p" >> "$tmp/rm"
+      fi
+    done < "$tmp/cands"
+    # Content hashing would run clean filters, ident or re-encoding on file bytes, which are user code or a rewrite git cannot undo: fail closed.
+    if [ -s "$tmp/upd" ]; then
+      canon check-attr -z --stdin filter ident working-tree-encoding < "$tmp/upd" > "$tmp/attrs" || exit 1
+      bad="$(tr '\0' '\n' < "$tmp/attrs" | awk 'NR%3==1{p=$0} NR%3==0 && $0!="unspecified"{print p; exit}')"
+      [ -z "$bad" ] || die "$bad has a filter, ident or working-tree-encoding attribute: its bytes cannot be bound canonically"
     fi
-    canon diff "${DOPT[@]}" "$base" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' ':(top,exclude).claude/plan' > "$tmp/out" || exit 1 ;;
+    [ ! -s "$tmp/rm" ] || canon update-index --force-remove -z --stdin < "$tmp/rm" || exit 1
+    [ ! -s "$tmp/upd" ] || canon update-index --add --replace -z --stdin < "$tmp/upd" || exit 1
+    [ ! -s "$tmp/info" ] || canon update-index --add --replace -z --index-info < "$tmp/info" || exit 1
+    new_tree="$(canon write-tree)" || exit 1
+    canon diff "${DOPT[@]}" "$base_tree" "$new_tree" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' ':(top,exclude).claude/plan' > "$tmp/out" || exit 1 ;;
 esac
 cat "$tmp/out" || exit 1

@@ -2068,7 +2068,7 @@ snap="$here/../scripts/review-snapshot.sh"
 rrmk; printf 'q\n' > "$tmp/rr/new.py"; before="$(git -C "$tmp/rr" status --porcelain)"; (cd "$tmp/rr" && "$snap" "$(git rev-list --max-parents=0 HEAD)" >/dev/null)
 expect pass "r28: review-snapshot.sh leaves the user's real index and tree untouched" test "$(git -C "$tmp/rr" status --porcelain)" = "$before"
 expect pass "r28: review-snapshot.sh with no base exits non-zero and prints nothing" sh -c '! out="$("$1" 2>/dev/null)" && [ -z "$out" ]' _ "$snap"
-for sub in diff ls-files --git-path --show-toplevel add; do
+for sub in diff ls-files --git-path --show-toplevel read-tree update-index write-tree check-attr ls-tree; do
   expect pass "r28: review-snapshot.sh exits non-zero with nothing on stdout when git $sub fails" sh -c 'cd "$2" && out="$(FAILSUB=$3 PATH="$4:$PATH" "$1" "$(git rev-list --max-parents=0 HEAD)" 2>/dev/null)"; rc=$?; [ "$rc" -ne 0 ] && [ -z "$out" ]' _ "$snap" "$tmp/rr" "$sub" "$tmp/stubgit"
 done
 # r14 finding 1: a pipeline failure or an empty diff voids the round at step 1 AND at step 2, removes any old record and records nothing. rrstepx runs the extracted block with NO `set -e` (the block must handle
@@ -2186,9 +2186,9 @@ expectm fail "review record: a tracked or intent-to-add record still goes stale 
 EMPTYH=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 rrmk; rrrec "$(rrhash)" "VERDICT: APPROVED\n"
 expectm fail "review record: a git diff that exits non-zero fails the check" 'review-snapshot.sh failed \(exit ' env FAILSUB=diff PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
-# an untracked file the run never added makes the checker run its own intent-to-add; that git call failing must be the reported cause (not a later hash mismatch)
+# the checker's snapshot builds a private index from the files on disk (update-index); that git call failing must be the reported cause (not a later hash mismatch)
 printf 'x=1\n' > "$tmp/rr/extra.py"; rrrec "$(rrhash)" "VERDICT: APPROVED\n"
-expect pass "review record: a failing intent-to-add (index preparation) fails the check and says so" sh -c 'FAILSUB=add PATH="$1:$PATH" python3 "$2" "$3" "$4" 2>&1 | grep -q "review-snapshot.sh failed"' _ "$tmp/stubgit" "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
+expect pass "review record: a failing private-index build (update-index) fails the check and says so" sh -c 'FAILSUB=update-index PATH="$1:$PATH" python3 "$2" "$3" "$4" 2>&1 | grep -q "review-snapshot.sh failed"' _ "$tmp/stubgit" "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
 rm -f "$tmp/rr/extra.py"
 expectm fail "review record: a failing untracked-file listing fails the check" 'review-snapshot.sh failed \(exit ' env FAILSUB=ls-files PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
 expectm fail "review record: a failing index path lookup fails the check" 'review-snapshot.sh failed \(exit ' env FAILSUB=--git-path PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
