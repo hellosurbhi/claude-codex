@@ -220,15 +220,22 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
 │       ├── analyzer.md      # Codex role: plan auditor (source for skill bundles)
 │       ├── architect.md     # Codex role: implementer (source for skill bundles)
 │       └── reviewer.md      # Codex role: code reviewer
-├── scripts/
-│   └── codex-call.sh        # codex exec wrapper every skill calls (install step 3)
-└── tests/
-    ├── review-loop-proof.sh # runs a real headless Claude session through a skill with a scripted reviewer
-    ├── fake-codex-call.sh   # the scripted reviewer: one finding per round, tied to repo state
-    ├── spy-reviewer.sh      # real fallback reviewer for the usage-limit scenario (no ~/.claude writes)
-    ├── shim/codex           # logging `codex` shim put first on PATH in the real scenario (skill and wrapper untouched)
-    ├── evlog.py, wlog.py, treehash.py   # wrapper event log: one JSON line per real execution; the checkers read only this
-    └── test-checkers.sh     # unit cases for the checkers (no Claude, no network)
+└── config/
+    └── scripts/
+        └── codex-call.sh            # codex exec wrapper every skill calls (install step 3)
+```
+
+The tests are not installed. They live in this repository only:
+
+```
+tests/
+├── review-loop-proof.sh # runs a real headless Claude session through a skill with a scripted reviewer
+├── fake-codex-call.sh   # the scripted reviewer: one finding per round, tied to repo state
+├── spy-reviewer.sh      # real fallback reviewer for the usage-limit scenario (no ~/.claude writes)
+├── shim/codex           # logging `codex` shim put first on PATH in the real scenario (skill and wrapper untouched)
+├── evlog.py, wlog.py, treehash.py   # wrapper event log: one JSON line per real execution; the checkers read only this
+├── test-mirrors.py      # skill and command copies must carry identical review-loop clauses
+└── test-checkers.sh     # unit cases for the checkers (no Claude, no network)
 ```
 
 `tests/review-loop-proof.sh <skills-dir|installed> <claude-codex|plan-codex|execute-codex|tdd-claude-codex|tdd-execute-codex|codex-mcp> <scenario> [empty-out-dir]` proves the loop has no round cap and no severity floor. Scenarios: `round6`, `high-only`, `medium-only`, `low-only` (every scripted round is fixed, round 6 is reached in `round6`, and the run ends on a clean re-review of the final state), `failed` and `malformed` (dead, empty, verdict-less, duplicate-verdict and invalid-verdict replies are followed by more calls until a verdict arrives), `usage-limit` (Codex reports a usage limit with a reset time on every call; a real fallback reviewer, `tests/spy-reviewer.sh`, must review the actual change and return a clean verdict; for execute-codex and tdd-execute-codex the quota fallback is also the spy: on a Codex quota error Claude implements directly and the last review after the quota hit must be a clean spy review bound to the final `.py` code state, so the four modules must still be built) and `real` (no fake: the installed `codex-call.sh` and real Codex, checking a THREAD_ID, a verdict and a `--resume` follow-up on the same thread; for execute-codex, where Codex implements rather than reviews, the verdict check is dropped and the follow-up only has to return on the same thread). `installed` loads the skills from `~/.claude/skills` instead of copying a source folder. The output directory must be empty. Each run is a real Claude session, so it uses API quota. For the execute-codex and tdd-execute-codex loops, where a code-reviewer agent does the review, in the scripted scenarios the harness tells that agent to relay the scripted reviewer (not in `real` or `usage-limit`).
