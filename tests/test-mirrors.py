@@ -333,7 +333,7 @@ for n in ("execute-codex", "tdd-execute-codex"):
         got.append(b)
         if cnt != 1 or not b:
             bad.append("%s: expected exactly one Review record paragraph with its command sequence (found %d)" % (rel, cnt)); continue
-        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\n'", "git diff %s %s | shasum -a 256 | cut -d' ' -f1" % (base, EXCL), "> .claude/review/final-review.txt", "<the reviewer's reply, verbatim>", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
+        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\n'", "H=\"$(git diff %s %s ':(top,exclude).claude/review/final-review.txt' | shasum -a 256 | cut -d' ' -f1)\"" % (base, EXCL), "printf 'REVIEWED-DIFF: %s\\n' \"$H\"", "> .claude/review/final-review.txt", "<the reviewer's reply, verbatim>", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
             if k not in b:
                 bad.append("%s: the Review record sequence lacks %r" % (rel, k[:60]))
     if got[0] != got[1]:

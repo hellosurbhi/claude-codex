@@ -437,10 +437,24 @@ expect fail "a command that lost its Review record paragraph is caught" python3 
 python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" <<'PYX'
 import sys, re
 p = sys.argv[1]; t = open(p).read()
-t2 = re.sub(r"(printf 'REVIEWED-DIFF[^\n]*?git diff \$START_SHA) -- [^|]*\|", r"\1 |", t, count=1); assert t2 != t
+t2 = re.sub(r"(H=\"\$\(git diff \$START_SHA) -- [^|]*\|", r"\1 |", t, count=1); assert t2 != t
 open(p, "w").write(t2)
 PYX
 expect fail "a Review record hash taken over a diff without the secret excludes is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
+python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); t2 = t.replace(" ':(top,exclude).claude/review/final-review.txt'", ""); assert t2 != t
+    open(p, "w").write(t2)
+PYX
+expect fail "a Review record hash that does not exclude the record file itself is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); t2 = t.replace("""printf 'REVIEWED-DIFF: %s\\n' "$H\"""", """printf 'REVIEWED-DIFF: %s\\n' "$(git diff HEAD | shasum -a 256)\""""); assert t2 != t
+    open(p, "w").write(t2)
+PYX
+expect fail "a Review record hash computed inside the redirect (not into H first) is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
 python3 - "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
 import sys
 p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("} > .claude/review/final-review.txt", "} > /dev/null", 1))
@@ -1222,7 +1236,7 @@ mkrun; LINEMETA="state=S0 impl=no audit=yes" line real 1 review "codex-call: UNR
 expect pass "audit: a failed audit followed by a clean re-audit passes" au
 # the review record: built against a real tiny git repo, hashing the same diff command the skills prescribe
 rr() { python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"; }
-rrhash() { (cd "$tmp/rr" && git add -N app.py 2>/dev/null; git diff "$(git rev-list --max-parents=0 HEAD)" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' | shasum -a 256 | cut -d' ' -f1); }
+rrhash() { (cd "$tmp/rr" && git add -N app.py 2>/dev/null; git diff "$(git rev-list --max-parents=0 HEAD)" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review/final-review.txt' | shasum -a 256 | cut -d' ' -f1); }
 rrmk() { rm -rf "$tmp/rr"; mkdir -p "$tmp/rr"; (cd "$tmp/rr" && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$(printf 's\n\nVerified: fixture repo for the review-record cases')" && printf 'def add(a, b):\n    return a + b\n' > app.py); }
 rrrec() { mkdir -p "$tmp/rr/.claude/review"; printf 'REVIEWED-DIFF: %s\n%b' "$1" "$2" > "$tmp/rr/.claude/review/final-review.txt"; }
 rrmk
@@ -1245,6 +1259,14 @@ rrmk; (cd "$tmp/rr" && git add -N app.py); rrrec "$(rrhash)" "VERDICT: APPROVED\
 expect pass "review record: the same passes when the agent had already run intent-to-add" rr
 rrmk; printf 'K=1\n' > "$tmp/rr/.env.local"; printf 'k\n' > "$tmp/rr/server.pem"; rrrec "$(rrhash)" "VERDICT: APPROVED\n"
 expect pass "review record: untracked secret-named files never enter the checked diff (they are excluded like the skills prescribe)" rr
+# r11 finding 3: the record file itself must never be part of the hashed diff. Tracked or intent-to-add, it is rewritten after the hash is taken, so a diff that included it
+# would make every record stale. The case commits the record, then writes a fresh one for the unchanged tree.
+rrmk; mkdir -p "$tmp/rr/.claude/review"; printf 'REVIEWED-DIFF: x\nold\n' > "$tmp/rr/.claude/review/final-review.txt"; (cd "$tmp/rr" && git add -f .claude/review/final-review.txt app.py && git -c user.name=t -c user.email=t@t commit -q -m "$(printf 'c\n\nVerified: fixture')"); rrrec "$(rrhash)" "VERDICT: APPROVED\n"
+expect pass "review record: a TRACKED record file does not make the record stale on an unchanged tree" rr
+rrmk; mkdir -p "$tmp/rr/.claude/review"; printf 'seed\n' > "$tmp/rr/.claude/review/final-review.txt"; (cd "$tmp/rr" && git add -N -f .claude/review/final-review.txt); rrrec "$(rrhash)" "VERDICT: APPROVED\n"
+expect pass "review record: an INTENT-TO-ADD record file does not make the record stale on an unchanged tree" rr
+rrmk; mkdir -p "$tmp/rr/.claude/review"; printf 'seed\n' > "$tmp/rr/.claude/review/final-review.txt"; (cd "$tmp/rr" && git add -N -f .claude/review/final-review.txt); rrrec "$(rrhash)" "VERDICT: APPROVED\n"; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
+expect fail "review record: a tracked or intent-to-add record still goes stale when real code changes" rr
 expect pass "the real branch of the proof runs the review-record check for the two skills with a Claude reviewer" sh -c "grep -q 'check-review-record.py' '$here/review-loop-proof.sh' && grep -q -- '--audit' '$here/review-loop-proof.sh'"
 
 # Self-test (round 3 finding 3): these cases need no private reviewer, so they MUST have run (and passed) in every mode, CHECKERS_NO_SPY=1 included.

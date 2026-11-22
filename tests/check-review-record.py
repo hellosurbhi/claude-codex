@@ -19,6 +19,8 @@ if not m:
     print("first line is not REVIEWED-DIFF: <sha256>", file=sys.stderr); sys.exit(1)
 if wlog.verdict_state("\n".join(lines[1:])) != "clean":
     print("the recorded reply is not a clean verdict (APPROVED with zero findings)", file=sys.stderr); sys.exit(1)
+# WHY the record path is excluded from the diff (r11 finding 3): the skill writes the record AFTER hashing, so a tracked or intent-to-add record would sit inside the hashed diff and change it on every write,
+# leaving every record stale. The skill's hash command excludes the same path; both must, or they disagree.
 SECRET = re.compile(r"(^|/)\.env[^/]*$|secret|credential|\.pem$|\.key$", re.I)
 def git(*a, env=None):
     return subprocess.run(["git", "-C", repo] + list(a), capture_output=True, env=env)
@@ -32,7 +34,7 @@ with tempfile.TemporaryDirectory() as td:
     new = [p for p in git("ls-files", "--others", "--exclude-standard", "-z").stdout.decode().split("\0") if p and not p.startswith(".claude/") and not SECRET.search(p)]
     for p in new:
         git("add", "-N", "--", p, env=env)
-    diff = git("diff", base, "--", ":(top)", ":(top,exclude,glob,icase)**/.env*", ":(top,exclude,glob,icase)**/*secret*", ":(top,exclude,glob,icase)**/*credential*", ":(top,exclude,glob,icase)**/*.pem", ":(top,exclude,glob,icase)**/*.key", env=env).stdout
+    diff = git("diff", base, "--", ":(top)", ":(top,exclude,glob,icase)**/.env*", ":(top,exclude,glob,icase)**/*secret*", ":(top,exclude,glob,icase)**/*credential*", ":(top,exclude,glob,icase)**/*.pem", ":(top,exclude,glob,icase)**/*.key", ":(top,exclude).claude/review/final-review.txt", env=env).stdout
 if hashlib.sha256(diff).hexdigest() != m.group(1):
     print("the record's diff hash is not the hash of the final diff (stale record)", file=sys.stderr); sys.exit(1)
 sys.exit(0)

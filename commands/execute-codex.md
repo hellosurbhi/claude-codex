@@ -58,12 +58,13 @@ Announce your routing decision before implementing (e.g. "Small change — imple
 
 ```
 mkdir -p .claude/review
-{ printf 'REVIEWED-DIFF: %s\n' "$(git diff HEAD -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' | shasum -a 256 | cut -d' ' -f1)"; cat <<'REVIEW'
+H="$(git diff HEAD -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review/final-review.txt' | shasum -a 256 | cut -d' ' -f1)"
+{ printf 'REVIEWED-DIFF: %s\n' "$H"; cat <<'REVIEW'
 <the reviewer's reply, verbatim>
 REVIEW
 } > .claude/review/final-review.txt
 ```
-Each round overwrites the file, so it always holds the latest round. A record counts as approval only when its reply is exactly `VERDICT: APPROVED` with zero findings and its hash is that of the final diff: any edit after a round makes the record stale, which needs a new review round and a new record, and a final report whose record is missing, stale or not clean must end `AUDIT-STATUS: UNREVIEWED`.
+Each round overwrites the file, so it always holds the latest round. The hash is computed into `H` BEFORE the redirect opens the file, and the record path is excluded from the hashed diff: the redirect truncates the file first, and a tracked or intent-to-add record is rewritten after the hash, so a diff that included it would make every record stale. A record counts as approval only when its reply is exactly `VERDICT: APPROVED` with zero findings and its hash is that of the final diff: any edit after a round makes the record stale, which needs a new review round and a new record, and a final report whose record is missing, stale or not clean must end `AUDIT-STATUS: UNREVIEWED`.
 
 ### Route A: Small Change — Claude Implements Directly
 
