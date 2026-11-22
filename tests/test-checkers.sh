@@ -30,6 +30,14 @@ except subprocess.TimeoutExpired:
 }
 ok()  { echo "PASS: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
+# WHY an ERR trap for setup steps (r34), WITHOUT errtrace: the trap fires for a top-level statement only, so BASH_COMMAND names the statement itself (a function body would report a stale or unexpanded text and double count). A helper function is covered through its last command, whose exit propagates to the calling statement. only assertions used to count, so a setup step between cases (a python snippet that transforms the event log, a fixture builder) could crash and the suite still exited 0.
+# Now any command that exits nonzero OUTSIDE an assertion prints "FAIL - setup: ..." and fails the suite. Assertions (expect*, mirneg) set in_case=1, because inside them a nonzero exit is the thing being tested. A setup
+# command that is MEANT to fail is written with `|| true` (that also keeps the trap quiet by construction). A failure inside a $(...) subshell cannot set `fail` for the parent, so it also appends to $tmp/setupfail,
+# which is checked before the suite exits.
+in_case=; sut=
+# The programs UNDER TEST (spy_only, spyrun, viawrap, wfcall, the fake wrapper) are exempt by name: their exit code is the behavior a later case asserts, so only helpers (python, git, sed, fixture builders) are held to exit 0.
+setupfail() { if [[ -n "$in_case" ]]; then return 0; fi; if [[ -n "$sut" ]]; then sut=; return 0; fi; case "$3" in *spy_only*|*spyrun*|*viawrap*|*wfcall*|*codex-call.sh*|*'bash "$fake"'*) return 0 ;; esac; echo "FAIL - setup: line $2 exit $1: $3" >&2; echo "$2" >> "$tmp/setupfail"; fail=1; }
+trap 'setupfail $? $LINENO "$BASH_COMMAND"' ERR
 # WHY CHECKERS_NO_SPY (public CI): the spy-reviewer cases run the PRIVATE installed reviewer.sh, which a clean clone and CI do not have. With
 # CHECKERS_NO_SPY=1 spy-reviewer.sh and copy-config.sh exit 0 without doing anything, and only cases written as `expect_spy` (the ones that call the
 # spy or assert on what it produced) are skipped and counted. Plain `expect` NEVER skips: an earlier sticky marker skipped every case that followed
@@ -41,28 +49,32 @@ skipped=0; plain_ran=0; ran_names=""
 # WHY the crash list: a checker that dies on a missing fixture exits nonzero exactly like one that rejects the input, so a bare exit-code check
 # passes vacuously (the README.md fixture bug). EXPECT_DUMP=<file> appends each negative case and its first output line, to write new regexes from.
 crashre='Traceback \(most recent|FileNotFoundError|No such file or directory|command not found|unbound variable|syntax error|IndexError|KeyError'
-expect_run() { local want="$1" name="$2" out rc; shift 2; out="$("$@" 2>&1)"; rc=$?; plain_ran=$((plain_ran+1))
+expect_run() { local want="$1" name="$2" out rc; shift 2; in_case=1; out="$("$@" 2>&1)"; rc=$?; in_case=; plain_ran=$((plain_ran+1))
   [[ -n "${EXPECT_DUMP:-}" && $want == fail ]] && printf '%s\t%s\n' "$name" "$(head -n1 <<<"$out" | cut -c1-200)" >> "$EXPECT_DUMP"
   if [[ $want == pass && $rc -eq 0 ]] || { [[ $want == fail && $rc -ne 0 && $rc -ne 126 && $rc -ne 127 ]] && ! grep -Eq -- "$crashre" <<<"$out" && { [[ -z "${want_re:-}" ]] || grep -Eq -- "$want_re" <<<"$out"; }; }; then ran_names+="$name"$'\n'; ok "$name"
   else bad "$name (rc=$rc, wanted $want${want_re:+ matching /$want_re/}; got: $(head -c 240 <<<"$out" | tr '\n' ' '))"; fi; }
-expectm_spy() { if [[ -n "${CHECKERS_NO_SPY:-}" ]]; then skipped=$((skipped+1)); echo "SKIP: $2"; return 0; fi; expectm "$@"; }
+spy_on() { [[ -z "${CHECKERS_NO_SPY:-}" ]]; }
+spy_skip() { skipped=$((skipped+1)); echo "SKIP: $1"; }
+# WHY `if spy_on; then expect_spy ...; else spy_skip NAME; fi` around every expect_spy whose arguments hold a $(...) (r34): a command substitution in the arguments runs BEFORE expect_spy can skip, so under NO_SPY it ran a python consumer of the spy events the skipped spy never wrote (IndexError, silently).
+expectm_spy() { if ! spy_on; then spy_skip "$2"; return 0; fi; expectm "$@"; }
 expectm() { local want="$1" name="$2" re="$3"; shift 3; want_re="$re" expect_run "$want" "$name" "$@"; }
 expect() { expect_run "$@"; }
-expect_spy() { if [[ -n "${CHECKERS_NO_SPY:-}" ]]; then skipped=$((skipped+1)); echo "SKIP: $2"; return 0; fi; expect_run "$@"; }
+expect_spy() { if ! spy_on; then spy_skip "$2"; return 0; fi; expect_run "$@"; }
 # WHY ONE helper for execution (r32): expect_spy only skipped the ASSERTION, so a setup call that ran the installed reviewer.sh directly still executed
 # private code in public CI. Every step that executes anything from ~/.claude/config (the installed reviewer.sh, via the launcher or directly, and the
 # config copy) goes through spy_only, which does nothing under CHECKERS_NO_SPY=1; tests/check-no-spy-tripwire.sh proves nothing outside the repo runs.
-spy_only() { if [[ -n "${CHECKERS_NO_SPY:-}" ]]; then return 0; fi; "$@"; }
+# WHY sut (r34): spy_only runs the program under test; a nonzero exit is the behavior a later case asserts. It leaves sut=1 only on failure so the ERR trap at the calling statement (whose BASH_COMMAND is just the last text run inside this function) can tell it from a broken helper.
+spy_only() { if [[ -n "${CHECKERS_NO_SPY:-}" ]]; then return 0; fi; local r; "$@"; r=$?; if [[ $r -ne 0 ]]; then sut=1; else sut=; fi; return $r; }
 # round 15 finding 1: a negative mirror case must fail for the INTENDED reason. test-mirrors.py opens README.md, so a fixture without it dies on
 # FileNotFoundError and every `expect fail` passes vacuously. mirfresh builds a complete fixture and proves the pristine copy passes first; mirneg
 # demands the expected message and refuses a crash.
 mirn=0
 mirfresh() { rm -rf "$1"; mkdir -p "$1"; cp -R "$here/../skills" "$here/../commands" "$here/../README.md" "$1/"; mirn=$((mirn+1)); expect pass "the pristine fixture $mirn passes before its mutation" python3 "$here/test-mirrors.py" "$1"; }
-mirneg() { local name="$1" re="$2" dir="$3" out rc; out="$(python3 "$here/test-mirrors.py" "$dir" 2>&1)"; rc=$?; plain_ran=$((plain_ran+1))
+mirneg() { local name="$1" re="$2" dir="$3" out rc; in_case=1; out="$(python3 "$here/test-mirrors.py" "$dir" 2>&1)"; rc=$?; in_case=; plain_ran=$((plain_ran+1))
   if [[ $rc -ne 0 ]] && grep -Eq -- "$re" <<<"$out" && ! grep -Eq 'Traceback|FileNotFoundError' <<<"$out"; then ran_names+="$name"$'\n'; ok "$name"; else bad "$name (rc=$rc, wanted /$re/ and no crash; got: $(head -c 300 <<<"$out" | tr '\n' ' '))"; fi; }
 # cc11-main-r2 finding 6: the python3 timeout stand-in must kill the whole process group, not only its child, or a timed-out launcher leaves reviewer and tee processes running.
 mkdir -p "$tmp/tmo"; rm -f "$tmp/tmo/gpid"
-TMO_FORCE_PY=1 tmo 1 bash -c 'sleep 60 & echo $! > "$1"; wait' _ "$tmp/tmo/gpid" >/dev/null 2>&1; tmo_rc=$?
+tmo_rc=0; TMO_FORCE_PY=1 tmo 1 bash -c 'sleep 60 & echo $! > "$1"; wait' _ "$tmp/tmo/gpid" >/dev/null 2>&1 || tmo_rc=$?
 sleep 1
 expect pass "the python3 timeout stand-in exits 124 on expiry" test "$tmo_rc" -eq 124
 # r15 finding 4: the timeout kill must never reach the caller's own process group (a piped CI run saw exit 144). The stand-in's child must lead its own group.
@@ -73,7 +85,7 @@ sed -n '/^tmo() {/,/^}/p' "$here/test-checkers.sh" > "$tmp/tmo/fn.sh"; printf 'T
 expect pass "the python3 timeout stand-in leaves the caller's own shell running after a kill" test "$(bash "$tmp/tmo/fn.sh" 2>/dev/null)" = alive
 expect fail "the python3 timeout stand-in leaves no grandchild running after expiry" kill -0 "$(cat "$tmp/tmo/gpid" 2>/dev/null || echo 99999999)"
 kill "$(cat "$tmp/tmo/gpid" 2>/dev/null)" >/dev/null 2>&1 || true  # tidy up when the case above failed
-gdiff() { local f; for f in "$@"; do git diff --no-index --no-color /dev/null "$f"; done; }
+gdiff() { local f; for f in "$@"; do git diff --no-index --no-color /dev/null "$f" || true; done; }  # WHY || true (r34): --no-index exits 1 when the files differ, which is every call
 mkrun() { cd "$tmp" || exit 1; rm -rf "$tmp/run"; mkdir -p "$tmp/run/repo"; (cd "$tmp/run/repo" && git init -q && git remote add origin https://example.invalid/t/r.git && printf 'x=1\n' > app.py); cd "$tmp/run/repo" || exit 1; export EVLOG="$tmp/run/wrapper.jsonl" FAKE_LOG="$tmp/run/calls.log"; : > "$EVLOG"; : > "$FAKE_LOG"; unset FAKE_LIMIT FAKE_FAIL_FIRST; export FAKE_ROUNDS=0; }
 fake="$here/fake-codex-call.sh"
 # viawrap runs the shim from a script named codex-call.sh, the way the installed wrapper does (shim provenance, r28)
@@ -122,7 +134,7 @@ expectm fail "clean lines followed by any extra line are rejected" 'REJECT: no v
 
 # (r11 b) a thread id the wrapper never issued (a quoted example in the transcript) cannot seed a resume.
 mkrun; cd "$tmp/run/repo" || exit 1
-bash "$fake" --resume 01a1d2dc-5af3-7192-9860-6e8ea8ed1425 "follow up" >/dev/null 2>&1
+bash "$fake" --resume 01a1d2dc-5af3-7192-9860-6e8ea8ed1425 "follow up" >/dev/null 2>&1 || true  # WHY || true (r34): the wrapper refuses an id it never issued, exit 1 is the point of the case
 expectm fail "resuming an id the wrapper never issued fails and does not count" 'REJECT: no valid --resume execution of an id the' python3 "$here/check-resume.py" "$EVLOG"
 expect pass "the wrapper refused the unknown thread (exit 1, logged)" test "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; e = wlog.load(sys.argv[2]); print(len(e), e[0]["exit"])' "$here" "$EVLOG")" = "1 1"
 
@@ -138,7 +150,7 @@ mkrun; cd "$tmp/run/repo" || exit 1
 bash -n "$fake"; bash -n "$fake" --resume abc
 expect pass "bash -n never logs" test "$(wc -l < "$EVLOG" | tr -d ' ')" = "0"
 T="$(command bash "$fake" "review" | sed -n 's/^THREAD_ID: //p')"
-{ bash "$fake" --resume "$T" "again"; } >/dev/null 2>&1
+{ bash "$fake" --resume "$T" "again"; } >/dev/null 2>&1 || true
 expect pass "command and brace-group executions are logged and resume is found" python3 "$here/check-resume.py" "$EVLOG"
 expect pass "exactly the two real executions are logged" test "$(wc -l < "$EVLOG" | tr -d ' ')" = "2"
 
@@ -181,7 +193,7 @@ expectm fail "a plan that differs from the reviewed input is rejected" 'REJECT: 
 # a real spy run on the plan file logs its sha, which then matches.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo" || exit 1
 printf 'the plan\n' > "$tmp/plan.md"; spy_only bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy pass "spy logs the reviewed plan sha (event carries input_sha256 of the file)" test "$(python3 -c 'import sys,hashlib,json; sys.path.insert(0,sys.argv[1]); import wlog; e=[x for x in wlog.load(sys.argv[2]) if x["wrapper"]=="spy"]; print(bool(e) and e[-1]["input_sha256"]==hashlib.sha256(open(sys.argv[3],"rb").read()).hexdigest())' "$here" "$EVLOG" "$tmp/plan.md")" = "True"
+if spy_on; then expect_spy pass "spy logs the reviewed plan sha (event carries input_sha256 of the file)" test "$(python3 -c 'import sys,hashlib,json; sys.path.insert(0,sys.argv[1]); import wlog; e=[x for x in wlog.load(sys.argv[2]) if x["wrapper"]=="spy"]; print(bool(e) and e[-1]["input_sha256"]==hashlib.sha256(open(sys.argv[3],"rb").read()).hexdigest())' "$here" "$EVLOG" "$tmp/plan.md")" = "True"; else spy_skip "spy logs the reviewed plan sha (event carries input_sha256 of the file)"; fi
 # an id only counts for resume when the earlier reply printed it; a verdict is optional on a follow-up.
 mkrun; line fake 0 unknown "no thread line here"
 python3 - "$EVLOG" <<'PY'
@@ -251,14 +263,14 @@ expectm fail "an older approval that finished later does not override a newer bl
 # a failed spy call (missing input) is logged and, being the latest review, defeats an earlier approval.
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; cd "$tmp/run/repo" || exit 1
 spy_only bash "$here/spy-reviewer.sh" S "$tmp/no-such-input" "$tmp/o.txt" >/dev/null 2>&1
-expect_spy pass "the failed spy call with a missing input is logged" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2]); print(len(e)==4 and e[-1]["exit"]!=0)' "$here" "$EVLOG")" = "True"
+if spy_on; then expect_spy pass "the failed spy call with a missing input is logged" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2]); print(len(e)==4 and e[-1]["exit"]!=0)' "$here" "$EVLOG")" = "True"; else spy_skip "the failed spy call with a missing input is logged"; fi
 expectm_spy fail "a later failed review means the last review is not clean" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 # an unchanged CRLF plan hashes by raw bytes and matches.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo" || exit 1; printf 'plan line\r\nsecond\r\n' > "$tmp/plan.md"
 spy_only bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect_spy pass "an unchanged CRLF plan matches the reviewed digest" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 # r37: a tier R review is of committed repository state, so it never validates a plan file
-python3 - "$EVLOG" "$tmp/evR.jsonl" <<'PYR'
+spy_on && python3 - "$EVLOG" "$tmp/evR.jsonl" <<'PYR'
 import json, sys
 out = open(sys.argv[2], "w")
 for l in open(sys.argv[1]):
@@ -326,7 +338,7 @@ echo '{"type":"turn.completed"}'; exit 0
 SH
 chmod +x "$tmp/bin/stubcodex"
 mkrun; cd "$tmp/run/repo" || exit 1
-STUB_MODE=quota REAL_CODEX="$tmp/bin/stubcodex" EXPECT_CODEX="$tmp/bin/stubcodex" viawrap exec --json "prompt" >/dev/null 2>&1
+STUB_MODE=quota REAL_CODEX="$tmp/bin/stubcodex" EXPECT_CODEX="$tmp/bin/stubcodex" viawrap exec --json "prompt" >/dev/null 2>&1 || true  # WHY (r34): the quota stub makes the wrapper exit nonzero on purpose
 expect pass "the shim logs a turn.failed quota error as a failed call with the diagnostics" env EXPECT_CODEX="$tmp/bin/stubcodex" python3 "$here/check-limit-hit.py" "$EVLOG"
 expect pass "the failed call is normalized to exit 1 and carries the wrapper's terminal message" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print(e["exit"]==1 and "Treat as UNREVIEWED" in e["stderr"])' "$here" "$EVLOG")" = "True"
 mkrun; cd "$tmp/run/repo" || exit 1
@@ -348,7 +360,7 @@ expectm_spy fail "a partial diff that omits another current module is rejected" 
 # a failing model binary: production rejects it, the launcher exits non-zero and the model event keeps what the binary printed.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo" || exit 1; printf 'plan\n' > "$tmp/plan.md"
 FAKE_CLAUDE_MODE=fail spy_only bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy pass "a failed model run fails the launcher and its output stays in the model event" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); m=[e for e in es if e["wrapper"]=="model"][-1]; print(es[-1]["wrapper"]=="spy" and es[-1]["exit"]!=0 and m["exit"]==3 and "partial reply on stdout" in m["stdout"])' "$here" "$EVLOG")" = "True"
+if spy_on; then expect_spy pass "a failed model run fails the launcher and its output stays in the model event" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); m=[e for e in es if e["wrapper"]=="model"][-1]; print(es[-1]["wrapper"]=="spy" and es[-1]["exit"]!=0 and m["exit"]==3 and "partial reply on stdout" in m["stdout"])' "$here" "$EVLOG")" = "True"; else spy_skip "a failed model run fails the launcher and its output stays in the model event"; fi
 
 # cc11-main-r2 finding 1: a model call that exits nonzero after printing VERDICT: APPROVED is no verdict. The skills can only see what the
 # reviewer launcher returns (its exit status and output), never the private model logs, so the launcher itself must exit non-zero.
@@ -1067,12 +1079,15 @@ done
 # WHY a recording fake codex: it proves what --cd the wrapper really passes, instead of grepping the wrapper's source.
 mkdir -p "$tmp/cdbin" "$tmp/cdrepo/sub"; (cd "$tmp/cdrepo" && git init -q)
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/cdargs.txt"\nexit 1\n' "$tmp" > "$tmp/cdbin/codex"; chmod +x "$tmp/cdbin/codex"
-(cd "$tmp/cdrepo/sub" && PATH="$tmp/cdbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>&1)
+(cd "$tmp/cdrepo/sub" && PATH="$tmp/cdbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>&1 || true)
 expect pass "codex-call.sh defaults --cd to the repository top when started from a subfolder" test "$(grep -A1 -x -e '--cd' "$tmp/cdargs.txt" | tail -1)" = "$(cd "$tmp/cdrepo" && pwd -P)"
 
 # cc11-main-r2 finding 5: GNU sed rejects the BSD-only empty backup suffix form of in-place sed. The portable form is `sed -i.bak ... && rm -f <file>.bak`.
 bsd_sed="sed -i ''"
-expect pass "the suite uses no BSD-only in-place sed" test -z "$(grep -n -F -e "$bsd_sed" "$here/test-checkers.sh" | grep -v 'bsd_sed=')"
+expect pass "the suite uses no BSD-only in-place sed" test -z "$(grep -n -F -e "$bsd_sed" "$here/test-checkers.sh" | grep -v 'bsd_sed=' || true)"
+
+# r34: an expect_spy whose arguments hold a $(...) evaluates it BEFORE the skip can happen, so under CHECKERS_NO_SPY it runs a consumer of events the skipped spy never wrote. Such a line must sit inside `if spy_on; then ...; else spy_skip NAME; fi`.
+expect pass "r34: no unguarded expect_spy line carries a command substitution" test -z "$(grep -n -E '^[[:space:]]*expectm?_spy .*[$][(]' "$here/test-checkers.sh" | grep -v -F 'bsd_sed=' || true)"
 
 # C5: the public CI workflow keeps its safety properties (explicit read-only permissions, no persisted credentials, the spy switch, per-ref concurrency).
 ci="$here/../.github/workflows/ci.yml"
@@ -1087,7 +1102,7 @@ expect pass "ci.yml runs on pull_request and pushes to main only" grep -qE '^  p
 # C4: codex-call v3 error handling: a JSON error event with no message is reported whole instead of as an empty line, and the contract line is present.
 mkdir -p "$tmp/errbin"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "{\\"type\\":\\"thread.started\\",\\"thread_id\\":\\"t1\\"}" "{\\"type\\":\\"error\\",\\"code\\":\\"usage_limit\\"}" "{\\"type\\":\\"turn.failed\\"}"\nexit 1\n' > "$tmp/errbin/codex"; chmod +x "$tmp/errbin/codex"
-PATH="$tmp/errbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>"$tmp/errout.txt"
+PATH="$tmp/errbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>"$tmp/errout.txt" || true
 expect pass "codex-call.sh reports a message-less JSON error event whole (usage_limit visible)" grep -q "usage_limit" "$tmp/errout.txt"
 expect pass "codex-call.sh carries the v3 contract line" grep -qx '# contract: codex-call v3 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)' "$here/../scripts/codex-call.sh"
 # r19 finding 2: a completed turn with no thread id is a failed call (a later resume would start a new session and lose the review context), and an explicitly empty --resume is rejected instead of starting a new session
@@ -1252,7 +1267,7 @@ expect_spy pass "a line that starts with an operator is accepted when it is diff
 # a spy whose output file cannot be written logs the shell diagnostic, not reviewer text the caller never saw.
 rv; printf 'plan\n' > "$tmp/plan.md"
 spy_only bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/nodir/out.txt" >/dev/null 2>"$tmp/spyerr.txt"
-expect_spy pass "an unwritable output file logs production's outage message" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["exit"]!=0 and "UNAVAILABLE" in e["stderr"] and "VERDICT" not in e["stderr"])' "$here" "$EVLOG")" = "True"
+if spy_on; then expect_spy pass "an unwritable output file logs production's outage message" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["exit"]!=0 and "UNAVAILABLE" in e["stderr"] and "VERDICT" not in e["stderr"])' "$here" "$EVLOG")" = "True"; else spy_skip "an unwritable output file logs production's outage message"; fi
 
 # r17: the scripted scenarios are judged from the wrapper log, not calls.log.
 sc() { python3 "$here/check-scripted.py" "$EVLOG" "$@"; }
@@ -1261,13 +1276,13 @@ bash "$fake" review >/dev/null 2>&1; printf '# review-fix-1\n' >> app.py; bash "
 st="$(python3 "$here/state-hash.py" .)"
 expect pass "scripted: a finding round then a clean reply for the final state passes" sh -c "python3 '$here/check-scripted.py' '$EVLOG' rounds 1 && python3 '$here/check-scripted.py' '$EVLOG' final $st"
 expectm fail "scripted: a clean reply for another state fails" 'REJECT: the last execution is not a clean verdic' python3 "$here/check-scripted.py" "$EVLOG" final 0000000000000000
-bash "$fake" --resume never-issued again >/dev/null 2>&1
+bash "$fake" --resume never-issued again >/dev/null 2>&1 || true
 expectm fail "scripted: a failed resume after the clean call means the last execution is not clean" 'REJECT: the last execution is not a clean verdic' python3 "$here/check-scripted.py" "$EVLOG" final "$st"
 mkrun; cd "$tmp/run/repo" || exit 1; export FAKE_ROUNDS=2; bash "$fake" review >/dev/null 2>&1
 expectm fail "scripted: a finding round never followed by round 2 fails the rounds check" 'REJECT: finding rounds ' python3 "$here/check-scripted.py" "$EVLOG" rounds 2
-mkrun; cd "$tmp/run/repo" || exit 1; export FAKE_ROUNDS=0 FAKE_FAIL_FIRST=2; for _ in 1 2 3; do bash "$fake" review >/dev/null 2>&1; done
+mkrun; cd "$tmp/run/repo" || exit 1; export FAKE_ROUNDS=0 FAKE_FAIL_FIRST=2; for _ in 1 2 3; do bash "$fake" review >/dev/null 2>&1 || true; done
 expect pass "scripted: two dead calls then a verdict satisfies failfirst 2" python3 "$here/check-scripted.py" "$EVLOG" failfirst 2
-bash "$fake" --resume nope again >/dev/null 2>&1
+bash "$fake" --resume nope again >/dev/null 2>&1 || true
 expectm fail "scripted: a bad call after the first verdict fails failfirst" 'REJECT: the first ' python3 "$here/check-scripted.py" "$EVLOG" failfirst 2
 
 
@@ -1290,15 +1305,15 @@ expectm fail "an older clean call that finished later is not the last execution"
 mkrun; cd "$tmp/run/repo" || exit 1; printf 'plan\n' > "$tmp/plan.md"
 FAKE_CLAUDE_NOISE="noise from the model" spy_only bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 # WHY the noise is generated by the fake model (r41): the launcher's PATH prefix shadows any stub placed in front of it.
-expect_spy pass "the model really wrote stderr noise" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(any("noise from the model" in e["stderr"] for e in wlog.load(sys.argv[2]) if e["wrapper"]=="model"))' "$here" "$EVLOG")" = "True"
-expect_spy pass "a successful spy call logs no stderr it never replayed" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=[x for x in wlog.load(sys.argv[2]) if x["wrapper"]=="spy"][-1]; print(e["exit"]==0 and e["stderr"]=="")' "$here" "$EVLOG")" = "True"
+if spy_on; then expect_spy pass "the model really wrote stderr noise" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(any("noise from the model" in e["stderr"] for e in wlog.load(sys.argv[2]) if e["wrapper"]=="model"))' "$here" "$EVLOG")" = "True"; else spy_skip "the model really wrote stderr noise"; fi
+if spy_on; then expect_spy pass "a successful spy call logs no stderr it never replayed" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=[x for x in wlog.load(sys.argv[2]) if x["wrapper"]=="spy"][-1]; print(e["exit"]==0 and e["stderr"]=="")' "$here" "$EVLOG")" = "True"; else spy_skip "a successful spy call logs no stderr it never replayed"; fi
 mkrun; cd "$tmp/run/repo" || exit 1; printf '#!/usr/bin/env bash\nexit 1\n' > "$tmp/bin/stubfail"; chmod +x "$tmp/bin/stubfail"
-REAL_CODEX="$tmp/bin/stubfail" viawrap exec --json "prompt" >/dev/null 2>&1
+REAL_CODEX="$tmp/bin/stubfail" viawrap exec --json "prompt" >/dev/null 2>&1 || true
 expect pass "a silent Codex failure logs only the terminal message, no invented header" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print("Codex CLI said" not in e["stderr"] and "Treat as UNREVIEWED" in e["stderr"])' "$here" "$EVLOG")" = "True"
 
 # r19: a quota error printed only on stderr is parsed from the merged stream like the wrapper does, once.
 printf '#!/usr/bin/env bash\necho "ERROR: You have hit your usage limit." >&2\nexit 1\n' > "$tmp/bin/stderrquota"; chmod +x "$tmp/bin/stderrquota"
-mkrun; cd "$tmp/run/repo" || exit 1; REAL_CODEX="$tmp/bin/stderrquota" EXPECT_CODEX="$tmp/bin/stderrquota" viawrap exec --json "prompt" >/dev/null 2>&1
+mkrun; cd "$tmp/run/repo" || exit 1; REAL_CODEX="$tmp/bin/stderrquota" EXPECT_CODEX="$tmp/bin/stderrquota" viawrap exec --json "prompt" >/dev/null 2>&1 || true
 expect pass "a stderr-only quota error is logged once through the wrapper's Codex CLI said header" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[0]; print(e["stderr"].count("usage limit")==1 and "Codex CLI said" in e["stderr"])' "$here" "$EVLOG")" = "True"
 expect pass "and it counts as the usage limit" env EXPECT_CODEX="$tmp/bin/stderrquota" python3 "$here/check-limit-hit.py" "$EVLOG"
 # the final status, not history: an early incomplete audit followed by an approved fallback is not flagged.
@@ -1312,38 +1327,38 @@ spyrun() { spy_only bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$@"; }
 for op in /dev/stdout /dev/fd/1; do
   mkrun; cd "$tmp/run/repo" || exit 1; printf 'plan\n' > "$tmp/plan.md"
   got="$(spyrun "$op" 2>/dev/null)"
-  expect_spy pass "the reply appears once on stdout for output path $op" test "$(printf '%s\n' "$got" | grep -c '^VERDICT')" = 1
-  expect_spy pass "one event with one reply for $op" test "$(evone)" = True
+  if spy_on; then expect_spy pass "the reply appears once on stdout for output path $op" test "$(printf '%s\n' "$got" | grep -c '^VERDICT' || true)" = 1; else spy_skip "the reply appears once on stdout for output path $op"; fi
+  if spy_on; then expect_spy pass "one event with one reply for $op" test "$(evone)" = True; else spy_skip "one event with one reply for $op"; fi
 done
 mkrun; cd "$tmp/run/repo" || exit 1; rm -f "$tmp/o.txt"
 got="$(spyrun "$tmp/o.txt" 2>/dev/null)"
-expect_spy pass "a file output path gets the reply once and stdout stays empty" test "$(grep -c '^VERDICT' "$tmp/o.txt"):${#got}" = "1:0"
-expect_spy pass "one event with one reply for a file path" test "$(evone)" = True
+if spy_on; then expect_spy pass "a file output path gets the reply once and stdout stays empty" test "$(grep -c '^VERDICT' "$tmp/o.txt"):${#got}" = "1:0"; else spy_skip "a file output path gets the reply once and stdout stays empty"; fi
+if spy_on; then expect_spy pass "one event with one reply for a file path" test "$(evone)" = True; else spy_skip "one event with one reply for a file path"; fi
 mkrun; cd "$tmp/run/repo" || exit 1
 spyrun /dev/stderr >"$tmp/so.txt" 2>"$tmp/e.txt"; rc=$?
 # WHY (r39): production reviewer.sh runs `run_sonnet 2>/dev/null` and does not accept /dev/stderr as an output file, so the real call delivers nothing.
-expect_spy pass "production delivers no reply to /dev/stderr and the launcher fails like it" test "$rc:$(cat "$tmp/so.txt" "$tmp/e.txt" | grep -c '^VERDICT')" != "0:1"
-expect_spy pass "and the event logs no verdict for /dev/stderr" test "$(evalias)" = True
+if spy_on; then expect_spy pass "production delivers no reply to /dev/stderr and the launcher fails like it" test "$rc:$(cat "$tmp/so.txt" "$tmp/e.txt" | grep -c '^VERDICT' || true)" != "0:1"; else spy_skip "production delivers no reply to /dev/stderr and the launcher fails like it"; fi
+if spy_on; then expect_spy pass "and the event logs no verdict for /dev/stderr" test "$(evalias)" = True; else spy_skip "and the event logs no verdict for /dev/stderr"; fi
 # r31 (/dev/fd/3 3>&1), r32 (/dev/fd/5 and /dev/fd/6) and r33 (/dev/fd/0 0>&1): one delivery, one log entry each.
 mkrun; cd "$tmp/run/repo" || exit 1
 got3="$(spyrun /dev/fd/3 3>&1 2>/dev/null)"
-expect_spy pass "r31: /dev/fd/3 as a dup of stdout delivers once" test "$(printf '%s\n' "$got3" | grep -c '^VERDICT')" = 1
+if spy_on; then expect_spy pass "r31: /dev/fd/3 as a dup of stdout delivers once" test "$(printf '%s\n' "$got3" | grep -c '^VERDICT' || true)" = 1; else spy_skip "r31: /dev/fd/3 as a dup of stdout delivers once"; fi
 # WHY 0 (r40): a pipe behind an alias cannot be read without consuming it, so no reply is logged and the checker fails closed.
-expect_spy pass "r31: the unobservable pipe delivery is not logged as a reply" test "$(evcount)" = 0
+if spy_on; then expect_spy pass "r31: the unobservable pipe delivery is not logged as a reply" test "$(evcount)" = 0; else spy_skip "r31: the unobservable pipe delivery is not logged as a reply"; fi
 for n in 5 6; do
   mkrun; cd "$tmp/run/repo" || exit 1; rm -f "$tmp/fd$n.txt"
-  eval "spyrun /dev/fd/$n $n>\"$tmp/fd$n.txt\" >/dev/null 2>/dev/null"
-  expect_spy pass "r32: /dev/fd/$n lands once in the file behind that descriptor" test "$(grep -c '^VERDICT' "$tmp/fd$n.txt")" = 1
+  eval "spyrun /dev/fd/$n $n>\"$tmp/fd$n.txt\" >/dev/null 2>/dev/null" || true
+  if spy_on; then expect_spy pass "r32: /dev/fd/$n lands once in the file behind that descriptor" test "$(grep -c '^VERDICT' "$tmp/fd$n.txt")" = 1; else spy_skip "r32: /dev/fd/$n lands once in the file behind that descriptor"; fi
   # WHY 0 (r40): production reads the output back and macOS denies reading /dev/fd/N behind a write-only descriptor, so reviewer.sh itself exits 1; the log must not claim a clean review.
-  expect_spy pass "r32: production fails on the fd $n alias and no reply is logged" test "$(evcount)" = 0
+  if spy_on; then expect_spy pass "r32: production fails on the fd $n alias and no reply is logged" test "$(evcount)" = 0; else spy_skip "r32: production fails on the fd $n alias and no reply is logged"; fi
 done
 mkrun; cd "$tmp/run/repo" || exit 1
 got0="$(spyrun /dev/fd/0 0>&1 2>/dev/null)"
-expect_spy pass "r33: /dev/fd/0 with 0>&1 delivers once" test "$(printf '%s\n' "$got0" | grep -c '^VERDICT')" = 1
-expect_spy pass "r33: the unobservable pipe delivery is not logged as a reply" test "$(evcount)" = 0
+if spy_on; then expect_spy pass "r33: /dev/fd/0 with 0>&1 delivers once" test "$(printf '%s\n' "$got0" | grep -c '^VERDICT' || true)" = 1; else spy_skip "r33: /dev/fd/0 with 0>&1 delivers once"; fi
+if spy_on; then expect_spy pass "r33: the unobservable pipe delivery is not logged as a reply" test "$(evcount)" = 0; else spy_skip "r33: the unobservable pipe delivery is not logged as a reply"; fi
 
 # r20: the reviewed patch must reproduce the final files from the baseline (hunk locations and context included).
-orderfake() { python3 - "$1" <<'PY'
+orderfake() { spy_on || return 0; python3 - "$1" <<'PY'
 import json, sys
 rows = [json.loads(l) for l in open(sys.argv[1])]
 fake = [r for r in rows if r["wrapper"] == "fake"]; rest = [r for r in rows if r["wrapper"] != "fake"]
@@ -1378,7 +1393,7 @@ diff --git a/app.py b/app.py
      return a + b
 D
 spy_only bash "$here/spy-reviewer.sh" S "$tmp/stale.diff" "$tmp/out.txt" >/dev/null 2>&1
-line fake 1 unknown "$LIMIT"; python3 - "$EVLOG" <<'PY'
+line fake 1 unknown "$LIMIT"; spy_on && python3 - "$EVLOG" <<'PY'
 import json,sys
 rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
 fake[0]["ts"]=spy[0]["ts_start"]-5; fake[0]["ts_start"]=fake[0]["ts"]-1
@@ -1510,7 +1525,7 @@ git diff --no-color HEAD -- app.py > "$tmp/crlf.diff"
 limit_then_spy "$tmp/crlf.diff"
 expect_spy pass "a correctly reviewed CRLF file is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 mkrun; spy_only bash "$here/spy-reviewer.sh" S "$tmp/plan.md" /dev/stderr >"$tmp/so.txt" 2>"$tmp/se.txt"
-expect_spy pass "a reply to /dev/stderr never reaches the caller twice" test "$(cat "$tmp/so.txt" "$tmp/se.txt" | grep -c '^VERDICT')" -le 1
+if spy_on; then expect_spy pass "a reply to /dev/stderr never reaches the caller twice" test "$(cat "$tmp/so.txt" "$tmp/se.txt" | grep -c '^VERDICT' || true)" -le 1; else spy_skip "a reply to /dev/stderr never reaches the caller twice"; fi
 mirfresh "$tmp/mir"
 python3 - "$tmp/mir/commands/claude-codex.md" <<'PY'
 import sys; p=sys.argv[1]; s=open(p).read()
@@ -1523,9 +1538,9 @@ mirneg "a reversed clause in one command copy is caught by the mirror test" 'dif
 expect pass "every audit-status assertion in the proof is skipped for the codex-mcp guide" test "$(grep -c 'audit-status.py' "$here/review-loop-proof.sh")" = "$(grep 'audit-status.py' "$here/review-loop-proof.sh" | grep -c 'codex-mcp')"
 
 # r22: formatting-independent phase, resume reply that repeats its thread id, whole quota paragraphs mirrored
-mkrun; cd "$tmp/run/repo" || exit 1; printf 'def add (a, b): return (a + b)\n' > "$tmp/fmt.py"; git diff --no-index --no-color /dev/null "$tmp/fmt.py" > "$tmp/fmt.diff"
+mkrun; cd "$tmp/run/repo" || exit 1; printf 'def add (a, b): return (a + b)\n' > "$tmp/fmt.py"; gdiff "$tmp/fmt.py" > "$tmp/fmt.diff"
 spy_only bash "$here/spy-reviewer.sh" S "$tmp/fmt.diff" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy pass "an implementation formatted as def add (a, b): return (a + b) is phase implementation" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = implementation
+if spy_on; then expect_spy pass "an implementation formatted as def add (a, b): return (a + b) is phase implementation" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = implementation; else spy_skip "an implementation formatted as def add (a, b): return (a + b) is phase implementation"; fi
 mkrun
 python3 - "$EVLOG" <<'PY'
 import json, sys
@@ -1553,7 +1568,7 @@ mkrun; cd "$tmp/run/repo" || exit 1; printf 'k\ndef add(a, b):\n    return a + b
 printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py
 git diff --no-color HEAD -- app.py > "$tmp/err.diff"
 spy_only bash "$here/spy-reviewer.sh" S "$tmp/err.diff" /dev/stderr >/dev/null 2>&1
-line fake 1 unknown "$LIMIT"; python3 - "$EVLOG" <<'PY'
+line fake 1 unknown "$LIMIT"; spy_on && python3 - "$EVLOG" <<'PY'
 import json,sys
 rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrapper"]=="spy"]; fake=[r for r in rows if r["wrapper"]!="spy"]
 fake[0]["ts"]=spy[0]["ts_start"]-5; fake[0]["ts_start"]=fake[0]["ts"]-1
@@ -1564,12 +1579,12 @@ expectm fail "a report whose last non-blank line is a closing fence after the st
 
 # r24: structural phase, no-stop clause mirrored, shim subcommand parsing, git add -N never adds every untracked file
 mkrun; cd "$tmp/run/repo" || exit 1
-printf 'add = lambda a, b: a + b\n' > "$tmp/lam.py"; git diff --no-index --no-color /dev/null "$tmp/lam.py" > "$tmp/lam.diff"
+printf 'add = lambda a, b: a + b\n' > "$tmp/lam.py"; gdiff "$tmp/lam.py" > "$tmp/lam.diff"
 spy_only bash "$here/spy-reviewer.sh" S "$tmp/lam.diff" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy pass "a lambda implementation is phase implementation" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = implementation
-mkdir -p "$tmp/tt"; printf 'def test_x():\n    def helper(a, b):\n        return a + b\n    assert helper(1, 2) == 3\n' > "$tmp/tt/test_app.py"; git diff --no-index --no-color /dev/null "$tmp/tt/test_app.py" > "$tmp/tt.diff"
+if spy_on; then expect_spy pass "a lambda implementation is phase implementation" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = implementation; else spy_skip "a lambda implementation is phase implementation"; fi
+mkdir -p "$tmp/tt"; printf 'def test_x():\n    def helper(a, b):\n        return a + b\n    assert helper(1, 2) == 3\n' > "$tmp/tt/test_app.py"; gdiff "$tmp/tt/test_app.py" > "$tmp/tt.diff"
 mkrun; cd "$tmp/run/repo" || exit 1; spy_only bash "$here/spy-reviewer.sh" S "$tmp/tt.diff" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy pass "a tests-only diff containing return a + b is phase tests" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = tests
+if spy_on; then expect_spy pass "a tests-only diff containing return a + b is phase tests" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["phase"])' "$here" "$EVLOG")" = tests; else spy_skip "a tests-only diff containing return a + b is phase tests"; fi
 cat > "$tmp/bin/stubok" <<'SH'
 #!/usr/bin/env bash
 echo '{"type":"thread.started","thread_id":"T-real"}'
@@ -1733,7 +1748,7 @@ rrun() { # committed edit on top of the root commit; REVIEW_BASE_SHA is R0 = the
   printf 'x=1\ndef add(a, b):\n    return a + b\n' > app.py; commit2; printf 'in\n' > "$tmp/rin.txt"
 }
 rrun; REVIEW_BASE_SHA="$R0" spy_only bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy pass "production accepts tier R with a base and the CodeRabbit fake ran on committed state" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); m=[e for e in es if e["wrapper"]=="model"][-1]; print(m["meta"]["bin"], m["meta"]["tier"], m["meta"]["dirty"], m["meta"]["base"]==sys.argv[3])' "$here" "$EVLOG" "$R0")" = "coderabbit R 0 True"
+if spy_on; then expect_spy pass "production accepts tier R with a base and the CodeRabbit fake ran on committed state" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); m=[e for e in es if e["wrapper"]=="model"][-1]; print(m["meta"]["bin"], m["meta"]["tier"], m["meta"]["dirty"], m["meta"]["base"]==sys.argv[3])' "$here" "$EVLOG" "$R0")" = "coderabbit R 0 True"; else spy_skip "production accepts tier R with a base and the CodeRabbit fake ran on committed state"; fi
 orderfake "$EVLOG"
 expect_spy pass "a clean tier R review of committed state is accepted for the code" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 expectm_spy fail "a tier R review never validates a plan file" 'REJECT: a plan review must be tier S through cla' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/rin.txt"
@@ -1741,7 +1756,7 @@ printf 'x=1\ndef add(a, b):\n    return a - b\n' > app.py
 expectm_spy fail "code edited after the R review is rejected" 'REJECT: the code tree changed after the reviewed' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 rrun; printf 'x=1\ndef add(a, b):\n    return a - b\n' > app.py
 REVIEW_BASE_SHA="$R0" spy_only bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy pass "production lets tier R review while uncommitted changes exist (the fake records dirty=1)" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print([e for e in es if e["wrapper"]=="model"][-1]["meta"]["dirty"])' "$here" "$EVLOG")" = 1
+if spy_on; then expect_spy pass "production lets tier R review while uncommitted changes exist (the fake records dirty=1)" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print([e for e in es if e["wrapper"]=="model"][-1]["meta"]["dirty"])' "$here" "$EVLOG")" = 1; else spy_skip "production lets tier R review while uncommitted changes exist (the fake records dirty=1)"; fi
 orderfake "$EVLOG"
 expectm_spy fail "a tier R review with uncommitted changes is rejected by the checker" 'REJECT: the repo has untracked or modified pytho' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 rrun; REVIEW_BASE_SHA="$R0" spy_only bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
@@ -1751,12 +1766,12 @@ printf 'def sneaky():\n    return 1\n' > "$tmp/run/repo/new_untracked.py"
 expectm_spy fail "an untracked .py file no commit holds is rejected (r39)" 'REJECT: the code tree changed after the reviewed' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 rm -f "$tmp/run/repo/new_untracked.py"
 rrun; printf 'def sneaky():\n    return 1\n' > "$tmp/run/repo/new_untracked.py"; REVIEW_BASE_SHA="$R0" spy_only bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy pass "the CodeRabbit fake records an untracked .py as dirty" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print([e for e in wlog.load(sys.argv[2]) if e["wrapper"]=="model"][-1]["meta"]["dirty"])' "$here" "$EVLOG")" = 1
+if spy_on; then expect_spy pass "the CodeRabbit fake records an untracked .py as dirty" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print([e for e in wlog.load(sys.argv[2]) if e["wrapper"]=="model"][-1]["meta"]["dirty"])' "$here" "$EVLOG")" = 1; else spy_skip "the CodeRabbit fake records an untracked .py as dirty"; fi
 orderfake "$EVLOG"
 expectm_spy fail "an untracked .py present at review time is rejected by the checker (r39)" 'REJECT: the repo has untracked or modified pytho' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 # r41: a --version call is not a review, and a CRLF committed diff is still accepted
 mkrun; cd "$tmp/run/repo" || exit 1; printf 'plan\n' > "$tmp/plan.md"; line fake 1 unknown "$LIMIT"; spy_only bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
-python3 - "$EVLOG" "$tmp/evV.jsonl" <<'PYV'
+spy_on && python3 - "$EVLOG" "$tmp/evV.jsonl" <<'PYV'
 import json, sys
 out = open(sys.argv[2], "w")
 for l in open(sys.argv[1]):
@@ -1766,14 +1781,14 @@ for l in open(sys.argv[1]):
 PYV
 expectm_spy fail "a claude call carrying --version is not accepted as a review (r41)" 'REJECT: the model call was not a review' python3 "$here/check-reviewer-after-limit.py" "$tmp/evV.jsonl" --plan-file "$tmp/plan.md"
 expect_spy pass "the unmodified claude review is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
-mkrun; cd "$tmp/run/repo" || exit 1; out="$(PATH="$here/fake-models:$PATH" claude --version "x" 2>&1)"; rc=$?
+mkrun; cd "$tmp/run/repo" || exit 1; rc=0; in_case=1; out="$(PATH="$here/fake-models:$PATH" claude --version "x" 2>&1)" || rc=$?; in_case=  # WHY in_case (r34): the nonzero exit is the thing under test
 expect pass "the fake claude refuses a --version call" test "$rc" != 0
 rrun; printf 'x = 1\r\ny = 2\r\n' > "$tmp/run/repo/crlf.py"; commit2
 REVIEW_BASE_SHA="$R0" spy_only bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
 expect_spy pass "a committed CRLF diff is accepted (r41)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 # r40: the review type must be committed, and an IGNORED .py module counts as unreviewed code too
 rrun; REVIEW_BASE_SHA="$R0" spy_only bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
-python3 - "$EVLOG" "$tmp/evU.jsonl" <<'PYU'
+spy_on && python3 - "$EVLOG" "$tmp/evU.jsonl" <<'PYU'
 import json, sys
 out = open(sys.argv[2], "w")
 for l in open(sys.argv[1]):
@@ -1813,15 +1828,15 @@ printf "TASK REQUIREMENTS:\n<the sanitized task requirements>\n\nREVIEW INSTRUCT
 expectm_spy fail "a code context file whose requirements are still the template placeholder fails --context" 'REJECT: the context input lacks the required sec' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --context
 # FIFO evidence (r37): the launcher opens the caller's output path once, so a one-shot reader gets the reply and nothing hangs.
 mkrun; cd "$tmp/run/repo" || exit 1; rm -f "$tmp/ff"; mkfifo "$tmp/ff"; printf 'plan\n' > "$tmp/plan.md"
-( tmo 20 cat "$tmp/ff" > "$tmp/ff.out" ) & rd=$!
-spy_only tmo 60 bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/ff" >/dev/null 2>&1; frc=$?; wait $rd
-expect_spy pass "r37 FIFO: the launcher finishes against a one-shot FIFO reader which gets the reply exactly once" test "$frc:$(grep -c '^VERDICT' "$tmp/ff.out")" = "0:1"
-expect_spy pass "and the unobservable FIFO delivery is not logged as a reply" test "$(evcount)" = 0
+( tmo 20 cat "$tmp/ff" > "$tmp/ff.out" || true ) & rd=$!  # WHY || true (r34): tmo kills the cat on purpose (124)
+spy_only tmo 60 bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/ff" >/dev/null 2>&1; frc=$?; wait $rd || true
+if spy_on; then expect_spy pass "r37 FIFO: the launcher finishes against a one-shot FIFO reader which gets the reply exactly once" test "$frc:$(grep -c '^VERDICT' "$tmp/ff.out")" = "0:1"; else spy_skip "r37 FIFO: the launcher finishes against a one-shot FIFO reader which gets the reply exactly once"; fi
+if spy_on; then expect_spy pass "and the unobservable FIFO delivery is not logged as a reply" test "$(evcount)" = 0; else spy_skip "and the unobservable FIFO delivery is not logged as a reply"; fi
 # fidelity link: a change to PRODUCTION reviewer.sh validation changes what the suite sees, with the launcher untouched.
 # WHY a helper script that honors SPY_CONFIG_DIR (cc11-main-r1): the copy used to read from $HOME, so an otherwise valid override still needed the real installed config.
 spy_only bash "$here/copy-config.sh" "$tmp/cfg"
 expect_spy pass "the production-mutation copy honors SPY_CONFIG_DIR and never reads HOME" env HOME="$tmp/no-home" SPY_CONFIG_DIR="${SPY_CONFIG_DIR:-$HOME/.claude/config}" bash "$here/copy-config.sh" "$tmp/cfg-home-test"
-sed -i.bak 's/^  E|R|S|diagnose) ;;$/  E|R|diagnose) ;;/' "$tmp/cfg/scripts/reviewer.sh"
+spy_on && sed -i.bak 's/^  E|R|S|diagnose) ;;$/  E|R|diagnose) ;;/' "$tmp/cfg/scripts/reviewer.sh"
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo" || exit 1; printf 'plan\n' > "$tmp/plan.md"
 SPY_CONFIG_DIR="$tmp/cfg" spy_only bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
 expect_spy pass "with production validation changed to reject tier S the unchanged launcher fails" test "$rc" = 1
@@ -1832,8 +1847,8 @@ expectm_spy fail "and the checker sees no clean fallback review" 'REJECT: no val
 mkrun; cd "$tmp/run/repo" || exit 1
 spyrun "$tmp/no-such-dir/o.txt" >/dev/null 2>&1; rc=$?
 expect_spy pass "an unwritable output path fails the spy" test "$rc" != 0
-expect_spy pass "and the event stderr holds the outage message once" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stderr"].count("UNAVAILABLE"))' "$here" "$EVLOG")" = 1
-expect_spy pass "and the event logs no reply" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print(len([x for x in es if x["wrapper"]=="spy"])==1 and "VERDICT" not in wlog.reply_text(es[-1]))' "$here" "$EVLOG")" = True
+if spy_on; then expect_spy pass "and the event stderr holds the outage message once" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; print(e["stderr"].count("UNAVAILABLE"))' "$here" "$EVLOG")" = 1; else spy_skip "and the event stderr holds the outage message once"; fi
+if spy_on; then expect_spy pass "and the event logs no reply" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print(len([x for x in es if x["wrapper"]=="spy"])==1 and "VERDICT" not in wlog.reply_text(es[-1]))' "$here" "$EVLOG")" = True; else spy_skip "and the event logs no reply"; fi
 
 # r36: a quota reply from a bare direct codex call does not anchor the after-limit ordering, and a missing clause in a command is caught
 mkrun; line direct 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"
@@ -1861,9 +1876,9 @@ try:
 except subprocess.TimeoutExpired:
     sys.exit(99)
 PYF
-frc=$?; kill "$rpid" 2>/dev/null; wait "$rpid" 2>/dev/null
+frc=$?; kill "$rpid" 2>/dev/null || true; wait "$rpid" 2>/dev/null || true
 expect_spy pass "the spy completes against a named FIFO reader" test "$frc" = 0
-expect_spy pass "and the reader got the reply once" test "$(grep -c '^VERDICT' "$tmp/ff.got")" = 1
+if spy_on; then expect_spy pass "and the reader got the reply once" test "$(grep -c '^VERDICT' "$tmp/ff.got")" = 1; else spy_skip "and the reader got the reply once"; fi
 
 # r42 (CodeRabbit): check-impl needs proof the asserts ran, a rename counts its new path, and each wrapper has one clean form
 printf 'import os\nos._exit(0)\n' > "$tmp/exit0.py"; printf 'def add(a, b):\n    return a + b\n' > "$tmp/good.py"
@@ -1944,7 +1959,7 @@ expectm_spy fail "a diagnose call does not rescue it" 'REJECT: no valid reviewer
 rrun; REVIEW_BASE_SHA="$R0" spy_only bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
 printf 'x=1\ndef add(a, b):\n    return a + b\ndef sub(a, b):\n    return a - b\n' > "$tmp/run/repo/app.py"; commit2
 sleep 1; REVIEW_BASE_SHA="$R0" spy_only bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out2.txt" >/dev/null 2>&1
-expect_spy pass "the repeat review on unchanged input runs through the same private cache as production" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); sp=[e for e in es if e["wrapper"]=="spy"]; md=[e for e in es if e["wrapper"]=="model"]; print(len(sp), len(md))' "$here" "$EVLOG")" = "2 1"
+if spy_on; then expect_spy pass "the repeat review on unchanged input runs through the same private cache as production" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); sp=[e for e in es if e["wrapper"]=="spy"]; md=[e for e in es if e["wrapper"]=="model"]; print(len(sp), len(md))' "$here" "$EVLOG")" = "2 1"; else spy_skip "the repeat review on unchanged input runs through the same private cache as production"; fi
 orderfake "$EVLOG"
 expectm_spy fail "a cached approval with no model run behind it is rejected for the new commit (r45)" 'REJECT: not exactly one accepted model call for ' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 
@@ -1960,7 +1975,7 @@ done
 
 # r47 (CodeRabbit): model-time tree digest must match, the suite names its prerequisite, ordering keeps model events after the quota
 rrun; REVIEW_BASE_SHA="$R0" spy_only bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
-python3 - "$EVLOG" "$tmp/evT.jsonl" <<'PYT'
+spy_on && python3 - "$EVLOG" "$tmp/evT.jsonl" <<'PYT'
 import json, sys
 out = open(sys.argv[2], "w")
 for l in open(sys.argv[1]):
@@ -1969,12 +1984,12 @@ for l in open(sys.argv[1]):
     out.write(json.dumps(e) + "\n")
 PYT
 expectm_spy fail "a CodeRabbit review whose model-time tree digest differs from the launcher's is rejected (r47)" 'REJECT: the coderabbit tree digest does not matc' python3 "$here/check-reviewer-after-limit.py" "$tmp/evT.jsonl" --repo "$tmp/run/repo"
-expect_spy pass "a model event keeps its place after the quota event once the quota is ordered" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); q=[e for e in es if e["wrapper"]=="fake"][0]; print(all(e["ts"]>q["ts"] for e in es if e["wrapper"]=="model"))' "$here" "$EVLOG")" = True
+if spy_on; then expect_spy pass "a model event keeps its place after the quota event once the quota is ordered" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); q=[e for e in es if e["wrapper"]=="fake"][0]; print(all(e["ts"]>q["ts"] for e in es if e["wrapper"]=="model"))' "$here" "$EVLOG")" = True; else spy_skip "a model event keeps its place after the quota event once the quota is ordered"; fi
 expect_spy fail "the suite stops with a clear line when the installed reviewer.sh is missing" env SPY_CONFIG_DIR="$tmp/no-such-config" bash "$here/test-checkers.sh"
 
 # cc11-main-r1: the portable timeout stand-in kills a slow command with 124 and passes through a fast command's status
-expect pass "tmo python fallback kills a slow command with exit 124" test "$(TMO_FORCE_PY=1 tmo 1 sleep 5 >/dev/null 2>&1; echo $?)" = 124
-expect pass "tmo python fallback passes through the command exit status" test "$(TMO_FORCE_PY=1 tmo 5 bash -c 'exit 3' >/dev/null 2>&1; echo $?)" = 3
+expect pass "tmo python fallback kills a slow command with exit 124" test "$(TMO_FORCE_PY=1 tmo 1 sleep 5 >/dev/null 2>&1 && echo 0 || echo $?)" = 124
+expect pass "tmo python fallback passes through the command exit status" test "$(TMO_FORCE_PY=1 tmo 5 bash -c 'exit 3' >/dev/null 2>&1 && echo 0 || echo $?)" = 3
 
 # cc11-main-r1: tier S fallback must work in a repo with NO origin remote and for a scratch plan in a folder that is not a repo
 # (scripts/codex-call.sh runs plan audits from scratch folders). The review-loop-proof fixture used to add an origin because an older
@@ -1989,7 +2004,7 @@ spyrun "$tmp/out.txt" >/dev/null 2>&1; rc=$?
 expect_spy pass "tier S fallback succeeds for a scratch plan outside any git repo" test "$rc" = 0
 # mutation proof source: a reviewer.sh that exits when there is no origin (the old behavior) must make the first case fail
 spy_only bash "$here/copy-config.sh" "$tmp/cfg-noorigin"
-sed -i.bak 's|^_rq_slug=\$(git -C "\$REPO_ROOT" remote get-url origin.*$|git -C "$REPO_ROOT" remote get-url origin >/dev/null 2>\&1 \|\| exit 9; _rq_slug=x|' "$tmp/cfg-noorigin/scripts/reviewer.sh"
+spy_on && sed -i.bak 's|^_rq_slug=\$(git -C "\$REPO_ROOT" remote get-url origin.*$|git -C "$REPO_ROOT" remote get-url origin >/dev/null 2>\&1 \|\| exit 9; _rq_slug=x|' "$tmp/cfg-noorigin/scripts/reviewer.sh"
 mkrun; (cd "$tmp/run/repo" && git remote remove origin); line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo" || exit 1; printf 'plan\n' > "$tmp/plan.md"
 SPY_CONFIG_DIR="$tmp/cfg-noorigin" spy_only bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
 expect_spy pass "control: an origin-requiring reviewer.sh makes the no-remote case fail (the test can detect the old bug)" test "$rc" = 9
@@ -2096,7 +2111,8 @@ mkrun; LINEMETA="state=S0 endstate=S1 impl=no audit=yes" line real 0 review "$TI
 expectm fail "audit: a clean audit whose tree changed while it ran fails" 'REJECT: the last test audit is not a clean exit-' au
 # the review record: built against a real tiny git repo, hashing the same diff command the skills prescribe
 rr() { python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"; }
-rrhash() { (cd "$tmp/rr" && git add -N app.py 2>/dev/null; "$here/../scripts/review-snapshot.sh" "$(git rev-list --max-parents=0 HEAD)" | shasum -a 256 | cut -d' ' -f1); }
+# WHY || true on add -N (r34): the cases that hash a deleted or ignored app.py make it fail on purpose.
+rrhash() { (cd "$tmp/rr" && git add -N app.py 2>/dev/null || true; "$here/../scripts/review-snapshot.sh" "$(git rev-list --max-parents=0 HEAD)" | shasum -a 256 | cut -d' ' -f1); }
 rrmk() { rm -f "$tmp/rrout.txt"; rm -rf "$tmp/rr"; mkdir -p "$tmp/rr"; (cd "$tmp/rr" && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$(printf 's\n\nVerified: fixture repo for the review-record cases')" && printf 'def add(a, b):\n    return a + b\n' > app.py); }
 rrrec() { mkdir -p "$tmp/rr/.claude/review"; printf 'REVIEWED-DIFF: %s\nREVIEWED-AS: %s\n%b' "$1" "${RRAS:-redacted-snapshot}" "$2" > "$tmp/rr/.claude/review/final-review.txt"; }
 rrmk
@@ -2283,7 +2299,8 @@ expect pass "the real branch of the proof runs the review-record check for the t
 
 # Round 23: an early exit of the REAL codex-call.sh (bad arguments, missing prompt or role file) never reaches the codex shim, so it used to leave no event and an earlier clean review stood
 # as the last word. With CODEX_CALL_EVENT_LOG set the wrapper logs a wrapper-failed event for every nonzero exit that never reached codex; the final-result checks read it as "no approval".
-wfcall() { PATH="$tmp/bigbin:$PATH" CODEX_CALL_EVENT_LOG="$EVLOG" bash "$here/../scripts/codex-call.sh" "$@" >/dev/null 2>&1; }
+wfcall() { PATH="$tmp/bigbin:$PATH" CODEX_CALL_EVENT_LOG="$EVLOG" bash "$here/../scripts/codex-call.sh" "$@" >/dev/null 2>&1; }  # WHY no || true (r34): wfcase asserts the rc is 2, so the callers outside wfcase mark the expected failure with wfx
+wfx() { wfcall "$@" || true; }  # an expected-failure call whose rc is not asserted
 wfcase() { # clean review, then this early-exit call through the real wrapper: it must exit 2, the final-result check must reject and the last verdict must be NONE
   mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
   python3 "$here/check-scripted.py" "$EVLOG" final S1 --real >/dev/null 2>&1 || return 1
@@ -2301,7 +2318,7 @@ expect pass "wrapper-failed: a clean review then an option with no value is not 
 expect pass "wrapper-failed: a clean review then no prompt at all is not an approval" wfcase
 expect pass "wrapper-failed: a clean review then both prompt forms is not an approval" wfcase --prompt-file "$tmp/wfp.txt" "p"
 expect pass "wrapper-failed: a clean review then extra arguments is not an approval" wfcase "p" "q"
-mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"; wfcall --bogus "p"
+mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"; wfx --bogus "p"
 expect pass "wrapper-failed: the event has kind, exit code, the run nonce and no prompt text" python3 -c 'import json,os,sys; e=[json.loads(l) for l in open(sys.argv[1])][-1]; sys.exit(0 if e["wrapper"]=="wrapper-failed" and e["exit"]==2 and e["argv"]==[] and e["meta"].get("nonce")==os.environ["EVNONCE"] and "bogus" not in json.dumps(e) else 1)' "$EVLOG"
 expect pass "wrapper-failed: a wrapper-failed event is not counted as a genuine real call" python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2])[-1]; sys.exit(1 if wlog.is_real(e) else 0)' "$here" "$EVLOG"
 mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"; wfcall "p" >/dev/null
@@ -2309,23 +2326,23 @@ expect pass "wrapper-failed: a successful wrapper call writes no event" test "$(
 expect pass "wrapper-failed: a clean review plus a successful wrapper call is still approved" fr
 mkdir -p "$tmp/failbin"; printf '#!/bin/sh\nexit 1\n' > "$tmp/failbin/codex"; chmod +x "$tmp/failbin/codex"
 mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
-PATH="$tmp/failbin:$PATH" CODEX_CALL_EVENT_LOG="$EVLOG" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>&1
+PATH="$tmp/failbin:$PATH" CODEX_CALL_EVENT_LOG="$EVLOG" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>&1 || true
 expect pass "wrapper-failed: a call that reached codex and failed adds no event (the shim logs it, no double count)" test "$(wc -l < "$EVLOG" | tr -d ' ')" = 1
 mkdir -p "$tmp/nocodexbin"; for t in python3 git mktemp cp rm cat mv dirname; do ln -sf "$(command -v $t)" "$tmp/nocodexbin/$t"; done
 mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
-PATH="$tmp/nocodexbin" CODEX_CALL_EVENT_LOG="$EVLOG" "$(command -v bash)" "$here/../scripts/codex-call.sh" "p" >/dev/null 2>&1; nocodexrc=$?
+nocodexrc=0; PATH="$tmp/nocodexbin" CODEX_CALL_EVENT_LOG="$EVLOG" "$(command -v bash)" "$here/../scripts/codex-call.sh" "p" >/dev/null 2>&1 || nocodexrc=$?
 expect pass "wrapper-failed: codex missing from PATH exits nonzero and logs a wrapper-failed event" sh -c "test $nocodexrc -ne 0 && test \"\$(wc -l < '$EVLOG' | tr -d ' ')\" = 2 && ! python3 '$here/check-scripted.py' '$EVLOG' final S1 --real"
 mkrun; rm -f "$tmp/unset-log.jsonl"
-env -u CODEX_CALL_EVENT_LOG PATH="$tmp/bigbin:$PATH" bash "$here/../scripts/codex-call.sh" --bogus "p" >/dev/null 2>&1; unsetrc=$?
+unsetrc=0; env -u CODEX_CALL_EVENT_LOG PATH="$tmp/bigbin:$PATH" bash "$here/../scripts/codex-call.sh" --bogus "p" >/dev/null 2>&1 || unsetrc=$?
 expect pass "wrapper-failed: variable unset keeps exit 2 and writes no log file anywhere" sh -c "test $unsetrc -eq 2 && test ! -e '$tmp/unset-log.jsonl' && test -z \"\$(ls -A '$tmp/run/repo' | grep -v -e '^app.py\$' -e '^.git\$')\" && test \"\$(wc -l < '$EVLOG' | tr -d ' ')\" = 0"
-CODEX_CALL_EVENT_LOG="$tmp/no-such-dir/log.jsonl" bash "$here/../scripts/codex-call.sh" --bogus "p" >/dev/null 2>"$tmp/wferr.txt"; badpathrc=$?
+badpathrc=0; CODEX_CALL_EVENT_LOG="$tmp/no-such-dir/log.jsonl" bash "$here/../scripts/codex-call.sh" --bogus "p" >/dev/null 2>"$tmp/wferr.txt" || badpathrc=$?
 expect pass "wrapper-failed: an unwritable log path (missing folder) keeps the original exit code 2" test $badpathrc -eq 2
 expect pass "wrapper-failed: the original error message still prints when the log is unwritable" grep -q "unknown option" "$tmp/wferr.txt"
-mkdir -p "$tmp/wfdir"; CODEX_CALL_EVENT_LOG="$tmp/wfdir" bash "$here/../scripts/codex-call.sh" --prompt-file "$tmp/nonexistent-prompt.txt" >/dev/null 2>&1; dirrc=$?
+dirrc=0; mkdir -p "$tmp/wfdir"; CODEX_CALL_EVENT_LOG="$tmp/wfdir" bash "$here/../scripts/codex-call.sh" --prompt-file "$tmp/nonexistent-prompt.txt" >/dev/null 2>&1 || dirrc=$?
 expect pass "wrapper-failed: a log path that is a directory keeps the original exit code 2" test $dirrc -eq 2
 mkrun; LINEMETA="state=S1 endstate=S1 impl=yes audit=yes" line real 0 review "$TID$CLEAN"
 expect pass "wrapper-failed: control: a clean audit alone passes the audit check" python3 "$here/check-scripted.py" "$EVLOG" final X --real --audit
-wfcall --bogus "p"
+wfx --bogus "p"
 expectm fail "wrapper-failed: a clean audit followed by an early wrapper exit is not an approval" 'REJECT: the last test audit is' python3 "$here/check-scripted.py" "$EVLOG" final X --real --audit
 # r24 finding 1: the shim re-implements the wrapper's reading of the Codex event stream; they must never disagree on accept or reject. Each row is one raw Codex output, fed to the REAL
 # codex-call.sh and to the shim (through the same fake codex binary); the wrapper's exit code and the shim's logged exit must agree, and an accepted row must print the same thread id and message.
@@ -2366,8 +2383,8 @@ diffrow failed-then-complete 0 1 "$TS" '{"type":"turn.failed","error":{"message"
 diffrow error-event-no-message 0 1 "$TS" "$MSG" "$DONE" '{"type":"error"}'
 diffrow text-not-string 0 0 "$TS" '{"type":"item.completed","item":{"type":"agent_message","text":7}}' "$DONE"
 dfres() { # name -> "wrapper-rc shim-rc"; leaves the outputs for the comparison
-  local n="$1" wrc srcc
-  ( cd "$dfx/repo" && DIFFROW="$dfx/row.$n" DIFFRC="$(cat "$dfx/rc.$n")" PATH="$dfx/bin:$PATH" bash "$here/../scripts/codex-call.sh" "prompt" > "$dfx/w.out.$n" 2>/dev/null ); wrc=$?
+  local n="$1" wrc=0 srcc
+  ( cd "$dfx/repo" && DIFFROW="$dfx/row.$n" DIFFRC="$(cat "$dfx/rc.$n")" PATH="$dfx/bin:$PATH" bash "$here/../scripts/codex-call.sh" "prompt" > "$dfx/w.out.$n" 2>/dev/null ) || wrc=$?
   rm -f "$dfx/ev.$n"
   ( cd "$dfx/repo" && DIFFROW="$dfx/row.$n" DIFFRC="$(cat "$dfx/rc.$n")" REAL_CODEX="$dfx/bin/codex" EVLOG="$dfx/ev.$n" PROOF_REPO="$dfx/repo" bash "$here/shim/codex" exec --json -p review --sandbox read-only --skip-git-repo-check --cd "$dfx/repo" - <<<"prompt" > "$dfx/s.out.$n" 2>/dev/null )
   srcc="$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["exit"])' "$dfx/ev.$n")"
@@ -2390,7 +2407,7 @@ mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"
 expect pass "r25 control: quota failure then a clean fallback review with nothing after it is approved" ral
 line fake 1 unknown 'codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED.\n'
 expectm fail "r25: quota, clean fallback review, then a FAILED Codex review is not approved" 'REJECT: no valid reviewer call after the quota hit, or the last one is not clean' ral
-mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"; wfcall --bogus "p"
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"; wfx --bogus "p"
 expectm fail "r25: quota, clean fallback review, then a wrapper-failed event is not approved" 'REJECT: no valid reviewer call after the quota hit, or the last one is not clean' ral
 expect pass "r25: that log's last verdict is NONE" test "$(python3 "$here/last-verdict.py" "$EVLOG")" = NONE
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"
@@ -2408,7 +2425,7 @@ expect fail "r26: check-scripted final --real: a clean fallback review then a fa
 mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
 expect pass "r26: check-scripted final --real control: the clean real review alone is approved (the fail case above is not vacuous)" python3 "$here/check-scripted.py" "$EVLOG" final S1 --real
 # one comparable ordering key: a spy-kind, a wrapper-failed and a fake event written by their real writers in this order sort in this order
-mkrun; python3 "$here/evlog.py" "$EVLOG" spy 0 "" "" /dev/null /dev/null /dev/null -- S in out; wfcall --bogus "p"; python3 "$here/evlog.py" "$EVLOG" fake 0 "" "" /dev/null /dev/null /dev/null --
+mkrun; python3 "$here/evlog.py" "$EVLOG" spy 0 "" "" /dev/null /dev/null /dev/null -- S in out; wfx --bogus "p"; python3 "$here/evlog.py" "$EVLOG" fake 0 "" "" /dev/null /dev/null /dev/null --
 expect pass "r25: spy, wrapper-failed and fake events from their real writers share one clock and sort in call order" python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print([e["wrapper"] for e in wlog.review_attempts(wlog.load(sys.argv[2]))]); sys.exit(0 if [e["wrapper"] for e in wlog.review_attempts(wlog.load(sys.argv[2]))]==["spy","wrapper-failed","fake"] else 1)' "$here" "$EVLOG"
 # the guard: a checker that judges a verdict must use the shared function or say why not
 expect pass "r25: every checker that judges a review verdict uses wlog.final_review_state or carries an APPROVAL-EXEMPT reason" python3 "$here/check-approval-sites.py" "$here"
@@ -2430,4 +2447,6 @@ if [[ -n "${CHECKERS_NO_SPY:-}" ]]; then
   [[ $skipped -lt 160 ]] && ok "self-test: fewer than 160 spy cases skipped ($skipped)" || bad "self-test: $skipped cases skipped, the skip is too wide (limit 160)"
 fi
 [[ -n "${CHECKERS_NO_SPY:-}" ]] && echo "CHECKERS_NO_SPY=1: skipped $skipped spy-reviewer case(s); they need the installed reviewer.sh"
+# WHY the lines are echoed here too (r34): a setup step run under 2>/dev/null loses the trap message on stderr, so the file is the record that cannot be swallowed.
+if [[ -s "$tmp/setupfail" ]]; then echo "FAIL - setup: steps failed at test-checkers.sh lines: $(tr '\n' ' ' < "$tmp/setupfail")"; fail=1; fi
 exit $fail

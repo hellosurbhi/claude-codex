@@ -19,4 +19,6 @@ env -u SPY_CONFIG_DIR HOME="$home" PATH="$work/bin:$PATH" CHECKERS_NO_SPY=1 bash
 tail -n 3 "$work/log"
 if [ -s "$mark" ]; then echo "FAIL: a NO_SPY run executed code outside the repo:"; sort -u "$mark" | head -n 5; exit 1; fi
 if [ "$rc" -ne 0 ] || grep -q '^FAIL' "$work/log"; then echo "FAIL: the NO_SPY suite did not pass in the tripwire home (rc=$rc)"; grep '^FAIL' "$work/log" | head -n 5; exit 1; fi
+# WHY the crash scan (r34): a setup helper that dies (an IndexError in a python snippet that read an event the skipped spy never wrote) printed a traceback to stderr and the suite still exited 0, because only assertions count. The suite's whole output must hold no Python crash.
+if grep -Eq 'Traceback \(most recent call last\)|^(IndexError|KeyError|TypeError|ValueError|AttributeError|NameError)\b|^FAIL - setup' "$work/log"; then echo "FAIL: the NO_SPY suite output holds a crash or a failed setup step:"; grep -En -m5 -B1 'Traceback \(most recent call last\)|^(IndexError|KeyError|TypeError|ValueError|AttributeError|NameError)\b|^FAIL - setup' "$work/log" | head -n 12; exit 1; fi
 echo "PASS: the NO_SPY suite passed and no tripwire fired"
