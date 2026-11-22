@@ -87,7 +87,7 @@ Save the returned `THREAD_ID` for follow-up replies.
 
 Classify the verdict. Every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
 - **Any accepted finding at any severity** (BLOCKED, WARNING or APPROVED with MEDIUM/LOW findings listed) → fix and re-review (R2).
-- **Done** → a round that lists no findings (`VERDICT: APPROVED`, bare or with only placeholder severity lines), or whose every finding was dropped through the evaluation gate. Only then go to Phase 4.
+- **Done** → a round whose reply is exactly `VERDICT: APPROVED` (the bare line, or that line plus only placeholder severity lines) with zero findings at any severity, or whose every finding was dropped through the discussion path. A `VERDICT: BLOCKED` or `VERDICT: WARNING` reply that lists no finding is not clean and not actionable: send ONE follow-up to the same reviewer (the same Codex thread through `--resume`, or the active fallback reviewer) asking it to list its findings, and treat a repeat that still lists none as no verdict (a failed call: the fallback chain applies). Only then go to Phase 4.
 
 **Step R2: Fix and Re-review (every round with accepted findings)**
 

@@ -298,5 +298,24 @@ for dp, _, fs in os.walk(root):
     for fn in fs:
         if fn.endswith((".md", ".json")) and "max iteration count (default" in open(os.path.join(dp, fn), encoding="utf-8", errors="ignore").read():
             bad.append("%s ports a capped iteration count, which contradicts the no-cap rule" % os.path.relpath(os.path.join(dp, fn), root))
+# r10 finding 1: every exit-to-delivery condition names an explicit `VERDICT: APPROVED` AND zero findings; a bare BLOCKED or WARNING with
+# no findings listed is neither clean nor actionable (one follow-up asking for the findings, a repeat is no verdict).
+# WHY a per-line scan: the exit lines read "Done", "approved, go to Phase N" or "-> go to Phase N", so a reworded or reverted line must still be found by its destination.
+EXITRX = re.compile(r"^- \*\*Done\*\* →|→ (approved, )?(go to|proceed to) Phase|^- (A round (with no|whose reply)|No findings at any severity|Exactly `VERDICT: APPROVED`)")
+EXIT_COUNT = {"claude-codex": 1, "execute-codex": 1, "plan-codex": 1, "tdd-claude-codex": 2, "tdd-execute-codex": 2}
+NEED = ["`VERDICT: APPROVED`", "zero findings", "lists no finding", "asking it to list its findings", "a repeat that still lists none as no verdict"]
+for n in NAMES:
+    for f in files(n):
+        ex = [(i, l) for i, l in prose(f) if EXITRX.search(l) and "Any " not in l[:12]]
+        if len(ex) != EXIT_COUNT[n]:
+            bad.append("%s: %d delivery-exit lines found, expected %d" % (os.path.relpath(f, root), len(ex), EXIT_COUNT[n]))
+        for i, l in ex:
+            for k in NEED:
+                if k not in l:
+                    bad.append("%s:%d delivery exit lacks %r (APPROVED plus zero findings, bare BLOCKED/WARNING is not clean)" % (os.path.relpath(f, root), i, k))
+for f in [os.path.join(root, "skills", "codex-mcp", "SKILL.md"), os.path.join(root, "skills", "codex-mcp", "reference.md")]:
+    t = open(f, encoding="utf-8").read()
+    if "`VERDICT: APPROVED` with zero findings" not in t or "lists no finding is not clean" not in t:
+        bad.append("%s: the loop exit does not require VERDICT: APPROVED with zero findings" % os.path.relpath(f, root))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)

@@ -143,7 +143,7 @@ git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclu
 
 **Parse response**: every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
 - **Any findings at any severity** (BLOCKED, WARNING or APPROVED with MEDIUM/LOW findings listed) → critically evaluate each one (see below), fix the accepted ones in the test files, re-verify RED and re-audit.
-- **Done** → a round that lists no findings, or whose every finding was dropped through the discussion path below. Only then proceed to Phase 4.
+- **Done** → a round whose reply is exactly `VERDICT: APPROVED` (the bare line, or that line plus only placeholder severity lines) with zero findings at any severity, or whose every finding was dropped through the discussion path. A `VERDICT: BLOCKED` or `VERDICT: WARNING` reply that lists no finding is not clean and not actionable: send ONE follow-up to the same reviewer (the same Codex thread through `--resume`, or the active fallback reviewer) asking it to list its findings, and treat a repeat that still lists none as no verdict (a failed call: the fallback chain applies). Only then go to Phase 4.
 
 **Critical Evaluation of Test Audit Findings**
 
@@ -228,7 +228,7 @@ Save the returned `THREAD_ID` for follow-up replies.
 
 Classify the verdict. Every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
 - **Any findings at any severity** (BLOCKED, WARNING or APPROVED with MEDIUM/LOW findings listed) → critically evaluate each one (R1.5), then fix and re-review (R2).
-- **Done** → a round that lists no findings (`VERDICT: APPROVED`, bare or with only placeholder severity lines), or whose every finding was dropped through the R1.5 discussion path. Only then go to Phase 7.
+- **Done** → a round whose reply is exactly `VERDICT: APPROVED` (the bare line, or that line plus only placeholder severity lines) with zero findings at any severity, or whose every finding was dropped through the discussion path. A `VERDICT: BLOCKED` or `VERDICT: WARNING` reply that lists no finding is not clean and not actionable: send ONE follow-up to the same reviewer (the same Codex thread through `--resume`, or the active fallback reviewer) asking it to list its findings, and treat a repeat that still lists none as no verdict (a failed call: the fallback chain applies). Only then go to Phase 7.
 
 **Step R1.5 — Critical Evaluation of Review Findings**
 

@@ -84,7 +84,7 @@ Save the returned `THREAD_ID`.
 **Parse the exact `VERDICT:` line** (line-anchored; exactly one must be present, with the value APPROVED, WARNING or BLOCKED; anything else is a failed call handled by the mid-call failure rules above). The same grammar applies to every reviewer, the reviewer.sh fallback included (see Validate the response above):
 Every verdict is handled the same way: the severity of a finding decides how urgent it is, never whether it gets fixed.
 - **Any findings at any severity** (BLOCKED, WARNING or APPROVED with MEDIUM/LOW findings listed) → critically evaluate each one (see below), fix every accepted finding in the plan, update `.claude/plan/<feature-name>.md` and re-audit.
-- **Done** → a round that lists no findings, or whose every finding was dropped through the discussion path below. Only then go to Phase 3.
+- **Done** → a round whose reply is exactly `VERDICT: APPROVED` (the bare line, or that line plus only placeholder severity lines) with zero findings at any severity, or whose every finding was dropped through the discussion path. A `VERDICT: BLOCKED` or `VERDICT: WARNING` reply that lists no finding is not clean and not actionable: send ONE follow-up to the same reviewer (the same Codex thread through `--resume`, or the active fallback reviewer) asking it to list its findings, and treat a repeat that still lists none as no verdict (a failed call: the fallback chain applies). Only then go to Phase 3.
 
 **Critical Evaluation of Audit Findings**
 

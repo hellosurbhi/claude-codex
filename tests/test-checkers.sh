@@ -348,6 +348,32 @@ for p in sys.argv[1:]:
 PY
 expect fail "a fallback sequence whose diff overwrites the context file instead of appending is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc claude-codex
 expect pass "the pristine copies pass the fallback-context rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
+# r10 finding 1: a delivery exit needs `VERDICT: APPROVED` AND zero findings; a bare BLOCKED or WARNING (no finding listed) is neither clean nor actionable.
+isclean() { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"real","exit":0,"stdout":sys.argv[2].replace("\\n", "\n"),"stderr":""}) else 1)' "$here" "$1"; }
+expect fail "a bare VERDICT: BLOCKED with no finding is not clean" isclean 'THREAD_ID: t\nVERDICT: BLOCKED\n'
+expect fail "a bare VERDICT: WARNING with no finding is not clean" isclean 'THREAD_ID: t\nVERDICT: WARNING\n'
+expect fail "VERDICT: APPROVED beside a real finding is not clean" isclean 'THREAD_ID: t\nVERDICT: APPROVED\nLOW: rename x\n'
+expect pass "VERDICT: APPROVED with no finding is the only clean reply" isclean 'THREAD_ID: t\nVERDICT: APPROVED\n'
+expect pass "grammar: a bare WARNING with no finding is findings (never clean)" test "$(gstate $'VERDICT: WARNING\n')" = findings
+# WHY revert by regex over the exit line only: each injection puts back the pre-r10 wording ("a round that lists no findings") in ONE file, which the exit-line scan must catch.
+revert_exit() { python3 - "$1" <<'PYX'
+import re, sys
+p = sys.argv[1]; t = open(p).read()
+t2, n = re.subn(r"^(- \*\*Done\*\* → a round whose reply is exactly|- Exactly `VERDICT: APPROVED`|- A round whose reply is exactly)[^\n]*$", "- **Done** → a round that lists no findings. Only then go to Phase 3.", t, count=1, flags=re.M)
+assert n == 1, p
+open(p, "w").write(t2)
+PYX
+}
+for cs in "plan-codex:skills/plan-codex/SKILL.md" "execute-codex:commands/execute-codex.md" "tdd-claude-codex:commands/tdd-claude-codex.md" "tdd-execute-codex:skills/tdd-execute-codex/SKILL.md" "claude-codex:skills/claude-codex/SKILL.md" "plan-codex:commands/plan-codex.md"; do
+  revert_exit "$tmp/mir8/${cs#*:}"
+  expect fail "a delivery exit reverted to bare 'no findings' in ${cs#*:} is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc "${cs%%:*}"
+done
+python3 - "$tmp/mir8/skills/codex-mcp/reference.md" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("replies exactly `VERDICT: APPROVED` with zero findings at any severity", "lists no accepted findings at any severity"))
+PYX
+expect fail "a codex-mcp loop exit that no longer requires APPROVED with zero findings is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; cp "$here/../skills/codex-mcp/reference.md" "$tmp/mir8/skills/codex-mcp/reference.md"
+expect pass "the pristine copies pass every r10 rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 
 # cc11-main-r2 finding 3: the diff command each workflow prescribes is relative to the repository top, not to the shell's folder.
 for f in skills/claude-codex/SKILL.md commands/claude-codex.md skills/execute-codex/SKILL.md commands/execute-codex.md skills/tdd-claude-codex/SKILL.md commands/tdd-claude-codex.md skills/tdd-execute-codex/SKILL.md commands/tdd-execute-codex.md; do
