@@ -17,7 +17,7 @@ def prose(path):
         if not fence:
             out.append((i, l))
     return out
-CLAUSE = "`git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'`)"
+CLAUSE = "`git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- . ':(exclude,glob,icase)**/.env*' ':(exclude,glob,icase)**/*secret*' ':(exclude,glob,icase)**/*credential*' ':(exclude,glob,icase)**/*.pem' ':(exclude,glob,icase)**/*.key'`)"
 # a line that (re)calls a reviewer on a diff or on test files must carry the clause itself
 CALL = re.compile(r"^\s*(- )?(Run `git diff|Re-call Codex via|Call Codex via)|re-calls? `codex-call\.sh --resume|re-run (the )?`?code-reviewer`?|re-audits? via", re.I)
 # (regex, workflows that must contain it); every snippet must also appear equally often in a skill and its command
@@ -29,6 +29,10 @@ SNIPPETS = [
     (r"End the final report with exactly one machine-readable line, `AUDIT-STATUS: APPROVED reviewer=<name>`", NAMES),
     (r"Never conclude the reviewer is stuck, never report that no clean round was reached", []),
     (r"There is no iteration cap and no stop to ask the user after N rounds", []),
+    # cc11-main-r1: a nonzero reviewer.sh exit is no verdict whatever it printed (the installed script discards the model's exit status)
+    (r"a nonzero exit is no verdict whatever it printed", NAMES),
+    # cc11-main-r1: only a named non-transient blocker ends the quota fallback chain; transient failures retry with no cap
+    (r"a named non-transient blocker ends the chain", ["execute-codex", "tdd-execute-codex"]),
 ]
 bad = []
 for n in DIFF_NAMES:
@@ -101,10 +105,10 @@ for n in NAMES:
         if x != y and (n, a) not in [(m, b) for m in ("claude-codex", "tdd-claude-codex", "tdd-execute-codex") for b in ("**Failed review**", "**Failed audit**")]:
             bad.append("%s: paragraph %r differs between skill and command" % (n, a[:40]))
 # WHY (CodeRabbit r48): the reviewer must not read tracked secret files either, so every reviewer diff command carries the exclude pathspec.
-EXCL = "-- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'"
+EXCL = "-- . ':(exclude,glob,icase)**/.env*' ':(exclude,glob,icase)**/*secret*' ':(exclude,glob,icase)**/*credential*' ':(exclude,glob,icase)**/*.pem' ':(exclude,glob,icase)**/*.key'"
 for n in NAMES:
     for f in files(n):
-        for m in re.finditer(r"(?:Run |output of )`git diff (?:HEAD|\$START_SHA)([^`]*)`", open(f, encoding="utf-8").read()):
+        for m in re.finditer(r"`git diff (?:HEAD|\$START_SHA)([^`]*)`", open(f, encoding="utf-8").read()):
             if EXCL not in m.group(0):
                 bad.append("%s: reviewer diff command lacks the secret exclude pathspec: %s" % (os.path.relpath(f, root), m.group(0)))
 # WHY (P3 matrix on 134faf7): codex-mcp's no-cap paragraph offered only tier R (committed changes) as a reviewer fallback, so in 2 of 7
@@ -114,5 +118,34 @@ for f in (os.path.join(root, "skills", "codex-mcp", "SKILL.md"), os.path.join(ro
     t = open(f, encoding="utf-8").read()
     if "reviewer.sh S <diff-file> <out-file>" not in t or "never an uncommitted tree" not in t:
         bad.append("%s: no-cap paragraph lacks the tier S fallback or the uncommitted-tree-never-tier-R rule" % os.path.relpath(f, root))
+# cc11-main-r1: the pathspec must work, not just be spelled the same everywhere. Build a repo with root and nested secret files and run EXCL.
+import subprocess, tempfile, shlex
+def leaked(spec):
+    with tempfile.TemporaryDirectory() as d:
+        g = lambda *a: subprocess.run(("git", "-C", d, "-c", "user.email=a@b", "-c", "user.name=n") + a, capture_output=True, text=True, check=True).stdout
+        # WHY: plumbing (commit-tree) instead of `git commit`, so the global pre-commit hooks never run inside a throwaway fixture repo.
+        g("init", "-q"); open(os.path.join(d, "README"), "w").write("r")
+        g("add", "README"); g("update-ref", "HEAD", g("commit-tree", g("write-tree").strip(), "-m", "i").strip())
+        names = [".env", "app/.env.local", "app/sub/.env.production", "cfg/Secrets.json", "deploy_credentials.yml", "k/id.pem", "a.key", "app/sub/b.KEY", "ok.py", "app/okay.py"]
+        for n in names:
+            os.makedirs(os.path.dirname(os.path.join(d, n)) or d, exist_ok=True); open(os.path.join(d, n), "w").write("1")
+        g("add", "-N", "-f", *names)
+        out = g("diff", "HEAD", "--name-only", *shlex.split(spec))
+        return sorted(set(out.split()) - {"ok.py", "app/okay.py"})
+if leaked(EXCL):
+    bad.append("EXCL pathspec still lets secret-named files through: %s" % leaked(EXCL))
+if not leaked("-- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'"):
+    bad.append("the old pathspec no longer leaks, so the functional check proves nothing")
+# cc11-main-r1: the failed review/audit paragraph of every Codex-using workflow must say a verdict line without the four severity lines is a failed audit.
+# WHY a per-file check instead of a SNIPPETS row: SNIPPETS demands equal counts in skill and command, but the skills also carry a frontmatter-adjacent summary the commands lack.
+for n in ("claude-codex", "tdd-claude-codex", "tdd-execute-codex", "execute-codex"):
+    for f in files(n):
+        t = open(f, encoding="utf-8").read()
+        paras = [q for q in t.split("\n\n") if q.startswith(("**Failed review**", "**Failed audit**"))]
+        for q in paras:
+            if not re.search(r"severity lines|`LOW:` lines", q):
+                bad.append("%s: failed review/audit paragraph does not treat a missing severity block as failed" % os.path.relpath(f, root))
+        if not paras and not re.search(r"`LOW:` lines, is a failed review|without the four severity lines", t):
+            bad.append("%s: no failed review/audit rule for an incomplete Codex block" % os.path.relpath(f, root))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)
