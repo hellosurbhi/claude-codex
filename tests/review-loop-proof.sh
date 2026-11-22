@@ -184,6 +184,9 @@ if [[ $scenario == real ]]; then
   # WHY not execute-codex: Codex implements there (no review verdict); its follow-up reply is checked for the thread only.
   [[ $skill == execute-codex ]] || check "a real Codex reply carried a single valid VERDICT" 'python3 "$here/check-real-basic.py" "$out/wrapper.jsonl" verdict'
   check "the --resume follow-up returned on the same wrapper-issued thread with a verdict" 'python3 "$here/check-resume.py" "$out/wrapper.jsonl" --real ${NOVERDICT:+--no-verdict}'
+  # WHY the final-result check (cc11-main-r8 change B): the historical checks above would pass a run whose LAST review was BLOCKED or whose last call failed while the agent still reported APPROVED.
+  # execute-codex has no review verdict (Codex implements there), so only the other workflows can be held to it.
+  [[ $skill == execute-codex ]] || check "the reported approval agrees with the FINAL reviewer result: the last real call exited 0 with a clean verdict and nothing came after it" 'python3 "$here/check-final-review.py" "$out/wrapper.jsonl"'
   echo "LAST_VERDICT: $(python3 "$here/last-verdict.py" "$out/wrapper.jsonl")"
   echo "THREAD_IDS: $(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; print(" ".join(sorted({e["thread_id"] for e in wlog.load(sys.argv[2]) if e["thread_id"]})))' "$here" "$out/wrapper.jsonl")"
   echo "SECONDARY (transcript): resume mentions=$(grep -c -- '--resume' "$out/events.txt")"

@@ -996,6 +996,22 @@ mkrun; (cd "$tmp/run/repo" && git remote remove origin); line fake 1 unknown "$L
 SPY_CONFIG_DIR="$tmp/cfg-noorigin" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
 expect_spy pass "control: an origin-requiring reviewer.sh makes the no-remote case fail (the test can detect the old bug)" test "$rc" = 9
 
+# cc11-main-r8 change B: the real scenario binds the reported approval to the FINAL real reviewer result in the log (fabricated logs, no quota).
+FIND='VERDICT: WARNING\nHIGH: a finding\n'; BLOCK='VERDICT: BLOCKED\nCRITICAL: a finding\n'
+mkrun; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$BLOCK"
+expect fail "a final BLOCKED review fails the final-result check even though the agent reports APPROVED" python3 "$here/check-final-review.py" "$EVLOG"
+mkrun; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$CLEAN"; line real 1 review "codex-call: UNREVIEWED"
+expect fail "a clean review followed by a later failed call fails the final-result check" python3 "$here/check-final-review.py" "$EVLOG"
+mkrun; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$CLEAN"; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$BLOCK"
+expect fail "a clean review followed by a later BLOCKED review fails the final-result check" python3 "$here/check-final-review.py" "$EVLOG"
+mkrun; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$FIND"; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$CLEAN"
+expect pass "findings then a clean last review passes the final-result check" python3 "$here/check-final-review.py" "$EVLOG"
+mkrun; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\nVERDICT: APPROVED\nCRITICAL: a real finding\n"
+expect fail "an APPROVED line that carries a real finding is not a clean final result" python3 "$here/check-final-review.py" "$EVLOG"
+mkrun
+expect fail "an empty log has no final reviewer result" python3 "$here/check-final-review.py" "$EVLOG"
+expect pass "the real branch of review-loop-proof.sh runs the final-result check (execute-codex excepted)" test "$(grep -c 'check-final-review.py' "$here/review-loop-proof.sh")" = 1
+
 # Self-test (round 3 finding 3): these cases need no private reviewer, so they MUST have run (and passed) in every mode, CHECKERS_NO_SPY=1 included.
 for must in "ci.yml declares an explicit contents: read permissions block" "ci.yml checks out with persist-credentials: false" "ci.yml runs the checkers with CHECKERS_NO_SPY=1" \
   "an outside-reviewer call injected into a command is caught" "the reviewer diff command in commands/execute-codex.md lists changes in sibling folders when run from a subfolder" \
