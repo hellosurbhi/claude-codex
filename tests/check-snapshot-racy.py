@@ -7,7 +7,7 @@
 import os, subprocess, sys, tempfile, time
 
 snap = os.path.abspath(sys.argv[1])
-env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+env = dict({k: v for k, v in os.environ.items() if not k.startswith("GIT_")}, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
 
 def git(repo, *a, inp=None):
     return subprocess.run(["git", "-C", repo] + list(a), env=env, capture_output=True, text=True, input=inp, check=True).stdout

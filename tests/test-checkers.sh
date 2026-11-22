@@ -6,6 +6,8 @@ set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 fail=0
+# shellcheck source=tests/hermetic-git.sh
+. "$here/hermetic-git.sh"
 # WHY a hard prerequisite (CodeRabbit r47): the launcher cases run the REAL installed reviewer.sh (~/.claude/config/scripts/reviewer.sh, or
 # SPY_CONFIG_DIR); without it they would fail in confusing ways, so stop with one clear line.
 [[ -n "${CHECKERS_NO_SPY:-}" || -f "${SPY_CONFIG_DIR:-$HOME/.claude/config}/scripts/reviewer.sh" ]] || { echo "FAIL: installed reviewer.sh not found under ${SPY_CONFIG_DIR:-$HOME/.claude/config}/scripts (required by this suite)"; exit 1; }
@@ -2023,6 +2025,10 @@ rrmk; rrstep step1.sh; rrstep step2.sh; printf '\ndef sub(a, b):\n    return a -
 expectm fail "an earlier round's record does not approve a later edit" 'the record'\''s diff hash is not the hash of the fi' rr
 # r29 flake: the snapshot's private index copy must keep git's racy-entry detection, or a same-second same-size edit disappears (deterministic fixture, see the script).
 expect pass "r29: a same-second, same-size edit after the index write still appears in the snapshot (other changes present)" python3 "$here/check-snapshot-racy.py" "$here/../scripts/review-snapshot.sh"
+# r29: fixture repos are hook-free and config-free. A `git commit` in a fresh repo must not print the global gate banner or read user config.
+hf="$tmp/hookfree"; rm -rf "$hf"; mkdir -p "$hf"; (cd "$hf" && git init -q && printf 'a\n' > f && git add f && git commit -q -m plain > "$hf.out" 2>&1; echo "rc=$?" >> "$hf.out")
+expect pass "r29: a plain git commit in a fixture repo succeeds with no Verified: line" grep -q '^rc=0$' "$hf.out"
+expect fail "r29: a fixture commit runs no global hook (no gate banner in its output)" grep -q 'Deterministic gates passed' "$hf.out"
 # r28 finding 2: the reviewed state includes untracked, non-ignored files (one shipped script, scripts/review-snapshot.sh, computes it for the skills and for the checker).
 # WHY these cases run the extracted blocks: the old snapshot hashed tracked and intent-to-add changes only, so a source file created while the reviewer ran left the hash unchanged.
 rrmk; rrstep step1.sh; printf 'x = 1\n' > "$tmp/rr/late.py"; rrstep step2.sh
