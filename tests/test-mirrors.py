@@ -180,6 +180,9 @@ def block_of(path):
     t = open(path, encoding="utf-8").read()
     m = re.search(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n.*?\n```\n", t, re.S)
     return m.group(0) if m else None
+# r17 finding 1: the execute family builds the fallback input FROM the step 1 snapshot (the bytes the saved hash identifies), redacted, and never runs a second git diff.
+SNAPNEED = ['if R="$(git rev-parse --show-toplevel)" && [ -s "$R/.claude/review/reviewed.diff" ] && (set -o pipefail; ~/.claude/config/scripts/redact-diff.sh < "$R/.claude/review/reviewed.diff" > "$DF") && [ -s "$DF" ]; then cat "$DF" >> "$CTX"',
+            'the snapshot .claude/review/reviewed.diff is missing or empty, or its redaction failed: no context is sent']
 for f in CTXFILES:
     rel, plan = os.path.relpath(f, root), os.path.basename(os.path.dirname(f)) == "plan-codex" or os.path.basename(f) == "plan-codex.md"
     text = open(f, encoding="utf-8").read()
@@ -196,10 +199,14 @@ for f in CTXFILES:
         # WHY the quoted ${START_SHA:?} (round 15 finding 3): an unset START_SHA made `git diff $START_SHA` read the index, not the run's changes; the :? form fails the pipeline and sends nothing.
         base = "\"${START_SHA:?}\"" if "tdd-" in rel else "HEAD"
         need = ['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "OPEN FINDINGS:"] + (["AUDIT INSTRUCTIONS:", '[ -s .claude/plan/<feature-name>.md ] && cat .claude/plan/<feature-name>.md >> "$CTX" || { rm -f "$CTX"', "the plan file is missing, empty or unreadable: no context is sent", "PLAN:"] if plan else
-                ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:", "DF=\"$(mktemp)\"", "(set -o pipefail; git diff %s %s | ~/.claude/config/scripts/redact-diff.sh > \"$DF\") && [ -s \"$DF\" ] && cat \"$DF\" >> \"$CTX\" || { rm -f \"$CTX\"" % (base, EXCL), "the diff is empty: no context is sent", "rm -f \"$DF\"", "[ -f \"$CTX\" ] && ~/.claude/config/scripts/reviewer.sh S", "best-effort mask", "no context is sent"])
+                ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:", "DF=\"$(mktemp)\"", ] + (SNAPNEED if "execute-codex" in rel else ["(set -o pipefail; git diff %s %s | ~/.claude/config/scripts/redact-diff.sh > \"$DF\") && [ -s \"$DF\" ] && cat \"$DF\" >> \"$CTX\" || { rm -f \"$CTX\"" % (base, EXCL), "the diff is empty: no context is sent"]) + ["rm -f \"$DF\"", "[ -f \"$CTX\" ] && ~/.claude/config/scripts/reviewer.sh S", "best-effort mask", "no context is sent"])
         for k in need:
             if k not in b:
                 bad.append("%s: the Fallback input sequence lacks %r" % (rel, k[:50]))
+        if "execute-codex" in rel and not plan:
+            code = re.search(r"```\n(.*?)\n```", b, re.S).group(1)
+            if "git diff" in code:
+                bad.append("%s: the Fallback input sequence runs a second git diff (it must read the step 1 snapshot instead)" % rel)
         if len(re.findall(r"\*\*Fallback input \(tier S\)\*\*", text)) != 1:
             bad.append("%s: expected exactly one Fallback input paragraph" % rel)
 for n in NAMES:
@@ -334,12 +341,12 @@ for n in ("execute-codex", "tdd-execute-codex"):
         got.append(b)
         if cnt != 1 or not b:
             bad.append("%s: expected exactly one Review record paragraph with its command sequence (found %d)" % (rel, cnt)); continue
-        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\n'", "if H=\"$(set -o pipefail; git diff %s %s ':(top,exclude).claude/review' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ]; then" % (base, EXCL), "if N=\"$(set -o pipefail; git diff %s %s ':(top,exclude).claude/review' | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && [ \"$N\" = \"$H\" ]; then" % (base, EXCL), "rm -f .claude/review/final-review.txt .claude/review/reviewed.diff", "else rm -f .claude/review/reviewed.diff; echo \"no snapshot", "Dispatch only after it prints", "printf 'REVIEWED-DIFF: %s\\n' \"$H\"", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"", "else rm -f .claude/review/final-review.txt", "> .claude/review/final-review.txt", "<the reviewer's reply, verbatim>", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
+        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: <raw-snapshot or redacted-snapshot>\\n'", "if H=\"$(set -o pipefail; git diff %s %s ':(top,exclude).claude/review' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ]; then" % (base, EXCL), "if N=\"$(set -o pipefail; git diff %s %s ':(top,exclude).claude/review' | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && [ \"$N\" = \"$H\" ]; then" % (base, EXCL), "rm -f .claude/review/final-review.txt .claude/review/reviewed.diff", "else rm -f .claude/review/reviewed.diff; echo \"no snapshot", "Dispatch only after it prints", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: <raw-snapshot or redacted-snapshot>\\n' \"$H\"", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"", "else rm -f .claude/review/final-review.txt", "> .claude/review/final-review.txt", "<the reviewer's reply, verbatim>", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
             if k not in b:
                 bad.append("%s: the Review record sequence lacks %r" % (rel, k[:60]))
         # r13 finding 2: ORDER is the rule. Snapshot and hash BEFORE dispatch (step 1), then after the reply compare the current tree with that hash (step 2) and only then write the record, whose hash is
         # the pre-dispatch one. A second `H=$(git diff` anywhere would let the hash move to after the call, so exactly one tree-derived assignment is allowed.
-        pos = [b.find(x) for x in ["| tee .claude/review/reviewed.diff", "Send the reviewer `.claude/review/reviewed.diff`", "< .claude/review/reviewed.diff", "[ \"$N\" = \"$H\" ]", "printf 'REVIEWED-DIFF: %s\\n' \"$H\""]]
+        pos = [b.find(x) for x in ["| tee .claude/review/reviewed.diff", "Send the reviewer `.claude/review/reviewed.diff`", "< .claude/review/reviewed.diff", "[ \"$N\" = \"$H\" ]", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS:"]]
         if min(pos) < 0 or pos != sorted(pos):
             bad.append("%s: the Review record steps are not in the order snapshot and hash, dispatch, compare after the reply, write the record" % rel)
         if b.count('H="$(set -o pipefail; git diff') != 1 or b.count('H="$(git diff') != 0:
@@ -347,6 +354,11 @@ for n in ("execute-codex", "tdd-execute-codex"):
         # r14 finding 1: every tree-derived hash is a checked pipeline (pipefail) and an empty snapshot never counts, at step 1 and at step 2; a failed or empty diff voids the round (old record removed).
         if b.count("[ -s .claude/review/reviewed.diff ]") != 2 or b.count("set -o pipefail; git diff") != 2:
             bad.append("%s: the Review record steps do not both check the diff pipeline status and an empty snapshot" % rel)
+    for f in files(n):
+        # r17 finding 1: the primary reviewer is handed the step 1 snapshot, never the output of a fresh git diff, so the saved hash binds the bytes it judged.
+        t = open(f, encoding="utf-8").read()
+        if "the output of `git diff" in t or t.count("the contents of `.claude/review/reviewed.diff`, the snapshot step 1 of the review record takes from") != 2:
+            bad.append("%s: the reviewer's input must be the contents of .claude/review/reviewed.diff (twice), never the output of a fresh git diff" % os.path.relpath(f, root))
     for f, b in zip(files(n), got):
         # r15 finding 2: both steps resolve the repository root BEFORE touching .claude/review and run there (a subshell, so the caller's folder is unchanged); a failed lookup prints and records nothing.
         # WHY: the record paths are relative, so from a subfolder the record landed in the wrong place while only the root directory was excluded from the diff.
