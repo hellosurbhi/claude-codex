@@ -24,6 +24,14 @@ def commit_all(dst, msg="base\n"):
     run(dst, "update-ref", "HEAD", c)
     return c
 
+def commit_paths(repo, *paths, msg="after\n"):
+    # a commit AFTER the review base that records only these paths (the rest of the worktree stays uncommitted)
+    run(repo, "add", "--", *paths)
+    tree = run(repo, "write-tree").strip()
+    c = run(repo, "commit-tree", tree, "-p", run(repo, "rev-parse", "HEAD").strip(), inp=msg).strip()
+    run(repo, "update-ref", "HEAD", c)
+    return c
+
 def fixture(dst, sub=False):
     run(dst, "init", "-q")
     w(dst, "keep/untouched.py", "k = 1\n")
@@ -43,8 +51,28 @@ def fixture(dst, sub=False):
     w(dst, "café.py", "z = 1\n")  # non-ASCII name: core.quotePath changes how git prints it
     return base
 
-def snapshot(repo, base, env=None, allow_fail=False):
-    r = subprocess.run([snap, base], cwd=repo, env=env or BASE_ENV, capture_output=True)
+def snapshot(repo, base, env=None, allow_fail=False, call=None):
+    # call: how the script is started. None = absolute path from the repo root; "relative" = a relative path from a subdirectory;
+    # "symlink" = through a symlink (the skills install the script that way); "path" = a bare name found through PATH.
+    exe, cwd, e = snap, repo, dict(env or BASE_ENV)
+    if call == "relative":
+        # WHY a COPY next to the repo: the path must climb only a few levels. A deep relative path stops at the filesystem root once the script has
+        # moved to the repo root, so the same path would still resolve and the bug would hide. The cwd is resolved physically (/var -> /private/var).
+        d = os.path.join(os.path.dirname(repo), "bin-relative"); os.makedirs(d, exist_ok=True)
+        cp = os.path.join(d, "review-snapshot.sh")
+        if not os.path.lexists(cp):
+            shutil.copy(snap, cp)
+        cwd = os.path.join(repo, "sub"); exe = os.path.relpath(os.path.realpath(cp), os.path.realpath(cwd))
+    elif call in ("symlink", "path"):
+        d = os.path.join(os.path.dirname(repo), "bin-" + call); os.makedirs(d, exist_ok=True)
+        link = os.path.join(d, "review-snapshot.sh")
+        if not os.path.lexists(link):
+            os.symlink(snap, link)
+        if call == "symlink":
+            exe = link
+        else:
+            exe = "review-snapshot.sh"; e["PATH"] = d + os.pathsep + e["PATH"]
+    r = subprocess.run([exe, base], cwd=cwd, env=e, capture_output=True)
     if allow_fail:
         return r
     if r.returncode != 0:
@@ -177,6 +205,50 @@ def st_nested(repo):
     n = os.path.join(repo, "nest"); os.makedirs(n); run(n, "init", "-q"); w(n, "z.py", "z = 1\n")
     return S(fail="nest")
 
+# Round 31: the private index starts from the CURRENT state (the real index entries: mode + blob id), never from the base. Disk overrides where a file
+# exists; absent and not skip-worktree is a deletion. The base is only the left side of the diff.
+def st_post_commit_sparse(repo):
+    w(repo, "other.py", "x = 3\n"); commit_paths(repo, "other.py")
+    run(repo, "update-index", "--skip-worktree", "other.py"); os.remove(os.path.join(repo, "other.py"))
+    return S(contains=[b"+x = 3"], absent=[b"+x = 2"])
+def st_sparse_staged(repo):
+    w(repo, "other.py", "x = 7\n"); run(repo, "add", "other.py")
+    run(repo, "update-index", "--skip-worktree", "other.py"); os.remove(os.path.join(repo, "other.py"))
+    return S(contains=[b"+x = 7"])
+def st_uninit_moved(repo):
+    v = os.path.join(repo, "vend"); w(v, "lib.py", "lib = 2\n"); newc = commit_all(v, "vend two\n")
+    commit_paths(repo, "vend"); shutil.rmtree(v); os.mkdir(v)
+    return S(sub=True, contains=[b"-Subproject commit ", b"+Subproject commit " + newc.encode()])
+def st_uninit_same(repo):
+    v = os.path.join(repo, "vend"); shutil.rmtree(v); os.mkdir(v)
+    return S(sub=True)
+def st_staged_deletion(repo):
+    run(repo, "rm", "-q", "--cached", "other.py"); os.remove(os.path.join(repo, "other.py"))
+    return S(contains=[b"deleted file mode"])
+def st_file_to_dir(repo):
+    os.remove(os.path.join(repo, "other.py")); w(repo, "other.py/x.py", "n = 1\n")
+    return S(contains=[b"deleted file mode", b"+++ b/other.py/x.py"])
+def st_fifo(repo):
+    # an UNTRACKED fifo is never listed by git (like `git add -A`), so the case is a tracked file replaced by a fifo
+    os.remove(os.path.join(repo, "other.py")); os.mkfifo(os.path.join(repo, "other.py")); return S(fail="other.py")
+def st_newline(repo):
+    w(repo, "a\nb.py", "n = 1\n"); return S(fail="newline")
+def st_unmerged(repo):
+    sha = run(repo, "rev-parse", "HEAD:app.py").strip()
+    run(repo, "update-index", "--index-info", inp="0 %s\tapp.py\n" % ("0" * 40) + "".join("100644 %s %d\tapp.py\n" % (sha, n) for n in (1, 2, 3)))
+    return S(fail="app.py")
+def attr_case(line, fail=None, config=()):
+    def f(repo):
+        open(os.path.join(repo, ".git", "info", "attributes"), "w").write(line + "\n")
+        for k, v in config:
+            run(repo, "config", k, v)
+        return S(fail=fail) if fail else S()
+    return f
+def st_call(how):
+    def f(repo):
+        return S(sub=True, call=how)
+    return f
+
 STATE = {
     "assume-unchanged files edited on disk": st_assume,
     "skip-worktree files edited on disk": st_skipwt,
@@ -199,6 +271,15 @@ STATE = {
     "an untracked file inside a submodule fails closed": st_sub_untracked,
     "a clean submodule pointer change shows as the gitlink change": st_sub_moved,
     "an untracked nested git repository fails closed": st_nested,
+    "a change committed after the base then sparse-excluded stays in the snapshot": st_post_commit_sparse,
+    "a sparse-excluded path staged different from HEAD takes the index entry": st_sparse_staged,
+    "an uninitialized submodule whose gitlink moved after the base shows the gitlink change": st_uninit_moved,
+    "an uninitialized submodule at the base commit adds nothing": st_uninit_same,
+    "a file removed from the index and absent on disk is a deletion": st_staged_deletion,
+    "a file replaced by a directory is a deletion plus the new files": st_file_to_dir,
+    "a tracked file replaced by a fifo fails closed": st_fifo,
+    "a path with a newline fails closed": st_newline,
+    "an unmerged index entry fails closed": st_unmerged,
 }
 
 def tree_state(repo):
@@ -239,9 +320,13 @@ with tempfile.TemporaryDirectory() as d:
         sys.exit(4)
     if which in STATE:
         # the submodule fixture is built when the setup asks for it, so probe with a throwaway copy
-        probe = os.path.join(d, "probe"); shutil.copytree(ref, probe, symlinks=True)
+        probe = os.path.join(d, "probe")
+        built = False
+        if STATE[which] in (st_uninit_moved, st_uninit_same):  # these need the submodule to exist while they set up
+            ref, base, baseline = build("refsub", True); built = True
+        shutil.copytree(ref, probe, symlinks=True)
         sub = bool(STATE[which](probe).get("sub"))
-        if sub:
+        if sub and not built:
             ref, base, baseline = build("refsub", True)
     repo = os.path.join(d, "var")
     shutil.copytree(ref, repo, symlinks=True)
@@ -252,12 +337,13 @@ with tempfile.TemporaryDirectory() as d:
     else:
         env = table[which](repo)
     if spec and spec.get("fail"):
-        r = snapshot(repo, base, env, allow_fail=True)
+        r = snapshot(repo, base, env, allow_fail=True, call=spec.get("call"))
         if r.returncode == 0 or r.stdout or spec["fail"].encode() not in r.stderr:
             print("expected a fail-closed exit naming %r, got rc=%d stdout=%d bytes stderr=%r" % (spec["fail"], r.returncode, len(r.stdout), r.stderr[:200]))
             sys.exit(1)
         sys.exit(0)
-    out = snapshot(repo, base, env)
+    call = spec.get("call") if spec else None
+    out = snapshot(repo, base, env, call=call)
     if spec and (spec.get("contains") or spec.get("absent")):
         for c in spec.get("contains", []):
             if c not in out:
@@ -269,7 +355,7 @@ with tempfile.TemporaryDirectory() as d:
         print("snapshot bytes differ from the no-config baseline (%d vs %d bytes)" % (len(out), len(baseline)))
         sys.exit(1)
     w(repo, "app.py", "alpha = 3333\nbeta = 2\ngamma = 3\nalpha = 3333\n")  # same size as before, different bytes
-    after = snapshot(repo, base, env)
+    after = snapshot(repo, base, env, call=call)
     if hashlib.sha256(after).digest() == hashlib.sha256(out).digest():
         print("an edit after the snapshot did not change the hash")
         sys.exit(1)

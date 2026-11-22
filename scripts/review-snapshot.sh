@@ -10,18 +10,37 @@
 # found three ways a copy of the user's index lies (racy mtime, then config, then assume-unchanged/skip-worktree flags). A stat-cache diff
 # decides "unchanged" from index state the user or git controls; a tree-vs-tree diff has no stat cache, racy window, flags, fsmonitor,
 # untracked cache, split or sparse index. Plain `cp` of the index, `git add -N` on a copy and a touch to 1970 were all tried first and all
-# left a way for an edited file to be missing. The user's index supplies only which PATHS exist, which are skip-worktree and which are gitlinks.
-# Objects go to a temporary GIT_OBJECT_DIRECTORY (the real store is an alternate, read only), so the real index, refs and objects are untouched.
-# Decisions: ignore rules are the repo's own (.gitignore, .git/info/exclude) and the user's global core.excludesFile/XDG ignore is NOT applied
-# (a file hidden by a private ignore must still be reviewed). Tracked files that are ignored, or deleted on disk, are still compared (the base
-# tree paths are candidates). A skip-worktree path that is ABSENT on disk is left as in the base (sparse checkout: absent by design, never a
-# deletion); a skip-worktree path that exists is read from disk. The executable bit is read from disk (core.fileMode pinned true) and symlinks are
-# recorded as links (core.symlinks pinned true).
-# FAIL CLOSED (non-zero, empty stdout, message on stderr naming the path) when a file carries a filter, ident or working-tree-encoding attribute
-# (clean filters, LFS pointers: user code or a rewrite git cannot undo), when a submodule has any uncommitted or untracked change (checked by running
-# this script inside it), when a directory holds an untracked nested git repository, or for a path with a newline in its name. A clean submodule
-# at another commit shows as the gitlink change. text/eol attributes still normalise line endings the way a commit would (an edit that only
-# flips CRLF/LF of such a file shows no change, as it would not in a commit).
+# left a way for an edited file to be missing. The user's index supplies only its CURRENT ENTRIES (mode + blob id, content-addressed, never stat
+# data), which paths are skip-worktree and which are gitlinks. Objects go to a temporary GIT_OBJECT_DIRECTORY (the real store is an alternate,
+# read only), so the real index, refs and objects are untouched.
+# THE RULE (r31): the private index starts from the CURRENT state (the real index entries), never from the base. Disk content overrides wherever a
+# file exists on disk. "Absent on disk and not skip-worktree" is a deletion. The base is ONLY the left side of the final tree-vs-tree diff. WHY: r30
+# started from the base, so a change committed after the base and then hidden by a sparse checkout (or an uninitialized submodule whose gitlink moved)
+# silently fell back to its base content and an approval could omit committed changes.
+# WHAT EACH PATH CLASS CONTRIBUTES (class -> source of mode and content -> failure behaviour). The hermetic checker has one case per row.
+#   regular file or symlink on disk, any index state -> the bytes on disk (exec bit read from disk, symlink recorded as a link)
+#                                                        -> fails closed if it has a filter, ident or working-tree-encoding attribute
+#   untracked file ignored by the repo's own rules   -> nothing (not part of the state); the user's global ignore file is NOT applied
+#   tracked file, ignored or hidden by assume-unchanged -> the bytes on disk (the index flags are never consulted for content)
+#   absent on disk, tracked, not skip-worktree        -> deleted (also when removed from the index)
+#   absent on disk, skip-worktree (sparse checkout)   -> the CURRENT index entry, mode and blob id (taken from the index when it differs from
+#                                                        HEAD: the index is the current intended state); never a deletion, never the base
+#   plain directory where the index has a file        -> the file is removed, the files below it are added from disk
+#   gitlink dir with .git (initialized submodule)     -> the submodule's checked-out HEAD commit; fails closed if the submodule has any
+#                                                        uncommitted or untracked change or its own snapshot fails
+#   gitlink dir without .git (uninitialized)          -> the CURRENT index gitlink (a pointer moved after the base shows as the change)
+#   directory with .git that is not a gitlink         -> fails closed (untracked nested repository)
+#   unmerged index entry (conflict stage 1-3)         -> fails closed
+#   fifo, socket or other non-regular file where a path is tracked -> fails closed (untracked ones are never listed by git)
+#   path whose name contains a newline                -> fails closed
+# Decisions: ignore rules are the repo's own (.gitignore, .git/info/exclude); the user's global core.excludesFile and XDG ignore are NOT applied
+# (a file hidden by a private ignore must still be reviewed). The candidate paths are the non-ignored files on disk, every base path and every
+# current index path, so a tracked file that is ignored or deleted is still compared. Attribute values `unspecified` and `unset` (-filter, -ident,
+# -working-tree-encoding) are accepted; any other value fails closed, including filter=<name> with NO configured driver (git would treat that as a
+# no-op, but a configured driver can appear later and rewrite bytes, so rejecting is the safe side) and a bare `ident`. The executable bit is
+# read from disk (core.fileMode pinned true) and symlinks are recorded as links (core.symlinks pinned true).
+# FAIL CLOSED (non-zero, empty stdout, message on stderr naming the path): see the table. text/eol attributes still normalise line endings the
+# way a commit would (an edit that only flips CRLF/LF of such a file shows no change, as it would not in a commit).
 # WHY fail closed: output is written only after every stage succeeded (built in a temp file, emitted last), so a failed stage leaves stdout empty
 # and the exit nonzero; an empty hash input must never look like a valid snapshot. `set -e` is not used because each status is checked explicitly.
 # WHY every output-shaping setting is pinned HERE and nowhere else (r29): the hash is only evidence if the same state always yields the same
@@ -72,12 +91,18 @@ case "$mode" in
     base_tree="$(canon rev-parse --verify "$base^{tree}")" || die "cannot resolve $base"
     real_obj="$(canon rev-parse --path-format=absolute --git-path objects)" || exit 1
     case "$real_obj" in *:*) die "object directory path contains a colon" ;; esac
-    # What the user's index may tell us: WHICH paths exist in it, which gitlinks it holds and which paths are skip-worktree. Never file content.
+    # What the user's index may tell us (content-addressed facts only, never stat data): its entries (mode + blob id + stage), which paths are
+    # skip-worktree, which are gitlinks. These are read BEFORE the private index is exported.
+    canon ls-files -z -s > "$tmp/idx-entries" || exit 1
     canon ls-files -z --cached > "$tmp/idx-paths" || exit 1
     canon ls-files -z -t | while IFS= read -r -d '' rec; do case "$rec" in "S "*) printf '%s\0' "${rec#S }" ;; esac; done > "$tmp/skipwt"
     [ "${PIPESTATUS[0]}" -eq 0 ] || exit 1
-    canon ls-files -z -s | while IFS= read -r -d '' rec; do case "$rec" in 160000\ *) printf '%s\0' "${rec#*$'\t'}" ;; esac; done > "$tmp/gitlinks"
-    canon ls-tree -r -z "$base_tree" | while IFS= read -r -d '' rec; do case "$rec" in 160000\ *) printf '%s\0' "${rec#*$'\t'}" ;; esac; done >> "$tmp/gitlinks"
+    : > "$tmp/gitlinks"
+    while IFS= read -r -d '' rec; do
+      meta="${rec%%$'\t'*}"
+      [ "${meta##* }" = 0 ] || die "${rec#*$'\t'} has an unmerged index entry: resolve the conflict first"
+      case "$meta" in 160000\ *) printf '%s\0' "${rec#*$'\t'}" >> "$tmp/gitlinks" ;; esac
+    done < "$tmp/idx-entries"
     canon ls-tree -r -z --name-only "$base_tree" > "$tmp/base-paths" || exit 1
     # Everything on disk that is not ignored, found with an EMPTY index so nothing tracked is skipped (nested repos come out as "dir/").
     GIT_INDEX_FILE="$tmp/none" canon ls-files --others --exclude-standard -z > "$tmp/others" || exit 1
@@ -85,7 +110,8 @@ case "$mode" in
     # Fresh private index and object directory: the user's index and object store are neither read for content nor written.
     mkdir -p "$tmp/objects/info" "$tmp/objects/pack" || exit 1
     export GIT_INDEX_FILE="$tmp/index" GIT_OBJECT_DIRECTORY="$tmp/objects" GIT_ALTERNATE_OBJECT_DIRECTORIES="$real_obj"
-    canon read-tree "$base_tree" || exit 1
+    # The private index starts from the CURRENT entries, NOT the base (r31): the base is only the left side of the final diff.
+    canon update-index -z --index-info < "$tmp/idx-entries" || exit 1
     : > "$tmp/upd"; : > "$tmp/rm"; : > "$tmp/info"; : > "$tmp/dirs-done"
     while IFS= read -r -d '' p; do
       p="${p%/}"
@@ -95,18 +121,18 @@ case "$mode" in
         grep -qzxF -- "$p" "$tmp/dirs-done" && continue
         printf '%s\0' "$p" >> "$tmp/dirs-done"
         if grep -qzxF -- "$p" "$tmp/gitlinks"; then
-          [ -e "$p/.git" ] || continue   # an uninitialized submodule directory: the base gitlink stays as it is
+          [ -e "$p/.git" ] || continue   # an uninitialized submodule directory: the CURRENT index gitlink stays (a moved pointer shows as the change)
           sub_out="$(cd -- "./$p" && env -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES "$self" HEAD)" || die "submodule $p: its own snapshot failed"
           [ -z "$sub_out" ] || die "submodule $p has uncommitted or untracked changes"
           sub_sha="$(canon -C "$p" rev-parse --verify HEAD)" || die "submodule $p has no HEAD"
           printf '160000 %s\t%s\0' "$sub_sha" "$p" >> "$tmp/info"
         elif [ -e "$p/.git" ]; then die "$p is a nested git repository the snapshot cannot bind"
-        else printf '%s\0' "$p" >> "$tmp/rm"   # a plain directory where the base had a file
+        else printf '%s\0' "$p" >> "$tmp/rm"   # a plain directory where the index had a file
         fi
       elif [ -f "$p" ]; then printf '%s\0' "$p" >> "$tmp/upd"
       elif [ -e "$p" ]; then die "$p is not a regular file, symlink or directory"
       else
-        grep -qzxF -- "$p" "$tmp/skipwt" && continue   # absent by design (sparse checkout): leave the base entry, never a deletion
+        grep -qzxF -- "$p" "$tmp/skipwt" && continue   # absent by design (sparse checkout): the CURRENT index entry (mode + blob id) stays, never a deletion
         printf '%s\0' "$p" >> "$tmp/rm"
       fi
     done < "$tmp/cands"

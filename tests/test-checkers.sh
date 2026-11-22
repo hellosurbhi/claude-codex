@@ -2068,7 +2068,7 @@ snap="$here/../scripts/review-snapshot.sh"
 rrmk; printf 'q\n' > "$tmp/rr/new.py"; before="$(git -C "$tmp/rr" status --porcelain)"; (cd "$tmp/rr" && "$snap" "$(git rev-list --max-parents=0 HEAD)" >/dev/null)
 expect pass "r28: review-snapshot.sh leaves the user's real index and tree untouched" test "$(git -C "$tmp/rr" status --porcelain)" = "$before"
 expect pass "r28: review-snapshot.sh with no base exits non-zero and prints nothing" sh -c '! out="$("$1" 2>/dev/null)" && [ -z "$out" ]' _ "$snap"
-for sub in diff ls-files --git-path --show-toplevel read-tree update-index write-tree check-attr ls-tree; do
+for sub in diff ls-files --git-path --show-toplevel update-index write-tree check-attr ls-tree; do
   expect pass "r28: review-snapshot.sh exits non-zero with nothing on stdout when git $sub fails" sh -c 'cd "$2" && out="$(FAILSUB=$3 PATH="$4:$PATH" "$1" "$(git rev-list --max-parents=0 HEAD)" 2>/dev/null)"; rc=$?; [ "$rc" -ne 0 ] && [ -z "$out" ]' _ "$snap" "$tmp/rr" "$sub" "$tmp/stubgit"
 done
 # r14 finding 1: a pipeline failure or an empty diff voids the round at step 1 AND at step 2, removes any old record and records nothing. rrstepx runs the extracted block with NO `set -e` (the block must handle
