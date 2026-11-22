@@ -259,6 +259,11 @@ mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp
 bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect pass "control: the same call with a zero exit and the same approval is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 
+# cc11-main-r2 finding 2: the guard that decides whether tier R (CodeRabbit, which reads the commits itself) may be used must really list committed secret-named files, even from a subdirectory.
+for guard_file in skills/execute-codex/SKILL.md skills/claude-codex/SKILL.md skills/tdd-execute-codex/SKILL.md skills/tdd-claude-codex/SKILL.md; do
+  expect pass "the tier R secret guard in $guard_file lists committed secret files from a subfolder" python3 "$here/check-secret-guard.py" "$here/../$guard_file"
+done
+
 # r17: the reviewed diff must match the remaining change exactly (whitespace, operators, the file set).
 rv() { mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; }
 rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py

@@ -138,6 +138,14 @@ if leaked(EXCL):
     bad.append("EXCL pathspec still lets secret-named files through: %s" % leaked(EXCL))
 if not leaked("-- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'"):
     bad.append("the old pathspec no longer leaks, so the functional check proves nothing")
+# cc11-main-r2 finding 2: tier R reads the commits itself, so EVERY mention of it carries the secret guard that falls back to tier S.
+# WHY the exact guard text: a paraphrase in one copy is how r1 to r20 kept drifting; check-secret-guard.py then runs the command itself.
+GUARD = " (run only after `git diff --name-only <base commit>..HEAD -- ':(top,glob,icase)**/.env*' ':(top,glob,icase)**/*secret*' ':(top,glob,icase)**/*credential*' ':(top,glob,icase)**/*.pem' ':(top,glob,icase)**/*.key'` prints nothing; if it prints anything, skip every outside reviewer and use tier S with the sanitized diff)"
+for f in sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root, "skills", "codex-mcp", x) for x in ("SKILL.md", "reference.md"))):
+    t = open(f, encoding="utf-8").read()
+    for m in re.finditer(r"reviewer\.sh R <diff-file> <out-file>`", t):
+        if not t[m.end():].startswith(GUARD):
+            bad.append("%s: reviewer.sh R mention lacks the secret guard (tier S when committed secret-named files exist)" % os.path.relpath(f, root))
 # cc11-main-r1: the failed review/audit paragraph of every Codex-using workflow must say a verdict line without the four severity lines is a failed audit.
 # WHY a per-file check instead of a SNIPPETS row: SNIPPETS demands equal counts in skill and command, but the skills also carry a frontmatter-adjacent summary the commands lack.
 for n in ("claude-codex", "tdd-claude-codex", "tdd-execute-codex", "execute-codex"):
