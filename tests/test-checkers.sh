@@ -16,17 +16,26 @@ tmo() {
   if [[ -z "${TMO_FORCE_PY:-}" ]] && command -v timeout >/dev/null 2>&1; then timeout "$secs" "$@"
   elif [[ -z "${TMO_FORCE_PY:-}" ]] && command -v gtimeout >/dev/null 2>&1; then gtimeout "$secs" "$@"
   else
-    python3 -c 'import subprocess, sys
-p = subprocess.Popen(sys.argv[2:])
+    # WHY a new session and killpg (cc11-main-r2 finding 6): p.kill() only reaches the immediate child, so a timed-out launcher left its
+    # reviewer and tee descendants running. start_new_session makes the child a group leader; killpg takes the whole group down on expiry.
+    python3 -c 'import os, signal, subprocess, sys
+p = subprocess.Popen(sys.argv[2:], start_new_session=True)
 try:
     sys.exit(p.wait(timeout=float(sys.argv[1])))
 except subprocess.TimeoutExpired:
-    p.kill(); p.wait(); sys.exit(124)' "$secs" "$@"
+    os.killpg(p.pid, signal.SIGKILL); p.wait(); sys.exit(124)' "$secs" "$@"
   fi
 }
 ok()  { echo "PASS: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
 expect() { local want="$1" name="$2"; shift 2; "$@" >/dev/null 2>&1; local rc=$?; if { [[ $want == pass && $rc -eq 0 ]] || [[ $want == fail && $rc -ne 0 ]]; }; then ok "$name"; else bad "$name (rc=$rc, wanted $want)"; fi; }
+# cc11-main-r2 finding 6: the python3 timeout stand-in must kill the whole process group, not only its child, or a timed-out launcher leaves reviewer and tee processes running.
+mkdir -p "$tmp/tmo"; rm -f "$tmp/tmo/gpid"
+TMO_FORCE_PY=1 tmo 1 bash -c 'sleep 60 & echo $! > "$1"; wait' _ "$tmp/tmo/gpid" >/dev/null 2>&1; tmo_rc=$?
+sleep 1
+expect pass "the python3 timeout stand-in exits 124 on expiry" test "$tmo_rc" -eq 124
+expect fail "the python3 timeout stand-in leaves no grandchild running after expiry" kill -0 "$(cat "$tmp/tmo/gpid" 2>/dev/null || echo 99999999)"
+kill "$(cat "$tmp/tmo/gpid" 2>/dev/null)" >/dev/null 2>&1 || true  # tidy up when the case above failed
 gdiff() { local f; for f in "$@"; do git diff --no-index --no-color /dev/null "$f"; done; }
 mkrun() { cd "$tmp"; rm -rf "$tmp/run"; mkdir -p "$tmp/run/repo"; (cd "$tmp/run/repo" && git init -q && git remote add origin https://example.invalid/t/r.git && printf 'x=1\n' > app.py); cd "$tmp/run/repo"; export EVLOG="$tmp/run/wrapper.jsonl" FAKE_LOG="$tmp/run/calls.log"; : > "$EVLOG"; : > "$FAKE_LOG"; unset FAKE_LIMIT FAKE_FAIL_FIRST; export FAKE_ROUNDS=0; }
 fake="$here/fake-codex-call.sh"
