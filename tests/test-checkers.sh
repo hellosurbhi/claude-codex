@@ -61,6 +61,8 @@ n = sum(1 for _ in open(log))
 import os
 prov = {"argv_ok": True, "nonce": os.environ["EVNONCE"], "wrapper_sha256": os.environ["WRAPPER_SHA256"], "codex": os.path.realpath(os.environ["EXPECT_CODEX"])} if wrapper == "real" else None
 ev = {"seq": n + 1, "wrapper": wrapper, "prov": prov, "argv": ["S", "in", "out"] if wrapper == "spy" else [], "exit": int(code), "resume": None, "thread_id": None, "phase": phase, "stdout": out.replace("\\n", "\n"), "stderr": "", "ts": n + 1}
+if os.environ.get("LINEMETA") and wrapper != "spy":
+    ev["meta"] = dict(kv.split("=", 1) for kv in os.environ["LINEMETA"].split())
 if wrapper == "spy":
     # a hand-built launcher event comes with the fake model production called for it (same run id), as the real launcher does (r38)
     ev["meta"] = {"run": "r%d" % (n + 1)}; ev["input_text"] = "in"
@@ -996,21 +998,45 @@ mkrun; (cd "$tmp/run/repo" && git remote remove origin); line fake 1 unknown "$L
 SPY_CONFIG_DIR="$tmp/cfg-noorigin" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
 expect_spy pass "control: an origin-requiring reviewer.sh makes the no-remote case fail (the test can detect the old bug)" test "$rc" = 9
 
-# cc11-main-r8 change B: the real scenario binds the reported approval to the FINAL real reviewer result in the log (fabricated logs, no quota).
-FIND='VERDICT: WARNING\nHIGH: a finding\n'; BLOCK='VERDICT: BLOCKED\nCRITICAL: a finding\n'
-mkrun; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$BLOCK"
-expect fail "a final BLOCKED review fails the final-result check even though the agent reports APPROVED" python3 "$here/check-final-review.py" "$EVLOG"
-mkrun; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$CLEAN"; line real 1 review "codex-call: UNREVIEWED"
-expect fail "a clean review followed by a later failed call fails the final-result check" python3 "$here/check-final-review.py" "$EVLOG"
-mkrun; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$CLEAN"; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$BLOCK"
-expect fail "a clean review followed by a later BLOCKED review fails the final-result check" python3 "$here/check-final-review.py" "$EVLOG"
-mkrun; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$FIND"; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n$CLEAN"
-expect pass "findings then a clean last review passes the final-result check" python3 "$here/check-final-review.py" "$EVLOG"
-mkrun; line real 0 review "THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\nVERDICT: APPROVED\nCRITICAL: a real finding\n"
-expect fail "an APPROVED line that carries a real finding is not a clean final result" python3 "$here/check-final-review.py" "$EVLOG"
+# cc11-main-r8 change B + r9 finding 1: the real scenario binds the reported approval to the FINAL real reviewer result in the log, for the FINAL state and (tdd skills) the implementation phase (fabricated logs, no quota).
+# The binding is check-scripted.py `final --real`, the same mechanism the scripted branch uses; the real shim records state and impl in each event's meta.
+FIND='VERDICT: WARNING\nHIGH: a finding\n'; BLOCK='VERDICT: BLOCKED\nCRITICAL: a finding\n'; TID="THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n"
+fr() { python3 "$here/check-scripted.py" "$EVLOG" final S1 --real "$@"; }
+mkrun; LINEMETA="state=S1 impl=yes" line real 0 review "$TID$BLOCK"
+expect fail "a final BLOCKED review fails the final-result check even though the agent reports APPROVED" fr
+mkrun; LINEMETA="state=S1 impl=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S1 impl=yes" line real 1 review "codex-call: UNREVIEWED"
+expect fail "a clean review followed by a later failed call fails the final-result check" fr
+mkrun; LINEMETA="state=S1 impl=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S1 impl=yes" line real 0 review "$TID$BLOCK"
+expect fail "a clean review followed by a later BLOCKED review fails the final-result check" fr
+mkrun; LINEMETA="state=S1 impl=yes" line real 0 review "$TID$FIND"; LINEMETA="state=S1 impl=yes" line real 0 review "$TID$CLEAN"
+expect pass "findings then a clean last review on the final state passes the final-result check" fr
+mkrun; LINEMETA="state=S1 impl=yes" line real 0 review "${TID}VERDICT: APPROVED\nCRITICAL: a real finding\n"
+expect fail "an APPROVED line that carries a real finding is not a clean final result" fr
 mkrun
-expect fail "an empty log has no final reviewer result" python3 "$here/check-final-review.py" "$EVLOG"
-expect pass "the real branch of review-loop-proof.sh runs the final-result check (execute-codex excepted)" test "$(grep -c 'check-final-review.py' "$here/review-loop-proof.sh")" = 1
+expect fail "an empty log has no final reviewer result" fr
+mkrun; LINEMETA="state=S1 impl=no" line real 0 review "$TID$CLEAN"
+expect fail "tdd: a clean TEST AUDIT with no implementation review fails the final-result check" fr --impl
+mkrun; LINEMETA="state=S1 impl=no" line real 0 review "$TID$CLEAN"
+expect pass "non-tdd skills are not held to the implementation phase (same log passes without --impl)" fr
+mkrun; LINEMETA="state=S0 impl=no" line real 0 review "$TID$CLEAN"
+expect fail "tdd: a clean test audit followed by implementation edits (final state differs) fails the final-result check" fr --impl
+mkrun; LINEMETA="state=S0 impl=yes" line real 0 review "$TID$CLEAN"
+expect fail "a clean implementation review followed by a later file change (final state differs) fails the final-result check" fr --impl
+mkrun; LINEMETA="state=S0 impl=yes" line real 0 review "$TID$CLEAN"
+expect fail "non-tdd: a clean review followed by a later file change also fails (state binding applies to every skill)" fr
+mkrun; LINEMETA="state=S0 impl=no" line real 0 review "$TID$FIND"; LINEMETA="state=S1 impl=yes" line real 0 review "$TID$CLEAN"
+expect pass "tdd: a clean implementation review on the final state passes the final-result check" fr --impl
+mkrun; line real 0 review "$TID$CLEAN"
+expect fail "a clean real review that recorded no state at all is not bound to the final state" fr
+expect pass "the real branch runs the bound final-result check once, with --impl for the tdd skills only" sh -c "test \"\$(grep -c 'check-scripted.py\" \"\$out/wrapper.jsonl\" final \"\$real_final_state\" --real \$IMPLFLAG' '$here/review-loop-proof.sh')\" = 1 && grep -q 'case \"\$skill\" in tdd-claude-codex|tdd-execute-codex) IMPLFLAG=--impl' '$here/review-loop-proof.sh'"
+expect pass "execute-codex real prints that no review verdict was checked instead of implying one" grep -q 'NO REVIEW VERDICT CHECKED' "$here/review-loop-proof.sh"
+# the shim records the repo state and the impl flag in the event meta, computed by the same state-hash.py and check-impl.py
+mkrun; printf 'def add(a, b):\n    return a + b\n' > "$tmp/run/repo/app.py"
+PROOF_REPO="$tmp/run/repo" REAL_CODEX="$tmp/realbin/codex" viawrap exec --json prompt >/dev/null 2>&1
+expect pass "the shim records the final-state hash and impl=yes in the real event" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; m=wlog.load(sys.argv[2])[-1]["meta"]; print(m.get("state")+" "+m.get("impl"))' "$here" "$EVLOG")" = "$(python3 "$here/state-hash.py" "$tmp/run/repo") yes"
+printf 'x=1\n' > "$tmp/run/repo/app.py"
+PROOF_REPO="$tmp/run/repo" REAL_CODEX="$tmp/realbin/codex" viawrap exec --json prompt >/dev/null 2>&1
+expect pass "the shim records impl=no when add() does not exist" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["meta"].get("impl"))' "$here" "$EVLOG")" = no
 
 # Self-test (round 3 finding 3): these cases need no private reviewer, so they MUST have run (and passed) in every mode, CHECKERS_NO_SPY=1 included.
 for must in "ci.yml declares an explicit contents: read permissions block" "ci.yml checks out with persist-credentials: false" "ci.yml runs the checkers with CHECKERS_NO_SPY=1" \

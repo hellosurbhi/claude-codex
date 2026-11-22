@@ -129,6 +129,11 @@ print(json.dumps({"nonce": os.environ.get("EVNONCE", ""), "wrapper_path": rp, "w
 PY3
 )"; export EV_PROV
 python3 -c 'import json,os,sys; p=json.loads(os.environ["EV_PROV"]); sys.exit(0 if p["wrapper_sha256"] and p["argv_ok"] and p["wrapper_sha256"]==os.environ.get("WRAPPER_SHA256") and p["nonce"] and p["nonce"]==os.environ.get("EVNONCE") else 1)' && kind=real
+# WHY the shim records the repo state and the add() flag at call time (r9 finding 1): check-scripted.py `final --real` binds the last clean verdict to the state the run ended in and, for the tdd skills,
+# to the implementation phase, exactly as the fake does. The repo is PROOF_REPO (set by review-loop-proof.sh), else the git top of the working directory.
+prepo="${PROOF_REPO:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}"
+impl=no; python3 "$here/check-impl.py" "$prepo/app.py" 2>/dev/null && impl=yes
+EV_META="state=$(python3 "$here/state-hash.py" "$prepo" 2>/dev/null) impl=$impl"; export EV_META
 python3 "$here/evlog.py" "$EVLOG" "$kind" "$logrc" "$resume" "$tid" "$pf" "$so" "$so.err" -- "${argv[@]}"
 cat "$o"; cat "$e" >&2
 exit "$rc"

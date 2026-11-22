@@ -113,6 +113,7 @@ if [[ $scenario == real ]]; then
   REAL_CODEX="$(command -v codex)"; export REAL_CODEX
   # WHY a nonce, the wrapper hash and the real binary path: the real-scenario checkers accept a run only when the shim recorded
   # all three from the process table (see shim/codex), so a bare or fake call cannot be counted as wrapper evidence.
+  export PROOF_REPO="$repo"  # WHY: the shim hashes this repo for the final-state binding (r9 finding 1)
   EVNONCE="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"; export EVNONCE
   WRAPPER_SHA256="$(shasum -a 256 "$HOME/.claude/config/scripts/codex-call.sh" | cut -d' ' -f1)"; export WRAPPER_SHA256
   EXPECT_CODEX="$REAL_CODEX"; export EXPECT_CODEX
@@ -184,9 +185,17 @@ if [[ $scenario == real ]]; then
   # WHY not execute-codex: Codex implements there (no review verdict); its follow-up reply is checked for the thread only.
   [[ $skill == execute-codex ]] || check "a real Codex reply carried a single valid VERDICT" 'python3 "$here/check-real-basic.py" "$out/wrapper.jsonl" verdict'
   check "the --resume follow-up returned on the same wrapper-issued thread with a verdict" 'python3 "$here/check-resume.py" "$out/wrapper.jsonl" --real ${NOVERDICT:+--no-verdict}'
-  # WHY the final-result check (cc11-main-r8 change B): the historical checks above would pass a run whose LAST review was BLOCKED or whose last call failed while the agent still reported APPROVED.
-  # execute-codex has no review verdict (Codex implements there), so only the other workflows can be held to it.
-  [[ $skill == execute-codex ]] || check "the reported approval agrees with the FINAL reviewer result: the last real call exited 0 with a clean verdict and nothing came after it" 'python3 "$here/check-final-review.py" "$out/wrapper.jsonl"'
+  # WHY the final-result check (cc11-main-r8 change B, r9 finding 1): the historical checks above would pass a run whose LAST review was BLOCKED, whose last call failed, or whose last clean verdict was
+  # for an earlier state, while the agent still reported APPROVED. It is the SAME mechanism as the scripted branch (check-scripted.py final, bound to the state hash the shim recorded at each call);
+  # for the tdd skills the last clean call must also be the implementation review (impl=yes), because a clean TEST AUDIT followed by implementation edits is not a reviewed implementation.
+  # WHY execute-codex is not held to it: Codex IMPLEMENTS there and the review is a Claude code-reviewer agent, so no review verdict exists in the wrapper log; the line below says so instead of implying one was checked.
+  real_final_state="$(python3 "$here/state-hash.py" "$repo")"
+  IMPLFLAG=; case "$skill" in tdd-claude-codex|tdd-execute-codex) IMPLFLAG=--impl;; esac
+  if [[ $skill == execute-codex ]]; then
+    echo "NO REVIEW VERDICT CHECKED: execute-codex implements through Codex and is reviewed by a Claude agent, so the wrapper log holds no review verdict (the thread, resume, modules and AUDIT-STATUS checks still ran)"
+  else
+    check "the reported approval agrees with the FINAL reviewer result: the last real call exited 0 with a clean verdict, for the state the run ended in${IMPLFLAG:+, on the implementation}, and nothing came after it" 'python3 "$here/check-scripted.py" "$out/wrapper.jsonl" final "$real_final_state" --real $IMPLFLAG'
+  fi
   echo "LAST_VERDICT: $(python3 "$here/last-verdict.py" "$out/wrapper.jsonl")"
   echo "THREAD_IDS: $(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; print(" ".join(sorted({e["thread_id"] for e in wlog.load(sys.argv[2]) if e["thread_id"]})))' "$here" "$out/wrapper.jsonl")"
   echo "SECONDARY (transcript): resume mentions=$(grep -c -- '--resume' "$out/events.txt")"
