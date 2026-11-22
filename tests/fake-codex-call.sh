@@ -18,13 +18,23 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 argv=("$@")
 dir="$PWD" resume="" resume_set=0 pfile="" pfile_set=0 role=""
-while [[ $# -gt 1 ]]; do
+# WHY the parser mirrors scripts/codex-call.sh (r22 finding 3): a lone option, an unknown option or an extra argument must fail here exactly as in the real wrapper, so a model cannot pass the proof with a call the
+# real wrapper would refuse. The error is held in $perr and raised after the logging trap exists, so the failed attempt still leaves an event.
+perr=""
+while [[ $# -gt 0 && -z "$perr" ]]; do
   case "$1" in
-    --sandbox) shift 2 ;;
-    --role) role="$2"; shift 2 ;;
-    --resume) resume="$2"; resume_set=1; shift 2 ;;
-    --cd) dir="$2"; shift 2 ;;
-    --prompt-file) pfile="$2"; pfile_set=1; shift 2 ;;
+    --sandbox|--role|--resume|--cd|--prompt-file)
+      if [[ $# -lt 2 ]]; then perr="option $1 needs a value"; break; fi
+      if [[ "$2" == -* ]]; then perr="option $1 needs a value, not the option-like $2"; break; fi
+      case "$1" in
+        --role) role="$2" ;;
+        --resume) resume="$2"; resume_set=1 ;;
+        --cd) dir="$2" ;;
+        --prompt-file) pfile="$2"; pfile_set=1 ;;
+      esac
+      shift 2 ;;
+    --) shift; break ;;
+    -*) perr="unknown option $1"; break ;;
     *) break ;;
   esac
 done
@@ -52,13 +62,15 @@ trap finish EXIT
 # WHY the validation sits AFTER the logging trap (r21 finding 3): the checkers decide on the LAST attempt in this log. A bad-argument, missing-role or missing-prompt exit that happened before the trap
 # left no event, so an earlier clean review stayed the last word. Every exit, early or late, now leaves one event with its exit code, like the real wrapper's failures are seen by the proof.
 # The rules mirror scripts/codex-call.sh: empty --resume, both prompt forms, a missing or empty role file or prompt file (--prompt-file r20 finding 1) and no prompt all exit 2 with no verdict.
+if [[ -n "$perr" ]]; then echo "codex-call: $perr. usage: codex-call.sh [--sandbox MODE] [--role FILE] [--resume THREAD_ID] [--cd DIR] (--prompt-file FILE | [--] PROMPT). Treat as UNREVIEWED." >&2; exit 2; fi
 if [[ $resume_set -eq 1 && -z "$resume" ]]; then echo "codex-call: empty --resume value (a thread id was expected). Treat as UNREVIEWED." >&2; exit 2; fi
 if [[ -n "$role" && ! -s "$role" ]]; then echo "codex-call: role file is missing, unreadable or empty: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; fi
 if [[ $pfile_set -eq 1 ]]; then
   if [[ $# -gt 0 ]]; then echo "codex-call: give either --prompt-file or a positional prompt, not both. Treat as UNREVIEWED." >&2; exit 2; fi
   [[ -n "$pfile" && -s "$pfile" ]] || { echo "codex-call: prompt file is missing or empty: $pfile. No call was made; treat as UNREVIEWED." >&2; exit 2; }
   prompt="$(cat "$pfile")"
-elif [[ $# -lt 1 ]]; then echo "codex-call: no prompt (pass --prompt-file FILE or a prompt). Treat as UNREVIEWED." >&2; exit 2
+elif [[ $# -lt 1 ]]; then echo "codex-call: no prompt (pass --prompt-file FILE or a prompt). usage: codex-call.sh ... Treat as UNREVIEWED." >&2; exit 2
+elif [[ $# -gt 1 ]]; then echo "codex-call: unexpected extra arguments after the prompt. usage: codex-call.sh ... Treat as UNREVIEWED." >&2; exit 2
 else prompt="$1"; fi
 printf '%s' "$prompt" > "$pf"
 # WHY a resume of an unknown thread dies: the real wrapper fails on a thread Codex never issued,

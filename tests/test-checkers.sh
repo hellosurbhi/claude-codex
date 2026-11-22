@@ -978,12 +978,12 @@ expect pass "ci.yml runs the checkers with CHECKERS_NO_SPY=1" grep -q 'CHECKERS_
 expect pass "ci.yml cancels superseded pull request runs per ref" grep -q 'cancel-in-progress: ${{ github.event_name == '"'"'pull_request'"'"' }}' "$ci"
 expect pass "ci.yml runs on pull_request and pushes to main only" grep -qE '^  push:$' "$ci"
 
-# C4: codex-call v2 error handling: a JSON error event with no message is reported whole instead of as an empty line, and the contract line is present.
+# C4: codex-call v3 error handling: a JSON error event with no message is reported whole instead of as an empty line, and the contract line is present.
 mkdir -p "$tmp/errbin"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "{\\"type\\":\\"thread.started\\",\\"thread_id\\":\\"t1\\"}" "{\\"type\\":\\"error\\",\\"code\\":\\"usage_limit\\"}" "{\\"type\\":\\"turn.failed\\"}"\nexit 1\n' > "$tmp/errbin/codex"; chmod +x "$tmp/errbin/codex"
 PATH="$tmp/errbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>"$tmp/errout.txt"
 expect pass "codex-call.sh reports a message-less JSON error event whole (usage_limit visible)" grep -q "usage_limit" "$tmp/errout.txt"
-expect pass "codex-call.sh carries the v2 contract line" grep -qx '# contract: codex-call v2 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)' "$here/../scripts/codex-call.sh"
+expect pass "codex-call.sh carries the v3 contract line" grep -qx '# contract: codex-call v3 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)' "$here/../scripts/codex-call.sh"
 # r19 finding 2: a completed turn with no thread id is a failed call (a later resume would start a new session and lose the review context), and an explicitly empty --resume is rejected instead of starting a new session
 mkdir -p "$tmp/tidbin"
 cat > "$tmp/tidbin/codex" <<'FAKE'
@@ -1056,6 +1056,57 @@ mkdir -p "$tmp/rolefile-dir"
 expectm fail "codex-call.sh: a role path that is a directory stops the call" 'role file' bigcc --role "$tmp/rolefile-dir" "short prompt"
 mkdir -p "$tmp/nomktemp"; printf '#!/bin/sh\nexit 1\n' > "$tmp/nomktemp/mktemp"; chmod +x "$tmp/nomktemp/mktemp"
 expectm fail "codex-call.sh: temp files that cannot be created stop the call" 'temp file' bash -c 'PATH="$1:$2:$PATH" BIGCALLS="$3" BIGARGS="$4" BIGSHA="$5" bash "$6" "short prompt" 2>&1 >/dev/null; exit "${PIPESTATUS[0]}"' _ "$tmp/nomktemp" "$tmp/bigbin" "$tmp/bigcalls.txt" "$tmp/bigargs.txt" "$tmp/bigsha.txt" "$here/../scripts/codex-call.sh"
+# r22 finding 3: a strict argument parser. Every option needs its value, an unknown option or an extra argument exits 2 with the usage line, and `--` ends the options so a prompt may start with a dash.
+# The same table is run through the real wrapper (no codex call, no verdict) and through the fake (the failed attempt voids an earlier clean review).
+printf 'p' > "$tmp/sp.txt"
+STRICT_BAD=("--resume" "--sandbox" "--role" "--cd" "--prompt-file" "--bogus|||p" "-x|||p" "--resume|||t1" "--sandbox|||read-only|||p|||q" "p|||q" "--resume|||--sandbox|||read-only|||p" "--prompt-file|||--cd|||x" "--role|||-x|||p" "-" "--|||a|||b" "p|||--resume|||t1")
+for bad in "${STRICT_BAD[@]}"; do
+  IFS='|' read -r -a sargs <<< "${bad//|||/|}"
+  expectm fail "codex-call.sh strict parser rejects: ${bad//|||/ }" 'usage:' bigcc "${sargs[@]}"
+  expect pass "codex-call.sh strict parser: '${bad//|||/ }' calls no codex and prints no verdict" nocall
+  expect pass "fake wrapper strict parser: '${bad//|||/ }' fails and voids an earlier clean review" eecase x "${sargs[@]}"
+done
+bigcc -- "-dash prompt" || true
+expect pass "codex-call.sh: after -- a prompt may start with a dash and arrives on stdin" bigfed "$(printf '%s' '-dash prompt' | shasum -a 256 | cut -d' ' -f1)"
+bigcc --sandbox workspace-write --cd "$tmp" --role "$tmp/bigrole.txt" -- "--looks like an option" || true
+expect pass "codex-call.sh: options, then -- then a dash-leading prompt works together with a role" bigfed "$( (printf 'ROLE\n\n--looks like an option') | shasum -a 256 | cut -d' ' -f1)"
+expect pass "fake wrapper: -- ends the options for a dash-leading prompt" bash -c 'EVLOG="$1/w.jsonl" FAKE_ROUNDS=0 bash "$2" --cd "$1/repo" -- "-dash" >/dev/null 2>&1' _ "$ee" "$here/fake-codex-call.sh"
+# r22 finding 3: every codex-call.sh invocation DOCUMENTED in a fenced block of the README, a skill or a command still parses under the strict parser (run for real against the codex shim).
+rm -rf "$tmp/doccalls"; mkdir -p "$tmp/doccalls/home"
+python3 - "$here/.." "$tmp/doccalls" <<'PYX'
+import glob, os, re, sys
+root, out = sys.argv[1], sys.argv[2]
+files = [os.path.join(root, "README.md")] + sorted(glob.glob(os.path.join(root, "skills", "*", "*.md")) + glob.glob(os.path.join(root, "commands", "*.md")))
+n = 0
+for f in files:
+    for blk in re.findall(r"```[^\n]*\n(.*?)\n```", open(f, encoding="utf-8").read(), re.S):
+        lines = blk.split("\n"); i = 0
+        while i < len(lines):
+            if lines[i].lstrip().startswith("~/.claude/config/scripts/codex-call.sh"):
+                cmd = lines[i]; i += 1
+                while i < len(lines) and (cmd.rstrip().endswith("\\") or cmd.count('"') % 2):
+                    cmd += "\n" + lines[i]; i += 1
+                n += 1
+                open(os.path.join(out, "%03d.cmd" % n), "w").write(cmd.lstrip() + "\n")
+            else:
+                i += 1
+print(n)
+PYX
+DOCN="$(ls "$tmp/doccalls"/*.cmd 2>/dev/null | wc -l | tr -d ' ')"
+expect pass "documented invocations were found (README, codex-mcp reference)" test "$DOCN" -ge 4
+doccall() { # $1 = a .cmd file: run it from a scratch repo with every file it names created, the wrapper path and ~ swapped for the repo copies, against the codex shim
+  local c; c="$(cat "$1")"; rm -rf "$tmp/docrepo"; mkdir -p "$tmp/docrepo/.claude/review"
+  c="${c//\~\/.claude\/config\/scripts\/codex-call.sh/bash $here/../scripts/codex-call.sh}"; c="${c//\~\//$tmp/doccalls/home/}"
+  grep -oE '(/[^ "]*(\.md|\.txt))|(\.claude/review/[a-z.-]+)' <<<"$c" | while read -r f; do case "$f" in /*) mkdir -p "$(dirname "$f")"; printf 'role text\n' > "$f" ;; *) printf 'prompt text\n' > "$tmp/docrepo/$f" ;; esac; done
+  ( cd "$tmp/docrepo" && git init -q && PATH="$tmp/bigbin:$PATH" BIGCALLS="$tmp/doccalls.calls" BIGARGS="$tmp/doccalls.args" BIGSHA="$tmp/doccalls.sha" THREAD_ID=tbig bash -c "$c" >"$tmp/doccalls.out" 2>"$tmp/doccalls.err" ) && ! grep -q 'usage:' "$tmp/doccalls.err"
+}
+# shellcheck disable=SC2088  # WHY: the literal tilde is the documented text the runner substitutes
+printf '%s\n' '~/.claude/config/scripts/codex-call.sh --resume' > "$tmp/bad.cmd"
+# shellcheck disable=SC2088  # WHY: same literal tilde
+printf '%s\n' '~/.claude/config/scripts/codex-call.sh "a" "b"' > "$tmp/bad2.cmd"
+expect fail "control: the documented-invocation runner rejects a lone --resume" doccall "$tmp/bad.cmd"
+expect fail "control: the documented-invocation runner rejects an extra argument" doccall "$tmp/bad2.cmd"
+for dc in "$tmp/doccalls"/*.cmd; do expect pass "documented codex-call.sh invocation $(basename "$dc") still parses" doccall "$dc"; done
 # r22 finding 2: a mktemp that fails before the pin file exists must not make the cleanup trap delete a file named .role in the working directory (an unset $pin expanded "$pin.role" to ".role").
 mkdir -p "$tmp/rolecwd"; printf 'precious\n' > "$tmp/rolecwd/.role"
 ( cd "$tmp/rolecwd" && PATH="$tmp/nomktemp:$tmp/bigbin:$PATH" BIGCALLS="$tmp/bigcalls.txt" BIGARGS="$tmp/bigargs.txt" BIGSHA="$tmp/bigsha.txt" bash "$here/../scripts/codex-call.sh" "short prompt" >/dev/null 2>&1 || true )

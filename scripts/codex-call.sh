@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# contract: codex-call v2 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)
+# contract: codex-call v3 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)
 # codex-call.sh: one Codex turn via `codex exec` (the supported replacement for the removed
 # `codex mcp-server` tools mcp__codex__codex / mcp__codex__codex-reply).
 #
@@ -11,7 +11,8 @@
 # installs it at ~/.claude/config/scripts/codex-call.sh, the path every skill calls.
 #
 # Usage:
-#   codex-call.sh [--sandbox read-only|workspace-write] [--role FILE] [--resume THREAD_ID] [--cd DIR] (--prompt-file FILE | PROMPT)
+#   codex-call.sh [--sandbox read-only|workspace-write] [--role FILE] [--resume THREAD_ID] [--cd DIR] (--prompt-file FILE | [--] PROMPT)
+# Strict: each option needs its value; an unknown option or an extra argument exits 2 with the usage line; put a prompt that starts with a dash after `--`.
 # The prompt always reaches Codex on stdin (`-`), never as a process argument. Use --prompt-file for anything that can be large (a diff):
 # a positional PROMPT is still accepted for short text, but it is limited by the OS argument size, a prompt file is not.
 # Output (stdout): first line `THREAD_ID: <id>`, then Codex's final message.
@@ -20,13 +21,26 @@ set -euo pipefail
 command -v python3 >/dev/null || { echo "codex-call: python3 is required (it parses the Codex event stream). Treat as UNREVIEWED." >&2; exit 2; }
 # WHY the repository top and not $PWD (cc11-main-r2 finding 3): Codex reviews relative to --cd, so a review started from a subfolder saw only that folder.
 sandbox=read-only role="" resume="" resume_set=0 pfile="" pfile_set=0 dir="$(git rev-parse --show-toplevel 2>/dev/null || printf "%s" "$PWD")"
-while [[ $# -gt 1 ]]; do
+# WHY the parser is strict (r22 finding 3): the old loop only ran while two arguments remained, so a lone `--resume` skipped parsing and became the PROMPT, an unknown option was sent to Codex as prompt text
+# and extra positional arguments were silently dropped. Every option needs a value that is not itself option-like, an unknown option or an extra argument exits 2 with the usage line, and `--` ends the options so
+# a prompt that starts with a dash is still possible. Do not relax this back to "anything unrecognised is the prompt".
+usage="usage: codex-call.sh [--sandbox read-only|workspace-write] [--role FILE] [--resume THREAD_ID] [--cd DIR] (--prompt-file FILE | [--] PROMPT)"
+die_usage() { echo "codex-call: $1. $usage. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+while [[ $# -gt 0 ]]; do
   case "$1" in
-    --sandbox) sandbox="$2"; shift 2 ;;
-    --role) role="$2"; shift 2 ;;
-    --resume) resume="$2"; resume_set=1; shift 2 ;;
-    --cd) dir="$2"; shift 2 ;;
-    --prompt-file) pfile="$2"; pfile_set=1; shift 2 ;;
+    --sandbox|--role|--resume|--cd|--prompt-file)
+      [[ $# -ge 2 ]] || die_usage "option $1 needs a value"
+      [[ "$2" != -* ]] || die_usage "option $1 needs a value, not the option-like $2"
+      case "$1" in
+        --sandbox) sandbox="$2" ;;
+        --role) role="$2" ;;
+        --resume) resume="$2"; resume_set=1 ;;
+        --cd) dir="$2" ;;
+        --prompt-file) pfile="$2"; pfile_set=1 ;;
+      esac
+      shift 2 ;;
+    --) shift; break ;;
+    -*) die_usage "unknown option $1 (put a prompt that starts with a dash after --)" ;;
     *) break ;;
   esac
 done
@@ -39,7 +53,8 @@ if [[ $resume_set -eq 1 && -z "$resume" ]]; then echo "codex-call: empty --resum
 if [[ $pfile_set -eq 1 ]]; then
   if [[ $# -gt 0 ]]; then echo "codex-call: give either --prompt-file or a positional prompt, not both. Treat as UNREVIEWED." >&2; exit 2; fi
   if [[ -z "$pfile" || ! -s "$pfile" ]]; then echo "codex-call: prompt file is missing or empty: ${pfile:-<empty name>}. No call was made; treat as UNREVIEWED." >&2; exit 2; fi
-elif [[ $# -lt 1 ]]; then echo "codex-call: no prompt (pass --prompt-file FILE or a prompt). Treat as UNREVIEWED." >&2; exit 2; fi
+elif [[ $# -lt 1 ]]; then die_usage "no prompt (pass --prompt-file FILE or a prompt)"
+elif [[ $# -gt 1 ]]; then die_usage "unexpected extra arguments after the prompt ($# given, one expected)"; fi
 # WHY every step below checks its own status (r21 finding 2): `A && B` and a command substitution inside printf do not trip `set -e` when A (or the inner cat) fails, so a missing role file used to
 # send the prompt WITHOUT its role text, and a failed temp-file write used to go on. Each step now stops with a message and exit 2, before anything is sent.
 if [[ -n "$role" ]]; then

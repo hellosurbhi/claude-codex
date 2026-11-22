@@ -9,7 +9,7 @@ description: How to call OpenAI Codex (plan audits, code review, implementation)
 
 ## Tool
 
-`~/.claude/config/scripts/codex-call.sh [--sandbox MODE] [--role FILE] [--resume THREAD_ID] [--cd DIR] (--prompt-file FILE | PROMPT)`
+`~/.claude/config/scripts/codex-call.sh [--sandbox MODE] [--role FILE] [--resume THREAD_ID] [--cd DIR] (--prompt-file FILE | [--] PROMPT)`
 
 Run it with Bash. The prompt reaches Codex on stdin either way. Use `--prompt-file` for anything large (a diff, a plan with context): a positional PROMPT is limited by the operating system's argument size, a file is not, and a missing or empty file is an error that calls nothing. Output: first line `THREAD_ID: <id>`, then Codex's final message. It exits non-zero with "UNREVIEWED" when Codex returns no message: that is never an approval. A positional PROMPT is only for fixed text you wrote yourself; any pasted free text (task text, plan text, findings, failure output, a reviewer reply) is written with your file-writing tool to a file and passed with `--prompt-file`, never placed inside a quoted shell argument or a heredoc, because `$(...)`, backticks or a terminator line in it would run as shell.
 
