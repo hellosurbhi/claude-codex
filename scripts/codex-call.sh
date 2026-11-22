@@ -47,7 +47,11 @@ if [[ -n "$role" ]]; then
   role_text="$(cat "$role")" || { echo "codex-call: could not read the role file: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; }
   [[ -n "$role_text" ]] || { echo "codex-call: role file has no text: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; }
 fi
-out=""; pin=""; trap 'rm -f "$out" "$pin" "$pin.role"' EXIT
+# WHY cleanup names only non-empty paths (r22 finding 2): the trap is installed before the temp files exist, and an unset $pin made "$pin.role" expand to ".role", deleting a file of that name in the working directory
+# when a mktemp failed. Do not collapse this back into one `rm -f "$out" "$pin" "$pin.role"`.
+out=""; pin=""
+cleanup() { [[ -z "$out" ]] || rm -f -- "$out"; if [[ -n "$pin" ]]; then rm -f -- "$pin" "$pin.role"; fi; }
+trap cleanup EXIT
 out="$(mktemp)" || { echo "codex-call: could not create a temp file (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
 pin="$(mktemp)" || { echo "codex-call: could not create a temp file (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
 if [[ $pfile_set -eq 1 ]]; then

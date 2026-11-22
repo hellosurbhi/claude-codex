@@ -1056,6 +1056,10 @@ mkdir -p "$tmp/rolefile-dir"
 expectm fail "codex-call.sh: a role path that is a directory stops the call" 'role file' bigcc --role "$tmp/rolefile-dir" "short prompt"
 mkdir -p "$tmp/nomktemp"; printf '#!/bin/sh\nexit 1\n' > "$tmp/nomktemp/mktemp"; chmod +x "$tmp/nomktemp/mktemp"
 expectm fail "codex-call.sh: temp files that cannot be created stop the call" 'temp file' bash -c 'PATH="$1:$2:$PATH" BIGCALLS="$3" BIGARGS="$4" BIGSHA="$5" bash "$6" "short prompt" 2>&1 >/dev/null; exit "${PIPESTATUS[0]}"' _ "$tmp/nomktemp" "$tmp/bigbin" "$tmp/bigcalls.txt" "$tmp/bigargs.txt" "$tmp/bigsha.txt" "$here/../scripts/codex-call.sh"
+# r22 finding 2: a mktemp that fails before the pin file exists must not make the cleanup trap delete a file named .role in the working directory (an unset $pin expanded "$pin.role" to ".role").
+mkdir -p "$tmp/rolecwd"; printf 'precious\n' > "$tmp/rolecwd/.role"
+( cd "$tmp/rolecwd" && PATH="$tmp/nomktemp:$tmp/bigbin:$PATH" BIGCALLS="$tmp/bigcalls.txt" BIGARGS="$tmp/bigargs.txt" BIGSHA="$tmp/bigsha.txt" bash "$here/../scripts/codex-call.sh" "short prompt" >/dev/null 2>&1 || true )
+expect pass "codex-call.sh: a failing mktemp leaves a .role file in the working directory alone" test "$(cat "$tmp/rolecwd/.role" 2>/dev/null)" = precious
 expect pass "a failure to write the result stops with a nonzero exit (python output step is not swallowed)" sh -c '! PATH="$1:$PATH" BIGCALLS="$2" BIGARGS="$3" BIGSHA="$4" bash "$5" "short prompt" >/dev/full 2>/dev/null' _ "$tmp/bigbin" "$tmp/bigcalls.txt" "$tmp/bigargs.txt" "$tmp/bigsha.txt" "$here/../scripts/codex-call.sh"
 expect pass "a codex stream with a non-object JSON line still gives a nonzero exit and no verdict" sh -c 'mkdir -p "$1/nb"; printf "%s\n" "#!/usr/bin/env bash" "cat >/dev/null" "echo 5" "echo \"[1]\"" > "$1/nb/codex"; chmod +x "$1/nb/codex"; o="$(PATH="$1/nb:$PATH" bash "$2" "p" 2>/dev/null)"; rc=$?; [ "$rc" -ne 0 ] && ! printf "%s" "$o" | grep -q "VERDICT\|THREAD_ID"' _ "$tmp" "$here/../scripts/codex-call.sh"
 # cc11-main-r5 finding 2: the README must name the position the contract line really has (line 1 is the shebang).
