@@ -180,17 +180,24 @@ Announce routing decision (e.g. "Small change — implementing directly" or "Lar
 
 ---
 
-**Review record (every reviewer round)**: the code-reviewer agent is Claude, so its verdict never reaches the Codex wrapper log, and the final report's `AUDIT-STATUS` line names no state. Each reviewer round of this workflow (every Route A and Route B round and, in the usage-limit chain, the fallback reviewer's out-file) therefore ends, right after its reply arrives and before any fix, by saving that reply with the hash of the exact diff it reviewed. Run this unchanged, after the same intent-to-add step that built the reviewer's diff:
+**Review record (every reviewer round)**: the code-reviewer agent is Claude, so its verdict never reaches the Codex wrapper log, and the final report's `AUDIT-STATUS` line names no state. Each reviewer round of this workflow (every Route A and Route B round and, in the usage-limit chain, the fallback reviewer's out-file) therefore has two steps that bind the saved reply to the exact diff the reviewer judged. Step 1 runs BEFORE the reviewer is dispatched, after the same intent-to-add step that builds the reviewer's diff. Run it unchanged:
 
 ```
 mkdir -p .claude/review
-H="$(git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review/final-review.txt' | shasum -a 256 | cut -d' ' -f1)"
+H="$(git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review/final-review.txt' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)"
+```
+Send the reviewer `.claude/review/reviewed.diff`, never a fresh `git diff`: it must judge exactly the bytes hashed into `H`. Step 2 runs when the reply arrives, before any fix. Run it unchanged, with the reviewer's reply pasted verbatim:
+
+```
+H="$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)"
+if [ "$(git diff $START_SHA -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review/final-review.txt' | shasum -a 256 | cut -d' ' -f1)" = "$H" ]; then
 { printf 'REVIEWED-DIFF: %s\n' "$H"; cat <<'REVIEW'
 <the reviewer's reply, verbatim>
 REVIEW
 } > .claude/review/final-review.txt
+else rm -f .claude/review/final-review.txt; echo "the tree changed while the reviewer ran: this round is void, there is no verdict for the current tree, review again"; fi
 ```
-Each round overwrites the file, so it always holds the latest round. The hash is computed into `H` BEFORE the redirect opens the file, and the record path is excluded from the hashed diff: the redirect truncates the file first, and a tracked or intent-to-add record is rewritten after the hash, so a diff that included it would make every record stale. A record counts as approval only when its reply is exactly `VERDICT: APPROVED` with zero findings and its hash is that of the final diff: any edit after a round makes the record stale, which needs a new review round and a new record, and a final report whose record is missing, stale or not clean must end `AUDIT-STATUS: UNREVIEWED`.
+If the tree changed while the reviewer ran, the round is void: nothing is recorded, the earlier diff's approval never carries over, and the next round starts again at step 1. Each round overwrites the file, so it always holds the latest round. The record carries the pre-dispatch hash (taken from the snapshot, never from the tree after the reply), and the record path is excluded from the hashed diff: a tracked or intent-to-add record is rewritten after the hash, so a diff that included it would make every record stale. A record counts as approval only when its reply is exactly `VERDICT: APPROVED` with zero findings and its hash is that of the final diff: any edit after a round makes the record stale, which needs a new review round and a new record, and a final report whose record is missing, stale or not clean must end `AUDIT-STATUS: UNREVIEWED`.
 
 ### Route A: Small Change — Claude Implements (GREEN)
 

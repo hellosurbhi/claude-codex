@@ -322,7 +322,7 @@ for f in [os.path.join(root, "skills", "codex-mcp", "SKILL.md"), os.path.join(ro
 RECHEAD = "**Review record (every reviewer round)**"
 def rec_of(path):
     t = open(path, encoding="utf-8").read()
-    m = re.search(re.escape(RECHEAD) + r".*?\n```\n.*?\n```\n.*?(?:\n\n|$)", t, re.S)
+    m = re.search(re.escape(RECHEAD) + r".*?\n```\n.*?\n```\n.*?\n```\n.*?\n```\n.*?(?:\n\n|$)", t, re.S)
     return (m.group(0), t.count(RECHEAD)) if m else (None, t.count(RECHEAD))
 for n in ("execute-codex", "tdd-execute-codex"):
     base = "$START_SHA" if n.startswith("tdd-") else "HEAD"
@@ -333,9 +333,16 @@ for n in ("execute-codex", "tdd-execute-codex"):
         got.append(b)
         if cnt != 1 or not b:
             bad.append("%s: expected exactly one Review record paragraph with its command sequence (found %d)" % (rel, cnt)); continue
-        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\n'", "H=\"$(git diff %s %s ':(top,exclude).claude/review/final-review.txt' | shasum -a 256 | cut -d' ' -f1)\"" % (base, EXCL), "printf 'REVIEWED-DIFF: %s\\n' \"$H\"", "> .claude/review/final-review.txt", "<the reviewer's reply, verbatim>", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
+        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\n'", "H=\"$(git diff %s %s ':(top,exclude).claude/review/final-review.txt' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)\"" % (base, EXCL), "printf 'REVIEWED-DIFF: %s\\n' \"$H\"", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"", "= \"$H\" ]; then", "else rm -f .claude/review/final-review.txt", "> .claude/review/final-review.txt", "<the reviewer's reply, verbatim>", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
             if k not in b:
                 bad.append("%s: the Review record sequence lacks %r" % (rel, k[:60]))
+        # r13 finding 2: ORDER is the rule. Snapshot and hash BEFORE dispatch (step 1), then after the reply compare the current tree with that hash (step 2) and only then write the record, whose hash is
+        # the pre-dispatch one. A second `H=$(git diff` anywhere would let the hash move to after the call, so exactly one tree-derived assignment is allowed.
+        pos = [b.find(x) for x in ["| tee .claude/review/reviewed.diff", "Send the reviewer `.claude/review/reviewed.diff`", "< .claude/review/reviewed.diff", "= \"$H\" ]; then", "printf 'REVIEWED-DIFF: %s\\n' \"$H\""]]
+        if min(pos) < 0 or pos != sorted(pos):
+            bad.append("%s: the Review record steps are not in the order snapshot and hash, dispatch, compare after the reply, write the record" % rel)
+        if b.count('H="$(git diff') != 1:
+            bad.append("%s: the Review record takes H from the tree more than once (the hash must be taken before dispatch only)" % rel)
     if got[0] != got[1]:
         bad.append("%s: the Review record paragraph differs between skill and command" % n)
 print("\n".join(bad))

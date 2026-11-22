@@ -23,7 +23,9 @@ if mode == "final" and "--audit" in sys.argv:
     # WHY marked at call time and not "has a verdict": a failed or malformed re-audit has no valid verdict, so filtering by verdict dropped it and left an earlier clean audit standing.
     # WHY not bound to the final state: the implementation legitimately changes the files after the audit; the final review is the review record's job.
     a = [e for e in evs if e.get("meta", {}).get("audit") == "yes"]
-    sys.exit(0 if a and a[-1]["exit"] == 0 and wlog.is_clean(a[-1]) and a[-1].get("meta", {}).get("state") else 1)
+    # WHY start == end state (r13 finding 2): a file edited while the audit ran must not inherit the audit's approval.
+    am = a[-1].get("meta", {}) if a else {}
+    sys.exit(0 if a and a[-1]["exit"] == 0 and wlog.is_clean(a[-1]) and am.get("state") and am.get("endstate") == am.get("state") else 1)
 if mode == "final":
     # the LAST execution is a clean reply, given for the state the run ended in (and, with --impl, after add() existed)
     if not evs:
@@ -31,6 +33,10 @@ if mode == "final":
     last = evs[-1]
     m = last.get("meta", {})
     ok = last["exit"] == 0 and wlog.is_clean(last) and (REAL or m.get("result") == "CLEAN") and m.get("state") == sys.argv[3]
+    # WHY start state == verdict state == final state for a real call (r13 finding 2): the shim records `state` when the call STARTS and `endstate` when it returns; an edit made while the
+    # reviewer ran changes the tree it judged, so an approval whose two states differ is void. The fake has no such window.
+    if REAL:
+        ok = ok and m.get("endstate") == m.get("state")
     if "--impl" in sys.argv:
         ok = ok and m.get("impl") == "yes"
     sys.exit(0 if ok else 1)
