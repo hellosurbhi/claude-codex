@@ -169,6 +169,28 @@ mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVE
 expect pass "the one-line reviewer.sh approval counts as clean" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 mkrun; line fake 0 unknown 'THREAD_ID: t\nVERDICT: CLEAN\n'
 expect fail "VERDICT: CLEAN is not a valid verdict" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.valid_verdict(wlog.load(sys.argv[2])[0]) else 1)' "$here" "$EVLOG"
+# Round 3 finding 2: ONE grammar function (wlog.verdict_state) judges every verdict: clean / findings / no-verdict.
+gstate() { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; print(wlog.verdict_state(sys.argv[2]))' "$here" "$1"; }
+expect pass "grammar: a bare APPROVED is clean" test "$(gstate $'VERDICT: APPROVED\n')" = clean
+expect pass "grammar: APPROVED plus HIGH: none is clean" test "$(gstate $'VERDICT: APPROVED\nHIGH: none\n')" = clean
+expect pass "grammar: placeholders in any case with a trailing period are clean" test "$(gstate $'VERDICT: APPROVED\nCRITICAL: None.\nHIGH: N/A\nMEDIUM: n/a.\nLOW: NONE\n')" = clean
+expect pass "grammar: APPROVED plus a real MEDIUM is findings" test "$(gstate $'VERDICT: APPROVED\nMEDIUM: missing null check in a.py:3\n')" = findings
+expect pass "grammar: APPROVED plus a real CRITICAL is findings" test "$(gstate $'VERDICT: APPROVED\nCRITICAL: secret committed\n')" = findings
+expect pass "grammar: APPROVED plus a real HIGH among placeholders is findings" test "$(gstate $'VERDICT: APPROVED\nCRITICAL: none\nHIGH: data loss on retry\nMEDIUM: none\nLOW: none\n')" = findings
+expect pass "grammar: a header with its text on the next line is findings" test "$(gstate $'VERDICT: APPROVED\nHIGH:\nthe retry loop never stops\n')" = findings
+expect pass "grammar: a header whose next line is a placeholder is clean" test "$(gstate $'VERDICT: APPROVED\nHIGH:\nnone\n')" = clean
+expect pass "grammar: BLOCKED with a finding is findings" test "$(gstate $'VERDICT: BLOCKED\nCRITICAL: bad\n')" = findings
+expect pass "grammar: two verdict lines is no verdict" test "$(gstate $'VERDICT: APPROVED\nVERDICT: BLOCKED\n')" = no-verdict
+expect pass "grammar: NOT APPROVED is no verdict" test "$(gstate $'VERDICT: NOT APPROVED\n')" = no-verdict
+expect pass "grammar: a verdict word inside other text is no verdict" test "$(gstate $'Looks good. VERDICT: APPROVED\n')" = no-verdict
+expect pass "grammar: a qualified APPROVED is no verdict" test "$(gstate $'VERDICT: APPROVED once you fix the null check\n')" = no-verdict
+expect pass "grammar: the verdict must be the first non-blank line" test "$(gstate $'Review below.\nVERDICT: APPROVED\n')" = no-verdict
+expect pass "grammar: empty output is no verdict" test "$(gstate '')" = no-verdict
+expect pass "grammar: whitespace only is no verdict" test "$(gstate $'  \n\n')" = no-verdict
+expect pass "grammar: leading blank lines before the verdict are fine" test "$(gstate $'\n\nVERDICT: APPROVED\n')" = clean
+expect fail "an APPROVED with a real CRITICAL is not a clean wrapper event" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"real","exit":0,"stdout":"THREAD_ID: t\nVERDICT: APPROVED\nCRITICAL: bad\n","stderr":""}) else 1)' "$here"
+expect pass "a bare APPROVED from the real wrapper is a clean wrapper event" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"real","exit":0,"stdout":"THREAD_ID: t\nVERDICT: APPROVED\n","stderr":""}) else 1)' "$here"
+expect fail "a clean verdict with a nonzero exit is not clean" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"real","exit":1,"stdout":"THREAD_ID: t\nVERDICT: APPROVED\n","stderr":""}) else 1)' "$here"
 # the LAST review by start time decides, even when an older review finished later.
 # WHY a valid approval plus a valid-shaped blocked review: only the ordering (start time vs finish time) decides the verdict here.
 addblocked() { python3 - "$EVLOG" <<'PYB'
@@ -635,11 +657,11 @@ rows=[json.loads(l) for l in open(sys.argv[1])]; rows[1]["wrapper"]="real"
 open(sys.argv[1],"w").write("\n".join(json.dumps(x) for x in rows)+"\n")
 PY2
 expect pass "a real resume of a real thread passes the real-only resume check" python3 "$here/check-resume.py" "$EVLOG" --real
-# cc11-main-r2 finding 4: a Codex approval that lacks the four severity lines is not a valid verdict (the skills define the whole block).
+# Round 3 finding 1: the review contract omits empty severity lines, so a bare Codex approval IS a valid (and clean) verdict.
 mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\n'
-expect fail "a real Codex approval with no severity lines is not a valid verdict" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+expect pass "a real Codex approval with no severity lines is a valid verdict" python3 "$here/check-real-basic.py" "$EVLOG" verdict
 mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nLOW: none\n'
-expect fail "a real Codex approval missing the MEDIUM line is not a valid verdict" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+expect pass "a real Codex approval with only some placeholder severity lines is a valid verdict" python3 "$here/check-real-basic.py" "$EVLOG" verdict
 mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: BLOCKED\nCRITICAL: bad thing\nHIGH: none\nMEDIUM: none\nLOW: none\n'
 expect pass "a complete BLOCKED block with a finding is a valid verdict" python3 "$here/check-real-basic.py" "$EVLOG" verdict
 mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\n'
@@ -650,7 +672,7 @@ rows[0]["thread_id"]="abcdef12-3456"
 r=dict(rows[0]); r.update(seq=2, resume="abcdef12-3456", ts=2)
 rows.append(r); open(sys.argv[1],"w").write("\n".join(json.dumps(x) for x in rows)+"\n")
 PY2
-expect fail "a real resume whose approval lacks the severity lines does not count" python3 "$here/check-resume.py" "$EVLOG" --real
+expect pass "a real resume whose approval is the bare verdict line counts" python3 "$here/check-resume.py" "$EVLOG" --real
 
 # r28/r29: provenance of real runs comes from the process table, the wrapper hash, the run nonce and the real binary path
 cat > "$tmp/realbin/codex" <<'SH'
@@ -844,7 +866,7 @@ printf 'import os\nos._exit(0)\n' > "$tmp/exit0.py"; printf 'def add(a, b):\n   
 expect fail "a module that exits 0 on import is not a passing implementation" python3 "$here/check-impl.py" "$tmp/exit0.py"
 expect pass "a real add passes check-impl" python3 "$here/check-impl.py" "$tmp/good.py"
 expect pass "a rename from test_app.py to app.py is the implementation phase" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import evlog; print(evlog.phase_of("diff --git a/test_app.py b/app.py\nsimilarity index 90%\nrename from test_app.py\nrename to app.py\n"))' "$here")" = implementation
-expect fail "the Codex-form clean reply is not a clean reviewer.sh spy reply" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"spy","exit":0,"stdout":"VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n","stderr":""}) else 1)' "$here"
+expect pass "placeholder severity lines are clean for a reviewer.sh spy reply too (one grammar)" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"spy","exit":0,"stdout":"VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n","stderr":""}) else 1)' "$here"
 
 mkdir -p "$tmp/em"; for m in mathops strops listops pkginfo; do printf 'import os\nos._exit(0)\n' > "$tmp/em/$m.py"; done
 expect fail "four modules that exit 0 on import do not pass check-modules" python3 "$here/check-modules.py" "$tmp/em"

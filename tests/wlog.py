@@ -2,7 +2,6 @@
 import json, os, re
 
 VERDICT = r"VERDICT: (APPROVED|WARNING|BLOCKED)"  # the only grammar the skills allow (r14)
-SEVS = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
 def load(path):
     try:
@@ -29,22 +28,46 @@ def reply_text(ev):
 def verdict_lines(ev):
     return re.findall(r"^VERDICT:.*$", reply_text(ev), re.M)
 
+SEV_HEAD = re.compile(r"(CRITICAL|HIGH|MEDIUM|LOW):[ \t]*(.*)")
+PLACEHOLDER = re.compile(r"(none|n/a)\.?", re.I)
+
+def verdict_state(text):
+    """THE verdict grammar (one function, used by every checker). Returns "clean", "findings" or "no-verdict".
+    The first non-blank line must be exactly VERDICT: APPROVED, WARNING or BLOCKED; any other VERDICT: line is no verdict, and so is
+    empty or unparseable output. Severity lines are optional; a header with empty text takes the next non-blank line as its text; the
+    placeholder text none or n/a (any case, optional trailing period) is ignored. Any real finding, or any verdict word but APPROVED,
+    is "findings". Only APPROVED with no real finding is "clean"."""
+    # WHY (round 3 finding 1): the global review contract tells the reviewer to OMIT empty severity lines and to answer a clean review as exactly
+    # `VERDICT: APPROVED`, so requiring four severity lines made every compliant reviewer look broken. Tolerating `none` keeps older replies valid.
+    # WHY real findings beat the verdict word (finding 2): `VERDICT: APPROVED` beside a populated CRITICAL or HIGH must never read as a clean round.
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines:
+        return "no-verdict"
+    m = re.fullmatch(VERDICT, lines[0])
+    if not m or any(l.startswith("VERDICT:") for l in lines[1:]):
+        return "no-verdict"
+    found = False
+    i = 1
+    while i < len(lines):
+        h = SEV_HEAD.fullmatch(lines[i])
+        if h:
+            body = h.group(2).strip()
+            if not body and i + 1 < len(lines) and not SEV_HEAD.fullmatch(lines[i + 1]):
+                i += 1
+                body = lines[i]
+            if body and not PLACEHOLDER.fullmatch(body):
+                found = True
+        else:
+            found = True  # prose or a continuation line that no placeholder header consumed is content, never clean
+        i += 1
+    return "findings" if found or m.group(1) != "APPROVED" else "clean"
+
 def valid_verdict(ev):
-    """The single valid VERDICT of an event that exited 0, else None."""
+    """The verdict word of an event that exited 0 and holds a verdict (clean or findings), else None."""
     if ev["exit"] != 0:
         return None
-    ls = verdict_lines(ev)
-    m = re.fullmatch(VERDICT, ls[0].rstrip()) if len(ls) == 1 else None
-    if not m:
-        return None
-    # WHY the severity lines (cc11-main-r2 finding 4): the skills define a Codex reply as the verdict line plus CRITICAL, HIGH, MEDIUM and
-    # LOW lines in that order, and treat a bare verdict as a failed audit. A checker that accepted the bare line could not notice a
-    # regression of that rule. reviewer.sh replies (spy, model) are verdict-only or verdict plus findings, so only Codex wrappers need it.
-    if ev["wrapper"] in ("fake", "real"):
-        heads = [l.split(":", 1)[0] for l in verdict_block(ev) if re.match(r"(CRITICAL|HIGH|MEDIUM|LOW):", l)]
-        if heads != list(SEVS):
-            return None
-    return m.group(1)
+    text = "\n".join(verdict_block(ev))
+    return re.match(VERDICT, text.lstrip()).group(1) if verdict_state(text) != "no-verdict" else None
 
 def verdict_block(ev):
     """The reply minus the THREAD_ID line, as non-blank lines."""
@@ -56,12 +79,8 @@ def verdict_block(ev):
     return lines
 
 def is_clean(ev):
-    """Clean means the block is EXACTLY a clean reply and nothing else: the Codex form (APPROVED plus four `none`
-    lines) or the reviewer.sh form (APPROVED alone: it omits empty severity lines and rejects `none` placeholders)."""
-    # WHY per wrapper (CodeRabbit r42): each wrapper has exactly one clean form, so the other wrapper's form must not pass.
-    block = verdict_block(ev)
-    want = ["VERDICT: APPROVED"] if ev["wrapper"] in ("spy", "model") else ["VERDICT: APPROVED"] + [s + ": none" for s in SEVS]
-    return ev["exit"] == 0 and block == want
+    """Clean means the grammar says clean: APPROVED with no real finding, whichever wrapper produced it, and the call exited 0."""
+    return ev["exit"] == 0 and verdict_state("\n".join(verdict_block(ev))) == "clean"
 
 def issued_before(evs, i):
     """Thread ids the wrapper itself issued (new, non-resume, successful calls) before event i."""
