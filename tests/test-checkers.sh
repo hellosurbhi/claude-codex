@@ -59,6 +59,12 @@ mkdir -p "$tmp/tmo"; rm -f "$tmp/tmo/gpid"
 TMO_FORCE_PY=1 tmo 1 bash -c 'sleep 60 & echo $! > "$1"; wait' _ "$tmp/tmo/gpid" >/dev/null 2>&1; tmo_rc=$?
 sleep 1
 expect pass "the python3 timeout stand-in exits 124 on expiry" test "$tmo_rc" -eq 124
+# r15 finding 4: the timeout kill must never reach the caller's own process group (a piped CI run saw exit 144). The stand-in's child must lead its own group.
+mypg="$(ps -o pgid= -p $$ | tr -d ' ')"
+TMO_FORCE_PY=1 tmo 5 bash -c 'ps -o pgid= -p $$ | tr -d " " > "$1"' _ "$tmp/tmo/childpg" >/dev/null 2>&1
+expect pass "the python3 timeout stand-in runs its command in a different process group from the caller" test -s "$tmp/tmo/childpg" -a "$(cat "$tmp/tmo/childpg")" != "$mypg"
+sed -n '/^tmo() {/,/^}/p' "$here/test-checkers.sh" > "$tmp/tmo/fn.sh"; printf 'TMO_FORCE_PY=1\ntmo 1 sleep 5\ntest $? = 124 && echo alive\n' >> "$tmp/tmo/fn.sh"
+expect pass "the python3 timeout stand-in leaves the caller's own shell running after a kill" test "$(bash "$tmp/tmo/fn.sh" 2>/dev/null)" = alive
 expect fail "the python3 timeout stand-in leaves no grandchild running after expiry" kill -0 "$(cat "$tmp/tmo/gpid" 2>/dev/null || echo 99999999)"
 kill "$(cat "$tmp/tmo/gpid" 2>/dev/null)" >/dev/null 2>&1 || true  # tidy up when the case above failed
 gdiff() { local f; for f in "$@"; do git diff --no-index --no-color /dev/null "$f"; done; }
