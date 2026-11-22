@@ -288,6 +288,11 @@ expect pass "codex-call.sh defaults --cd to the repository top when started from
 bsd_sed="sed -i ''"
 expect pass "the suite uses no BSD-only in-place sed" test -z "$(grep -n -F -e "$bsd_sed" "$here/test-checkers.sh" | grep -v 'bsd_sed=')"
 
+# CodeRabbit thread 7 (evlog.py:28): a marked plan that quotes a function signature is still a plan, not the implementation.
+expect pass "a marked plan containing def add(a, b) is classified as a plan" test "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import evlog; print(evlog.phase_of("# Implementation plan\n\nAdd:\n    def add(a, b):\n        return a + b\n"))' "$here")" = "plan"
+expect pass "a diff of an implementation file that contains def add is still the implementation" test "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import evlog; print(evlog.phase_of("diff --git a/app.py b/app.py\n+def add(a, b):\n"))' "$here")" = "implementation"
+expect pass "unmarked text with def add(a, b) stays the implementation" test "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import evlog; print(evlog.phase_of("def add(a, b):\n    return a + b\n"))' "$here")" = "implementation"
+
 # r17: the reviewed diff must match the remaining change exactly (whitespace, operators, the file set).
 rv() { mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; }
 rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py

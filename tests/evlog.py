@@ -24,10 +24,12 @@ def phase_of(text):
     paths = [p for pair in re.findall(r"^diff --git a/(\S+) b/(\S+)$", text, re.M) for p in pair if p.endswith(".py")]
     if paths:
         return "implementation" if any(not _is_test_path(x) for x in paths) else "tests"
-    if re.search(r"def\s+add\s*\(", text):
-        return "implementation"
+    # WHY the plan marker is checked BEFORE the signature (CodeRabbit thread 7): a plan that quotes `def add(a, b):` was classified as the
+    # implementation, so a later --phase plan check rejected a correct plan review. Diff-path classification above stays first.
     if re.search(r"\.claude/plan|<!--\s*review-fix|^#{1,3} .*\bplan\b", text, re.I | re.M) and not re.search(r"^diff --git|^\+\+\+ ", text, re.M):
         return "plan"
+    if re.search(r"def\s+add\s*\(", text):
+        return "implementation"
     if re.search(r"\btests?\b|assert|test_", text, re.I):
         return "tests"
     return "unknown"
