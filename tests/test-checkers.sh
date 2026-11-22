@@ -1955,11 +1955,12 @@ expectm_spy fail "a malformed review call after the clean one is the final event
 spy_only bash "$here/spy-reviewer.sh" diagnose "$tmp/rin.txt" "$tmp/out3.txt" >/dev/null 2>&1
 expectm_spy fail "a diagnose call does not rescue it" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 
-# r45: production caches a tier R verdict by input hash, so a repeat after a new commit may return the old approval with no model run
+# r45: production caches a tier R verdict by input hash, so a repeat after a new commit may return the old approval with no model run.
+# WHY the model count is per run (consolidated chain): the first run reaches CodeRabbit through Codex and Gemini (several model events), the installed script through CodeRabbit alone; what must hold under both is that the first run called a model and the repeat called none.
 rrun; REVIEW_BASE_SHA="$R0" spy_only bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
 printf 'x=1\ndef add(a, b):\n    return a + b\ndef sub(a, b):\n    return a - b\n' > "$tmp/run/repo/app.py"; commit2
 sleep 1; REVIEW_BASE_SHA="$R0" spy_only bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out2.txt" >/dev/null 2>&1
-if spy_on; then expect_spy pass "the repeat review on unchanged input runs through the same private cache as production" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); sp=[e for e in es if e["wrapper"]=="spy"]; md=[e for e in es if e["wrapper"]=="model"]; print(len(sp), len(md))' "$here" "$EVLOG")" = "2 1"; else spy_skip "the repeat review on unchanged input runs through the same private cache as production"; fi
+if spy_on; then expect_spy pass "the repeat review on unchanged input runs through the same private cache as production" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); sp=[e for e in es if e["wrapper"]=="spy"]; md=[e for e in es if e["wrapper"]=="model"]; r2=(sp[-1].get("meta") or {}).get("run"); print(len(sp), sum(1 for e in md if (e.get("meta") or {}).get("run")==r2), sum(1 for e in md if (e.get("meta") or {}).get("run")!=r2) > 0)' "$here" "$EVLOG")" = "2 0 True"; else spy_skip "the repeat review on unchanged input runs through the same private cache as production"; fi
 orderfake "$EVLOG"
 expectm_spy fail "a cached approval with no model run behind it is rejected for the new commit (r45)" 'REJECT: not exactly one accepted model call for ' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 
