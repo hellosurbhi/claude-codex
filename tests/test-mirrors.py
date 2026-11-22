@@ -193,9 +193,10 @@ for f in CTXFILES:
         if not b:
             bad.append("%s: has a tier S fallback but no Fallback input paragraph with its command sequence" % rel)
             continue
-        base = "$START_SHA" if "tdd-" in rel else "HEAD"
-        need = ['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "OPEN FINDINGS:"] + (["AUDIT INSTRUCTIONS:", 'cat .claude/plan/<feature-name>.md >> "$CTX"', "PLAN:"] if plan else
-                ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:", "(set -o pipefail; git diff %s %s | ~/.claude/config/scripts/redact-diff.sh >> \"$CTX\")" % (base, EXCL), "|| { rm -f \"$CTX\"", "[ -f \"$CTX\" ] && ~/.claude/config/scripts/reviewer.sh S", "best-effort mask", "no context is sent"])
+        # WHY the quoted ${START_SHA:?} (round 15 finding 3): an unset START_SHA made `git diff $START_SHA` read the index, not the run's changes; the :? form fails the pipeline and sends nothing.
+        base = "\"${START_SHA:?}\"" if "tdd-" in rel else "HEAD"
+        need = ['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "OPEN FINDINGS:"] + (["AUDIT INSTRUCTIONS:", '[ -s .claude/plan/<feature-name>.md ] && cat .claude/plan/<feature-name>.md >> "$CTX" || { rm -f "$CTX"', "the plan file is missing, empty or unreadable: no context is sent", "PLAN:"] if plan else
+                ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:", "DF=\"$(mktemp)\"", "(set -o pipefail; git diff %s %s | ~/.claude/config/scripts/redact-diff.sh > \"$DF\") && [ -s \"$DF\" ] && cat \"$DF\" >> \"$CTX\" || { rm -f \"$CTX\"" % (base, EXCL), "the diff is empty: no context is sent", "rm -f \"$DF\"", "[ -f \"$CTX\" ] && ~/.claude/config/scripts/reviewer.sh S", "best-effort mask", "no context is sent"])
         for k in need:
             if k not in b:
                 bad.append("%s: the Fallback input sequence lacks %r" % (rel, k[:50]))

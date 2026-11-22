@@ -375,7 +375,7 @@ mirneg "a fallback sequence whose diff overwrites the context file instead of ap
 python3 - "$tmp/mir8/skills/claude-codex/SKILL.md" "$tmp/mir8/commands/claude-codex.md" <<'PY'
 import sys
 for p in sys.argv[1:]:
-    t = open(p).read(); open(p, "w").write(t.replace(" | ~/.claude/config/scripts/redact-diff.sh >>", " >>"))
+    t = open(p).read(); open(p, "w").write(t.replace(" | ~/.claude/config/scripts/redact-diff.sh >", " >"))
 PY
 mirneg "a fallback sequence that skips redact-diff.sh is caught" 'Fallback input sequence lacks .*set -o pipefail; git diff HEAD' "$tmp/mir8"; mirc claude-codex
 # r11 finding 1: scripts/redact-diff.sh masks credential values in a diff (added AND deleted lines), keeps the diff structure, leaves a clean diff byte-identical.
@@ -523,6 +523,41 @@ expect pass "the fallback sequence reaches the reviewer when the redaction scrip
 expect fail "the fallback sequence never reaches the reviewer when the redaction script is missing" sendtry "$tmp/no-such-redactor.sh"
 printf '#!/bin/sh\ncat; exit 3\n' > "$tmp/bad-redactor.sh"; chmod +x "$tmp/bad-redactor.sh"
 expect fail "the fallback sequence never reaches the reviewer when the redaction script exits non-zero" sendtry "$tmp/bad-redactor.sh"
+# r15 finding 3: every fallback block checks its input before dispatch. fbtry runs the file's real Fallback input block in a throwaway repo with a stub reviewer;
+# states: ok (real change, real plan), emptydiff (nothing to review), noplan, emptyplan. A refused input must call no reviewer AND leave no context file behind.
+fbtry() { # $1 = file, $2 = state
+  python3 - "$1" "$red" "$tmp/fb.sh" "$tmp/fb-called" <<'PYFB'
+import re, sys
+t = open(sys.argv[1]).read()
+b = re.search(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
+b = b.replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[2]).replace("~/.claude/config/scripts/reviewer.sh S", "touch " + sys.argv[4] + " #")
+b = b.replace("<out-file>", "x").replace("<feature-name>", "feat").replace("$(mktemp)", "$(mktemp \"$TMPDIR/t.XXXXXX\")")  # BSD mktemp ignores TMPDIR without a template
+open(sys.argv[3], "w").write(b + "\n")
+PYFB
+  rm -rf "$tmp/fbrepo" "$tmp/fbtmp"; mkdir -p "$tmp/fbrepo" "$tmp/fbtmp"
+  ( cd "$tmp/fbrepo" && git init -q && printf 'one\n' > f.txt && git add f.txt && git -c user.name=t -c user.email=t@t commit -q -m "$(printf 'base\n\nVerified: fixture repo for the fallback input checks')" && mkdir -p .claude/plan )
+  case "$2" in
+    ok) printf 'two\n' >> "$tmp/fbrepo/f.txt"; printf 'a plan\n' > "$tmp/fbrepo/.claude/plan/feat.md" ;;
+    emptydiff) printf 'a plan\n' > "$tmp/fbrepo/.claude/plan/feat.md" ;;
+    emptyplan) : > "$tmp/fbrepo/.claude/plan/feat.md" ;;
+    noplan) printf 'two\n' >> "$tmp/fbrepo/f.txt" ;;
+  esac
+  rm -f "$tmp/fb-called"; ( cd "$tmp/fbrepo" && TMPDIR="$tmp/fbtmp" START_SHA="$(git rev-parse HEAD)" bash "$tmp/fb.sh" >/dev/null 2>&1 )
+  FBLEFT="$(ls -A "$tmp/fbtmp" | wc -l | tr -d ' ')"; [ -f "$tmp/fb-called" ]
+}
+fbclean() { fbtry "$1" "$2" || true; [ "$FBLEFT" -eq 0 ]; }  # true when no context or scratch file survived
+for fbf in skills/claude-codex/SKILL.md skills/execute-codex/SKILL.md skills/tdd-claude-codex/SKILL.md skills/tdd-execute-codex/SKILL.md skills/codex-mcp/SKILL.md skills/codex-mcp/reference.md commands/claude-codex.md commands/execute-codex.md commands/tdd-claude-codex.md commands/tdd-execute-codex.md; do
+  expect pass "$fbf: the fallback block reaches the reviewer for a real change" fbtry "$here/../$fbf" ok
+  expect fail "$fbf: the fallback block never reaches the reviewer when the diff is empty" fbtry "$here/../$fbf" emptydiff
+  expect pass "$fbf: an empty diff leaves no context file behind" fbclean "$here/../$fbf" emptydiff
+done
+for fbf in skills/plan-codex/SKILL.md commands/plan-codex.md; do
+  expect pass "$fbf: the fallback block reaches the reviewer for a real plan" fbtry "$here/../$fbf" ok
+  expect fail "$fbf: the fallback block never reaches the reviewer when the plan is missing" fbtry "$here/../$fbf" noplan
+  expect fail "$fbf: the fallback block never reaches the reviewer when the plan is empty" fbtry "$here/../$fbf" emptyplan
+  expect pass "$fbf: a missing plan leaves no context file behind" fbclean "$here/../$fbf" noplan
+  expect pass "$fbf: an empty plan leaves no context file behind" fbclean "$here/../$fbf" emptyplan
+done
 expect pass "the pristine copies pass the fallback-context rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 # r10 finding 1: a delivery exit needs `VERDICT: APPROVED` AND zero findings; a bare BLOCKED or WARNING (no finding listed) is neither clean nor actionable.
 isclean() { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"real","exit":0,"stdout":sys.argv[2].replace("\\n", "\n"),"stderr":""}) else 1)' "$here" "$1"; }
