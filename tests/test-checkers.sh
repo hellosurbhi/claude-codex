@@ -1320,6 +1320,20 @@ for m in diff text; do
   expect pass "r27: redact-diff ($m) masks a last line with no final newline and adds none" rdfid $m 'k = 1\napi_key = "abcd1234efgh5678ijkl9012"' 'k = 1\napi_key = "[REDACTED]"'
 done
 expect pass "r27: redact-diff (diff) passes the no-newline marker line through" rdfid diff '@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n' '@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n'
+# r28 finding 1: redact-diff.sh is fail-closed at every stage. Each case replaces ONE tool on PATH with a failing shim; the script must exit nonzero and print nothing on stdout.
+rdfail() { # tool shim-body : run redact-diff.sh on a small diff with that tool shimmed; rc must be nonzero and stdout empty
+  local d; d="$(mktemp -d "$tmp/rdsh.XXXXXX")"; printf '#!/bin/sh\n%s\n' "$2" > "$d/$1"; chmod +x "$d/$1"
+  local o rc; o="$(printf '@@ -1 +1 @@\n-a\n+b\n' | PATH="$d:$PATH" bash "$here/../scripts/redact-diff.sh" 2>/dev/null)"; rc=$?
+  [ "$rc" -ne 0 ] && [ -z "$o" ]
+}
+expect pass "r28: redact-diff: the stdin copy failing after partial data exits nonzero with empty stdout" rdfail cat 'printf "@@ -1 +1 @@\n-a\n"; exit 1'
+expect pass "r28: redact-diff: mktemp failing exits nonzero with empty stdout" rdfail mktemp 'exit 1'
+expect pass "r28: redact-diff: awk failing after partial output exits nonzero with empty stdout" rdfail awk 'printf "@@ -1 +1 @@\n"; exit 3'
+expect pass "r28: redact-diff: the newline strip (head) failing exits nonzero with empty stdout" bash -c 'd="$(mktemp -d "$1/rdsh.XXXXXX")"; printf "#!/bin/sh\nexit 1\n" > "$d/head"; chmod +x "$d/head"; o="$(printf "a\nb" | PATH="$d:$PATH" bash "$2/../scripts/redact-diff.sh" 2>/dev/null)"; rc=$?; [ "$rc" -ne 0 ] && [ -z "$o" ]' _ "$tmp" "$here"
+expect pass "r28: redact-diff: the byte count (wc) failing exits nonzero with empty stdout" bash -c 'd="$(mktemp -d "$1/rdsh.XXXXXX")"; printf "#!/bin/sh\nexit 1\n" > "$d/wc"; chmod +x "$d/wc"; o="$(printf "a\nb" | PATH="$d:$PATH" bash "$2/../scripts/redact-diff.sh" 2>/dev/null)"; rc=$?; [ "$rc" -ne 0 ] && [ -z "$o" ]' _ "$tmp" "$here"
+expect pass "r28: redact-diff: a closed stdout exits nonzero" bash -c 'printf "@@ -1 +1 @@\n-a\n+b\n" | bash "$1/../scripts/redact-diff.sh" >&- 2>/dev/null; [ $? -ne 0 ]' _ "$here"
+expect pass "r28: redact-diff: an unwritable stdout (/dev/full) exits nonzero" bash -c 'printf "@@ -1 +1 @@\n-a\n+b\n" | bash "$1/../scripts/redact-diff.sh" >/dev/full 2>/dev/null; [ $? -ne 0 ]' _ "$here"
+expect pass "r28: redact-diff: control, the same input with no failure still exits 0 with output" bash -c 'o="$(printf "@@ -1 +1 @@\n-a\n+b\n" | bash "$1/../scripts/redact-diff.sh")"; [ $? -eq 0 ] && [ -n "$o" ]' _ "$here"
 # r27: the reviewed input is compared byte for byte, so every shape of file ending, name and encoding gets a legitimate pass and an altered rejection.
 bytecase() { # label path base-printf final-printf ("-" = file absent); builds the repo, the legit redacted diff and an altered one
   local path="$2" base="$3" final="$4"  # $1 is the label, used by bccase for the test names

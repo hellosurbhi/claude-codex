@@ -41,11 +41,22 @@ if [ "$#" -ne 0 ]; then echo "usage: redact-diff.sh [--text] < input > output" >
 # line of a diff that ends in a "\ No newline at end of file" file) came out with one more byte than it went in. A caller comparing the sanitized text byte for byte against an expectation then rejected a legitimate review.
 # The output now ends in a newline exactly when the input did, and no other byte is normalised (CRLF, non-UTF-8 text and the no-newline marker pass through; a NUL byte never occurs because git prints binary files as one "Binary files ... differ" line).
 # v2 because that output differs from v1 for input with no final newline; the masking itself is unchanged.
-in="$(mktemp "${TMPDIR:-/tmp}/redact-in.XXXXXX")" || exit 1; out="$(mktemp "${TMPDIR:-/tmp}/redact-out.XXXXXX")" || { rm -f "$in"; exit 1; }
-trap 'rm -f "$in" "$out"' EXIT
-cat > "$in"
-nonl=0; if [ -s "$in" ] && [ "$(tail -c 1 "$in" | od -An -c | tr -d ' ')" != '\n' ]; then nonl=1; fi
-# WHY a failing awk prints nothing: a caller that ignores the status must still not receive a half-masked diff.
+# WHY every stage is checked and the output is emitted last (r28): a failed copy of stdin used to leave a truncated diff that was masked and printed with exit 0, so a caller could dispatch an incomplete review.
+# Now the stdin copy, mktemp, the last-byte read, awk, the byte count, the newline strip and the final write each exit nonzero on failure, and nothing reaches stdout until every earlier stage succeeded.
+# A stdout that cannot be written (closed, /dev/full) exits nonzero too; what was already written then is a partial write the caller must discard because the status is nonzero (callers check it, see the skills).
+# WHY no `set -e`: the awk program below has no shell-level failure modes of its own, and each status is tested by hand so the exit code is the failing stage's.
+set -o pipefail
+in=""; out=""; fin=""
+trap 'rm -f "$in" "$out" "$fin"' EXIT
+in="$(mktemp "${TMPDIR:-/tmp}/redact-in.XXXXXX")" || exit 1
+out="$(mktemp "${TMPDIR:-/tmp}/redact-out.XXXXXX")" || exit 1
+fin="$(mktemp "${TMPDIR:-/tmp}/redact-fin.XXXXXX")" || exit 1
+cat > "$in" || exit 1
+nonl=0
+if [ -s "$in" ]; then
+  lastb="$(tail -c 1 "$in" | od -An -c | tr -d ' ')" || exit 1
+  [ "$lastb" = '\n' ] || nonl=1
+fi
 awk -v TEXT="$TEXT" '
 function rep(c, n,   s, i) { s = ""; for (i = 0; i < n; i++) s = s c; return s }
 # mask the value part of every match of rx (head: leading part of the match kept as is, "" for none) when it is long enough and sits on a word boundary
@@ -188,5 +199,11 @@ BEGIN {
   line = assign(line)
   print line
 }
-' < "$in" > "$out" || exit $?
-if [ "$nonl" -eq 1 ]; then head -c "$(( $(wc -c < "$out") - 1 ))" "$out"; else cat "$out"; fi
+' < "$in" > "$out" || exit 1
+if [ "$nonl" -eq 1 ]; then
+  size="$(wc -c < "$out")" || exit 1
+  head -c "$(( size - 1 ))" "$out" > "$fin" || exit 1
+else
+  cat "$out" > "$fin" || exit 1
+fi
+cat "$fin" || exit 1

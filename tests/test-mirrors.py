@@ -433,6 +433,23 @@ for n in PROMPTSITES:
         sm = re.search(re.escape(RIB) + r".*?\n```\n.*?\n```\n", texts[0], re.S); cm = re.search(re.escape(RIB) + r".*?\n```\n.*?\n```\n", texts[1], re.S)
         if (sm and sm.group(0)) != (cm and cm.group(0)):
             bad.append("%s: the Review input paragraph differs between skill and command" % n)
+# r28 finding 1: every command line that RUNS redact-diff.sh must check its exit status (the redirect is followed by `&&` or `)` then `&&`, so a failed or truncated masking stops the chain) and the
+# chain must reach a non-empty check on the file it wrote. A caller that ignored the status could dispatch a truncated review.
+# WHY: redact-diff.sh now exits nonzero with nothing on stdout on any failure, but only a caller that tests the status can act on it.
+RUNS = re.compile(r"scripts/redact-diff\.sh(?: --text)? < \S+ > (\S+?)\)? && ")
+for f in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")) + glob.glob(os.path.join(root, "skills", "*", "reference.md")) + glob.glob(os.path.join(root, "commands", "*.md"))):
+    rel = os.path.relpath(f, root)
+    for ln, line in enumerate(open(f, encoding="utf-8").read().split("\n"), 1):
+        if "scripts/redact-diff.sh" not in line or not re.match(r"^(\(|if |.*\| ~/\.claude)", line):
+            continue
+        if "tee .claude" in line and "reviewed.diff" in line and "redact-diff.sh < .claude/review/reviewed.diff" in line:
+            runs = [line[line.find("(set -o pipefail; ~/.claude"):]]
+        else:
+            runs = [line[line.find("redact-diff.sh") - 30:]]
+        if not any(re.search(r"redact-diff\.sh(?: --text)? (?:< \S+ )?> \S+?\)? && ", r) for r in runs):
+            bad.append("%s:%d: a redact-diff.sh run does not check its exit status (expected `> file && ...`)" % (rel, ln))
+        if "[ -s" not in line:
+            bad.append("%s:%d: a redact-diff.sh run is not on a line that also checks for non-empty output" % (rel, ln))
 # r20 finding 3: docs and evals must describe the current flow (the Codex prompt carries the masked DIFF and the TASK REQUIREMENTS; Codex never runs git itself).
 STALE = ["Codex runs `git diff HEAD` itself", "The Codex prompt includes 'git diff HEAD' instruction", "(Phase 6) with 'git diff $START_SHA'", "`git diff $START_SHA` review prompt", "all reviews use `git diff $START_SHA`", "`git diff $START_SHA` instead of `git diff HEAD`"]
 DOCNEED = {"README.md": "TASK REQUIREMENTS", "skills/claude-codex/evals/evals.json": "review-context.txt", "skills/tdd-claude-codex/evals/evals.json": "review-context.txt"}
