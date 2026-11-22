@@ -221,16 +221,16 @@ if [[ $scenario == usage-limit ]]; then
     # WHY ordering and a completed result: an implementation agent must not count as the review. The
     # review is an agent whose input mentions review, started after the Codex usage-limit reply, with a result.
     # WHY the log, not an agent: on quota the review must come from a non-implementer fallback reviewer (reviewer.sh -> spy), which logs.
-    check "the final clean review after the quota hit came from a fallback reviewer on the implementation phase" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --repo "$repo"'
+    check "the final clean review after the quota hit came from a fallback reviewer on the implementation phase" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --repo "$repo" --context'
     [[ $skill == codex-mcp ]] || check "final report ends with one AUDIT-STATUS: APPROVED line" 'python3 "$here/audit-status.py" "$out/session.txt" --expect APPROVED'
     exit $fail
   fi
   check "the requested work exists and behaves (behavioral)" 'bash "$here/check-behavior.sh" "$skill" "$repo" "$scenario"'
   # WHY all of these read the wrapper log: the last spy execution after the quota hit is the final fallback review.
   if [[ $FAKE_TARGET == code ]]; then
-    check "the last fallback review after the quota hit was for the implementation and exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --repo "$repo"'
+    check "the last fallback review after the quota hit was for the implementation and exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --repo "$repo" --context'
   else
-    check "the last fallback review after the quota hit was exactly clean and of the current non-empty plan" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --plan-file "$(ls -t "$repo"/.claude/plan/*.md 2>/dev/null | head -1)"'
+    check "the last fallback review after the quota hit was exactly clean and of the current non-empty plan" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --plan-file "$(ls -t "$repo"/.claude/plan/*.md 2>/dev/null | head -1)" --context'
   fi
   if [[ $FAKE_TARGET == code ]]; then check "the implementation really adds (behavioral)" 'python3 "$here/check-impl.py" "$repo/app.py"'; fi
   [[ $skill == codex-mcp ]] || check "final report ends with one AUDIT-STATUS: APPROVED line" 'python3 "$here/audit-status.py" "$out/session.txt" --expect APPROVED'

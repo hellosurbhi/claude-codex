@@ -310,13 +310,44 @@ bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect_spy pass "control: the same call with a zero exit and the same approval is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 
 # cc11-main-r8: no skill, command or reference file calls an outside reviewer; a re-added call, a content scan or a fallback that skips tier S is caught by test-mirrors.py.
-rm -rf "$tmp/mir8"; mkdir -p "$tmp/mir8"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir8/"
+rm -rf "$tmp/mir8"; mkdir -p "$tmp/mir8"; cp -R "$here/../skills" "$here/../commands" "$here/../README.md" "$tmp/mir8/"
 printf '\nRun `REVIEW_BASE_SHA=x ~/.claude/config/scripts/reviewer.sh R <diff-file> <out-file>` first.\n' >> "$tmp/mir8/commands/claude-codex.md"
 expect fail "an outside-reviewer call injected into a command is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"
 cp "$here/../commands/claude-codex.md" "$tmp/mir8/commands/claude-codex.md"; printf '\nThen ask the gemini CLI to review.\n' >> "$tmp/mir8/commands/claude-codex.md"
 expect fail "a Gemini instruction injected into a command is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"
 cp "$here/../commands/claude-codex.md" "$tmp/mir8/commands/claude-codex.md"
 expect pass "the pristine copy of the skills and commands passes the outside-reviewer rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
+# cc11-main-r9 finding 2: the tier S fallback must carry the Codex context (task requirements, instructions, carried and contested findings), not a bare diff.
+mirc() { cp "$here/../commands/$1.md" "$tmp/mir8/commands/$1.md"; cp "$here/../skills/$1/SKILL.md" "$tmp/mir8/skills/$1/SKILL.md"; }
+python3 - "$tmp/mir8/skills/tdd-claude-codex/SKILL.md" <<'PY'
+import sys; p = sys.argv[1]; t = open(p).read()
+open(p, "w").write(t.replace("reviewer.sh S <context-file> <out-file>", "reviewer.sh S <diff-file> <out-file>", 1))
+PY
+expect fail "a tier S fallback reverted to a bare diff file is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-claude-codex
+python3 - "$tmp/mir8/skills/tdd-claude-codex/SKILL.md" "$tmp/mir8/commands/tdd-claude-codex.md" <<'PY'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); open(p, "w").write(t.replace("TASK REQUIREMENTS:", "NOTES:"))
+PY
+expect fail "a fallback input sequence without the task requirements section is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-claude-codex
+python3 - "$tmp/mir8/commands/tdd-execute-codex.md" <<'PY'
+import sys, re; p = sys.argv[1]; t = open(p).read()
+open(p, "w").write(re.sub(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n.*?\n```\n", "", t, flags=re.S))
+PY
+expect fail "a command that lost its Fallback input paragraph is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
+python3 - "$tmp/mir8/skills/plan-codex/SKILL.md" "$tmp/mir8/commands/plan-codex.md" <<'PY'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); open(p, "w").write(t.replace("OPEN FINDINGS:", "OTHER:"))
+PY
+expect fail "a plan fallback sequence without the open findings section is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc plan-codex
+python3 - "$tmp/mir8/skills/claude-codex/SKILL.md" "$tmp/mir8/commands/claude-codex.md" <<'PY'
+import sys
+for p in sys.argv[1:]:
+    t = open(p).read(); open(p, "w").write(t.replace(">> \"$CTX\"", "> \"$CTX\""))
+PY
+expect fail "a fallback sequence whose diff overwrites the context file instead of appending is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc claude-codex
+expect pass "the pristine copies pass the fallback-context rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 
 # cc11-main-r2 finding 3: the diff command each workflow prescribes is relative to the repository top, not to the shell's folder.
 for f in skills/claude-codex/SKILL.md commands/claude-codex.md skills/execute-codex/SKILL.md commands/execute-codex.md skills/tdd-claude-codex/SKILL.md commands/tdd-claude-codex.md skills/tdd-execute-codex/SKILL.md commands/tdd-execute-codex.md; do
@@ -827,6 +858,23 @@ bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 orderfake "$EVLOG"
 expect_spy pass "a tier S plan review with the full file in the model prompt is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 expect_spy fail "a model prompt missing part of the plan is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG.trunc" --plan-file "$tmp/plan.md"
+# cc11-main-r9 finding 2: with --context the reviewed input is the prescribed context file (headings first in order, the plan or diff last).
+ctxrun() { mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; bash "$here/spy-reviewer.sh" S "$1" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"; }
+printf 'the plan\n' > "$tmp/plan.md"
+printf 'AUDIT INSTRUCTIONS:\naudit it\n\nOPEN FINDINGS:\nnone\n\nPLAN:\nthe plan\n' > "$tmp/ctxplan.txt"; ctxrun "$tmp/ctxplan.txt"
+expect_spy pass "a plan context file (instructions, findings, then the plan) satisfies the plan review with --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md" --context
+ctxrun "$tmp/plan.md"
+expect_spy fail "a bare plan file no longer satisfies the plan review with --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md" --context
+expect_spy pass "a bare plan file still satisfies the plan review without --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+printf 'AUDIT INSTRUCTIONS:\naudit it\n\nOPEN FINDINGS:\nnone\n\nPLAN:\nthe plan\nand then a trailing section\n' > "$tmp/ctxplan2.txt"; ctxrun "$tmp/ctxplan2.txt"
+expect_spy fail "a plan context file whose plan is not the last section is rejected with --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md" --context
+DIFFTXT='diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -1 +1,2 @@\n x=1\n+def add(a, b):\n'
+printf "TASK REQUIREMENTS:\nAdd add(a, b) returning a + b.\n\nREVIEW INSTRUCTIONS:\nReview the diff.\n\nOPEN FINDINGS:\nnone\n\nDIFF:\n$DIFFTXT" > "$tmp/ctxcode.txt"; ctxrun "$tmp/ctxcode.txt"
+expect_spy pass "a code context file with requirements, instructions, findings and the diff satisfies --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --context
+printf "DIFF:\n$DIFFTXT" > "$tmp/ctxbare.txt"; ctxrun "$tmp/ctxbare.txt"
+expect_spy fail "a code fallback input that is only a diff fails --context (the task requirements are missing)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --context
+printf "TASK REQUIREMENTS:\n<the sanitized task requirements>\n\nREVIEW INSTRUCTIONS:\nReview.\n\nOPEN FINDINGS:\nnone\n\nDIFF:\n$DIFFTXT" > "$tmp/ctxtpl.txt"; ctxrun "$tmp/ctxtpl.txt"
+expect_spy fail "a code context file whose requirements are still the template placeholder fails --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --context
 # FIFO evidence (r37): the launcher opens the caller's output path once, so a one-shot reader gets the reply and nothing hangs.
 mkrun; cd "$tmp/run/repo"; rm -f "$tmp/ff"; mkfifo "$tmp/ff"; printf 'plan\n' > "$tmp/plan.md"
 ( tmo 20 cat "$tmp/ff" > "$tmp/ff.out" ) & rd=$!
@@ -1047,7 +1095,8 @@ for must in "ci.yml declares an explicit contents: read permissions block" "ci.y
 done
 if [[ -n "${CHECKERS_NO_SPY:-}" ]]; then
   [[ $plain_ran -ge 100 ]] && ok "self-test: at least 100 cases ran without the spy ($plain_ran)" || bad "self-test: only $plain_ran cases ran without the spy (expected at least 100)"
-  [[ $skipped -lt 100 ]] && ok "self-test: fewer than 100 spy cases skipped ($skipped)" || bad "self-test: $skipped cases skipped, the skip is too wide"
+  # WHY 120 (r9 finding 2): seven new context-file cases need the installed reviewer.sh through spy-reviewer.sh, so they skip with the others; the bound still catches a skip that swallows non-spy cases.
+  [[ $skipped -lt 120 ]] && ok "self-test: fewer than 120 spy cases skipped ($skipped)" || bad "self-test: $skipped cases skipped, the skip is too wide (limit 120)"
 fi
 [[ -n "${CHECKERS_NO_SPY:-}" ]] && echo "CHECKERS_NO_SPY=1: skipped $skipped spy-reviewer case(s); they need the installed reviewer.sh"
 exit $fail

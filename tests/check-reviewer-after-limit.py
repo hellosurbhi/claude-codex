@@ -1,8 +1,9 @@
-# Usage: check-reviewer-after-limit.py <wrapper.jsonl> [--phase implementation] [--plan-file <path>] [--repo <dir>]
+# Usage: check-reviewer-after-limit.py <wrapper.jsonl> [--phase implementation] [--plan-file <path>] [--repo <dir>] [--context]
 # Exit 0 when a fallback reviewer (spy) was STARTED after the Codex wrapper reported the usage limit,
 # and the last such review exited 0 with EXACTLY the five clean lines. With --phase, that review was
 # called for that phase (a tests-only call does not satisfy "implementation"). With --plan-file, the
-# review input is the current non-empty plan file (sha256 equal), so a stale or empty plan fails.
+# review input holds the current non-empty plan file's text, so a stale or empty plan fails. With --context the input is the ONE context file the skills prescribe (r9 finding 2):
+# its section headings come first, in order, and the plan text (or the diff) comes last.
 # WHY only the log: transcripts quote docs and agent text; the wrapper log is what actually ran.
 import hashlib, os, re, subprocess, sys, tempfile
 import wlog
@@ -76,6 +77,7 @@ evs = wlog.load(args[0])
 phase = args[args.index("--phase") + 1] if "--phase" in args else None
 plan = args[args.index("--plan-file") + 1] if "--plan-file" in args else None
 repo = args[args.index("--repo") + 1] if "--repo" in args else None
+context = "--context" in args
 non_spy = [e for e in evs if e["wrapper"] != "spy"]
 li = wlog.limit_index(non_spy)
 if li is None:
@@ -115,6 +117,18 @@ if mm["bin"] == "claude":
     # WHY rstrip: reviewer.sh builds the prompt with command substitution, which drops trailing newlines.
     if not spy_in.strip() or spy_in.rstrip("\n") not in (model.get("input_text") or ""):
         sys.exit(1)
+def heads_in_order(text, heads):
+    # each heading alone on its own line, in this order, and the first section after the first heading holds some text
+    pos = -1
+    for h in heads:
+        m = re.search(r"^" + re.escape(h) + r"[ \t]*$", text[pos + 1:], re.M)
+        if not m:
+            return False
+        pos = pos + 1 + m.end()
+    return True
+if context and plan is None and not (heads_in_order(spy_in, ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "OPEN FINDINGS:", "DIFF:"]) and re.search(r"^TASK REQUIREMENTS:[ \t]*\n[ \t]*[^\s<]", spy_in, re.M)):
+    # WHY a non-empty requirements text that is not the angle-bracket template placeholder: a context file whose requirements were left as the template carries no requirement at all
+    sys.exit(1)
 if plan is not None:
     # WHY tier S and the full file content: production tier R reviews committed repository state, not a plan file.
     if tier != "S" or mm["bin"] != "claude":
@@ -122,7 +136,12 @@ if plan is not None:
     if not os.path.isfile(plan) or os.path.getsize(plan) == 0:
         sys.exit(1)
     data = open(plan, "rb").read()
-    if hashlib.sha256(data).hexdigest() != spies[-1].get("input_sha256") or data.decode("utf-8", "surrogateescape").rstrip("\n") not in (model.get("input_text") or ""):
+    # WHY containment, not a digest of the whole input (r9 finding 2): the prescribed fallback input is the audit instructions and open findings FOLLOWED BY the plan, so the input is
+    # never byte-equal to the plan file; the plan text must still appear in full (a stale, edited or truncated plan is not contained) and the spy must have logged the same text.
+    ptxt = data.decode("utf-8", "surrogateescape").rstrip("\n")
+    if ptxt not in spy_in or ptxt not in (model.get("input_text") or ""):
+        sys.exit(1)
+    if context and not (heads_in_order(spy_in, ["AUDIT INSTRUCTIONS:", "OPEN FINDINGS:", "PLAN:"]) and spy_in.rstrip("\n").endswith(ptxt)):
         sys.exit(1)
 if repo is not None:
     # WHY an exact digest of the final .py files: the review must cover exactly the code that remains (all modules, paths,

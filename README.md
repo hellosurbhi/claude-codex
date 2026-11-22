@@ -108,7 +108,7 @@ chmod +x ~/.claude/config/scripts/codex-call.sh
 
 The usage-limit fallback also needs the shared reviewer script `~/.claude/config/scripts/reviewer.sh` (it is not shipped in this repo, and it needs its own `claude` CLI). Without it a Codex quota error leaves the review unreviewed instead of falling back.
 
-Outside reviewers (Gemini, CodeRabbit) are never called from these skills, because a skill cannot prove a diff is free of credentials; they run only inside the reviewer script's own chain. When Codex gives no verdict (a usage limit, an error or a malformed reply), the skills fall back to exactly one reviewer, tier S (`reviewer.sh S`, a Sonnet review) on the sanitized diff, and the work stays pending until it returns a clean verdict on the current head.
+Outside reviewers (Gemini, CodeRabbit) are never called from these skills, because a skill cannot prove a diff is free of credentials; they run only inside the reviewer script's own chain. When Codex gives no verdict (a usage limit, an error or a malformed reply), the skills fall back to exactly one reviewer, tier S (`reviewer.sh S`, a Sonnet review) on one context file that carries the task requirements, the review instructions, the carried and contested findings and then the sanitized diff (a plan audit carries the audit instructions, the findings and then the current plan text), and the work stays pending until it returns a clean verdict on the current head.
 
 The second line of `scripts/codex-call.sh` is a contract line (`# contract: codex-call v2 ...`). It names this repo as the source of truth, and a copy installed elsewhere is only compatible with the skills while that line matches.
 

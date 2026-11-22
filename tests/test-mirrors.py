@@ -24,7 +24,7 @@ CALL = re.compile(r"^\s*(- )?(Run `git diff|Re-call Codex via|Call Codex via)|re
 SNIPPETS = [
     (r"any reviewer authorized for the repo, tier S included", NAMES),
     (r"no Codex thread is required", []),
-    (r"reviewer\.sh S <(?:diff|plan)-file> <out-file>", NAMES),
+    (r"reviewer\.sh S <context-file> <out-file>", NAMES),
     (r"End the final report with exactly one machine-readable line, `AUDIT-STATUS: APPROVED reviewer=<name>`", NAMES),
     (r"Never conclude the reviewer is stuck, never report that no clean round was reached", []),
     (r"There is no iteration cap and no stop to ask the user after N rounds", []),
@@ -103,7 +103,7 @@ for rx in CLAUSES:
     if not seen:
         bad.append("clause %r found in no file" % rx[:40])
 # whole-paragraph equality for the quota and failure paragraphs: a skill and its command must hold the same text (r22)
-PARAS = ["If Codex hit its usage limit", "**Codex availability check**", "**Usage limit (never block", "**MANDATORY mid-call failure handling**", "**Failed review**", "**Failed audit**"]
+PARAS = ["**Fallback input (tier S)**", "If Codex hit its usage limit", "**Codex availability check**", "**Usage limit (never block", "**MANDATORY mid-call failure handling**", "**Failed review**", "**Failed audit**"]
 def paras(path, anchor):
     out = []
     for l in open(path, encoding="utf-8").read().split("\n"):
@@ -126,11 +126,16 @@ for n in NAMES:
         for m in re.finditer(r"`git diff (?:HEAD|\$START_SHA)([^`]*)`", open(f, encoding="utf-8").read()):
             if EXCL not in m.group(0):
                 bad.append("%s: reviewer diff command lacks the secret exclude pathspec: %s" % (os.path.relpath(f, root), m.group(0)))
+for n in NAMES:
+    for f in files(n):
+        for ln, l in enumerate(open(f, encoding="utf-8"), 1):
+            if re.match(r"git diff (HEAD|\$START_SHA) ", l) and EXCL not in l:
+                bad.append("%s:%d: fenced reviewer diff command lacks the secret exclude pathspec" % (os.path.relpath(f, root), ln))
 # WHY (P3 matrix on 134faf7): codex-mcp's no-cap paragraph once offered only a committed-diff reviewer as fallback, which answered "Review complete" on an uncommitted tree.
 # Both codex-mcp copies must offer tier S (it reviews whatever diff file it is given).
 for f in (os.path.join(root, "skills", "codex-mcp", "SKILL.md"), os.path.join(root, "skills", "codex-mcp", "reference.md")):
     t = open(f, encoding="utf-8").read()
-    if "reviewer.sh S <diff-file> <out-file>" not in t:
+    if "reviewer.sh S <context-file> <out-file>" not in t:
         bad.append("%s: no-cap paragraph lacks the tier S fallback" % os.path.relpath(f, root))
 # cc11-main-r1: the pathspec must work, not just be spelled the same everywhere. Build a repo with root and nested secret files and run EXCL.
 import subprocess, tempfile, shlex
@@ -165,6 +170,43 @@ for f in sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root,
             bad.append("%s:%d: a reviewer fallback that does not name tier S (reviewer.sh S)" % (os.path.relpath(f, root), ln))
     if OUTSIDE not in open(f, encoding="utf-8").read() and os.path.basename(os.path.dirname(f)) != "tests" and "codex-analyzer" not in f:
         bad.append("%s: lacks the mirrored sentence about outside reviewers" % os.path.relpath(f, root))
+# cc11-main-r9 finding 2: the tier S fallback must receive the SAME context the Codex call received, not only a diff. A bare diff loses the task requirements (so a test audit cannot check
+# requirement coverage), the review or audit instructions and the carried and contested findings (so a fallback round cannot verify a fix or settle a dispute). Every fallback line therefore
+# names the context file and what it carries, and every file with a fallback holds the ONE prescribed command sequence that builds it (the fenced block is mirrored skill to command).
+CTXKEY = "built by the Fallback input paragraph: task requirements, review instructions, carried and contested findings, then the sanitized diff"
+CTXPKEY = "built by the Fallback input paragraph: audit instructions, carried and contested findings, then the current plan text"
+CTXFILES = sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root, "skills", "codex-mcp", x) for x in ("SKILL.md", "reference.md")))
+def block_of(path):
+    t = open(path, encoding="utf-8").read()
+    m = re.search(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n.*?\n```\n", t, re.S)
+    return m.group(0) if m else None
+for f in CTXFILES:
+    rel, plan = os.path.relpath(f, root), os.path.basename(os.path.dirname(f)) == "plan-codex" or os.path.basename(f) == "plan-codex.md"
+    text = open(f, encoding="utf-8").read()
+    for ln, line in enumerate(text.split("\n"), 1):
+        if "reviewer.sh S <" in line and (CTXPKEY if plan else CTXKEY) not in line:
+            bad.append("%s:%d: a tier S fallback line does not name the context it must include (%s)" % (rel, ln, "plan" if plan else "task requirements, instructions, findings, diff"))
+        if re.search(r"reviewer\.sh S <(diff|plan)-file>", line):
+            bad.append("%s:%d: a tier S fallback still passes a bare diff or plan file" % (rel, ln))
+    if "reviewer.sh S <" in text:
+        b = block_of(f)
+        if not b:
+            bad.append("%s: has a tier S fallback but no Fallback input paragraph with its command sequence" % rel)
+            continue
+        base = "$START_SHA" if "tdd-" in rel else "HEAD"
+        need = ['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "OPEN FINDINGS:"] + (["AUDIT INSTRUCTIONS:", 'cat .claude/plan/<feature-name>.md >> "$CTX"', "PLAN:"] if plan else
+                ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:", "git diff %s %s >> \"$CTX\"" % (base, EXCL)])
+        for k in need:
+            if k not in b:
+                bad.append("%s: the Fallback input sequence lacks %r" % (rel, k[:50]))
+        if len(re.findall(r"\*\*Fallback input \(tier S\)\*\*", text)) != 1:
+            bad.append("%s: expected exactly one Fallback input paragraph" % rel)
+for n in NAMES:
+    sk, cm = files(n)
+    if block_of(sk) != block_of(cm):
+        bad.append("%s: the Fallback input paragraph and command sequence differ between skill and command" % n)
+if "one context file" not in open(os.path.join(root, "README.md"), encoding="utf-8").read():
+    bad.append("README.md: the tier S fallback statement does not name the context file")
 # Round 3 finding 1: ONE verdict grammar everywhere (it must agree with the global review contract, which omits empty severity lines and
 # calls a clean review exactly `VERDICT: APPROVED`). No file may demand severity lines, a `none` placeholder or a "complete verdict block".
 # WHY a per-file check instead of a SNIPPETS row: SNIPPETS demands equal counts in skill and command, but the skills also carry a frontmatter-adjacent summary the commands lack.
@@ -249,7 +291,7 @@ for f in sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root,
     if t.count("Omit any severity line with no findings") != t.count("and never a severity header with no text after it"):
         bad.append("%s: a reviewer prompt omits the 'never a severity header with no text after it' clause" % os.path.relpath(f, root))
 for f in files("plan-codex"):
-    if "reviewer.sh S <plan-file> <out-file>" not in open(f, encoding="utf-8").read():
+    if "reviewer.sh S <context-file> <out-file>" not in open(f, encoding="utf-8").read():
         bad.append("%s: the plan fallback does not name tier S on the actual plan file" % os.path.relpath(f, root))
 for dp, _, fs in os.walk(root):
     if "/.git" in dp or "/tests" in dp: continue
