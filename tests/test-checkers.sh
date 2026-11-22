@@ -302,6 +302,7 @@ expect_spy pass "control: the same call with a zero exit and the same approval i
 # cc11-main-r2 finding 2: the guard that decides whether tier R (CodeRabbit, which reads the commits itself) may be used must really list committed secret-named files, even from a subdirectory.
 for guard_file in skills/execute-codex/SKILL.md skills/claude-codex/SKILL.md skills/tdd-execute-codex/SKILL.md skills/tdd-claude-codex/SKILL.md; do
   expect pass "the tier R secret guard in $guard_file lists committed secret files from a subfolder" python3 "$here/check-secret-guard.py" "$here/../$guard_file"
+  expect pass "the tier R content scan in $guard_file refuses an inline key, a secret-shaped path and an unresolvable base and allows a clean diff" python3 "$here/check-content-scan.py" "$here/../$guard_file"
 done
 
 # cc11-main-r2 finding 3: the diff command each workflow prescribes is relative to the repository top, not to the shell's folder.

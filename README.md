@@ -108,6 +108,8 @@ chmod +x ~/.claude/config/scripts/codex-call.sh
 
 The usage-limit fallback also needs the shared reviewer script `~/.claude/config/scripts/reviewer.sh` (it is not shipped in this repo, and it needs its own `claude` or `coderabbit` CLI). Without it a Codex quota error leaves the review unreviewed instead of falling back.
 
+The CodeRabbit fallback (`reviewer.sh R`) reads the committed changes itself and ignores the sanitized diff file, so the skills allow it only when two checks pass: no committed path is secret-shaped (`.env*`, `*secret*`, `*credential*`, `*.pem`, `*.key`) and a content scan of the added diff lines finds no credential-shaped string (private key blocks, AWS, GitHub, OpenAI-style, Slack and Google keys, or a quoted `key`, `secret`, `token` or `password` assignment). A hit, a scan that fails or an unresolvable base commit means tier S with the sanitized diff instead.
+
 The first line of `scripts/codex-call.sh` is a contract line (`# contract: codex-call v2 ...`). It names this repo as the source of truth, and a copy installed elsewhere is only compatible with the skills while that line matches.
 
 Every skill validates a reviewer reply with one grammar. The first non-blank line must be exactly `VERDICT: APPROVED`, `VERDICT: WARNING` or `VERDICT: BLOCKED`. Severity lines are optional, `none` and `n/a` placeholders are ignored, any real finding at any severity means findings whatever the verdict word, and empty or unparseable output is no verdict. A bare `VERDICT: APPROVED` is a clean review.

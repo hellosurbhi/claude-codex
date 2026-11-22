@@ -56,7 +56,7 @@ for n in NAMES:
 # whole-clause equality: every occurrence of each mirrored clause, in every file, must be the same text (r21)
 CLAUSES = [
     r"\(the active reviewer is the Codex thread or.{0,400}?no Codex thread is required\)",
-    r"\(a fresh Codex thread without `--resume`.{0,900}?on the current head\)",
+    r"\(a fresh Codex thread without `--resume`.{0,2500}?on the current head\)",
     r"End the final report with exactly one machine-readable line.{0,400}?last non-blank line of the report\.",
     # r26: the stop rule (usage limit or unavailable CodeRabbit is never a blocker while tier S can run) lives in the folded failure paragraphs too
     r"\(a call that merely died.{0,600}?while tier S can run\)",
@@ -154,7 +154,10 @@ if not leaked("-- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'"):
     bad.append("the old pathspec no longer leaks, so the functional check proves nothing")
 # cc11-main-r2 finding 2: tier R reads the commits itself, so EVERY mention of it carries the secret guard that falls back to tier S.
 # WHY the exact guard text: a paraphrase in one copy is how r1 to r20 kept drifting; check-secret-guard.py then runs the command itself.
-GUARD = " (run only after `git diff --name-only <base commit>..HEAD -- ':(top,glob,icase)**/.env*' ':(top,glob,icase)**/*secret*' ':(top,glob,icase)**/*credential*' ':(top,glob,icase)**/*.pem' ':(top,glob,icase)**/*.key'` prints nothing; if it prints anything, skip every outside reviewer and use tier S with the sanitized diff)"
+PATH_CMD = "git diff --name-only <base commit>..HEAD -- ':(top,glob,icase)**/.env*' ':(top,glob,icase)**/*secret*' ':(top,glob,icase)**/*credential*' ':(top,glob,icase)**/*.pem' ':(top,glob,icase)**/*.key'"
+# cc11-main-r4 finding 1: filenames alone are not enough, CodeRabbit reads committed CONTENT, so tier R also needs this content scan of the added lines. Defined ONCE here; check-content-scan.py runs the text the skills carry on temp repos.
+SCAN_CMD = "d=$(git diff <base commit>..HEAD -- ':(top)') && printf '%s\\n' \"$d\" | grep -Eiq \"^\\+.*(-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-|AIza[0-9A-Za-z_-]{30,}|(api[_-]?key|secret|token|passw(or)?d|private[_-]?key)[\\\"']?[[:space:]]*[:=][[:space:]]*[\\\"'][^\\\"']{12,}[\\\"'])\""
+GUARD = " (run only after BOTH checks pass: `%s` prints nothing, and `%s` exits with status 1, meaning no credential-shaped added line; if the first prints anything, or the second exits with any other status (a hit, a failed scan or an unresolvable base commit), skip every outside reviewer and use tier S with the sanitized diff)" % (PATH_CMD, SCAN_CMD)
 for f in sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root, "skills", "codex-mcp", x) for x in ("SKILL.md", "reference.md"))):
     t = open(f, encoding="utf-8").read()
     for m in re.finditer(r"reviewer\.sh R <diff-file> <out-file>`", t):
