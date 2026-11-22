@@ -88,16 +88,15 @@ li = wlog.limit_index(non_spy)
 if li is None:
     reject('no quota-limit event in the log')
 limit_done = non_spy[li]["ts"]
-# WHY by start time: a review that began before the quota reply was not a reaction to it, even if it finished later.
-# WHY the LAST review by START time decides: an older approval that merely finished later must not override a newer
-# review that blocked or failed (r14).
-# WHY only the production argument vector (tier E/R/S, input, output): `diagnose` or a malformed call is not a review (r29).
+# WHY the shared decision over EVERY attempt (r25): the last review attempt of any kind decides. Filtering to fallback reviewers only let quota failure, clean fallback review, then a later FAILED Codex
+# attempt (or a wrapper-failed event) still pass. That last attempt must be a fallback reviewer call that STARTED after the quota reply (a review that began before it was not a reaction to it) and was clean.
+# WHY only the production argument vector (tier E/R/S, input, output): `diagnose` or a malformed call is not a review (r29); a malformed review call after a clean one is a newer failed attempt and decides (r44).
 valid_spy = lambda e: len(e["argv"]) >= 3 and e["argv"][0] in ("E", "R", "S") and bool(e["argv"][1]) and bool(e["argv"][2])
-# WHY only `diagnose` is dropped before choosing the last call (r44): a malformed review attempt after a clean one is a newer failed
-# review, so it must stay in the list and decide; filtering it out let the older approval pass without a retry.
-spies = sorted((e for e in evs if e["wrapper"] == "spy" and (e["argv"] or [""])[0] != "diagnose" and e.get("ts_start", e["ts"]) >= limit_done), key=lambda e: e.get("ts_start", e["ts"]))
-if not spies or not valid_spy(spies[-1]) or not wlog.is_clean(spies[-1]):
+fin = wlog.final_review_state(evs)
+last = fin["last"]
+if last is None or last["wrapper"] != "spy" or wlog.started(last)[0] < limit_done or not valid_spy(last) or not fin["approved"]:
     reject('no valid reviewer call after the quota hit, or the last one is not clean')
+spies = [last]
 if phase is not None and spies[-1]["phase"] != phase:
     reject('the last reviewer call ran in another phase')
 # WHY production decides validity (r38): the launcher ran the REAL reviewer.sh, which already rejected a bad tier, a missing

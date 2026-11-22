@@ -1,4 +1,5 @@
 # Usage: check-real-basic.py <wrapper.jsonl> thread|verdict. Exit 0 when a Codex wrapper execution
+# APPROVAL-EXEMPT: asks whether ANY genuine real call returned a thread id or a valid verdict (existence evidence), not whether the run ended approved; the final decision is check-scripted.py final --real
 # exited 0 and returned a THREAD_ID line (thread) or a single valid VERDICT (verdict).
 import re, sys
 import wlog

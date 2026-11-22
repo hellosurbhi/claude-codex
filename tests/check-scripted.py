@@ -38,11 +38,13 @@ if mode == "final" and "--audit" in sys.argv:
     sys.exit(0 if good else 1)
 if mode == "final":
     # the LAST execution is a clean reply, given for the state the run ended in (and, with --impl, after add() existed)
-    if not evs:
+    # WHY the shared decision (r25): the last attempt of ANY kind (fake or real shim, wrapper-failed, fallback reviewer) must be the clean one; the state, impl and stability bindings below apply to it.
+    fin = wlog.final_review_state(wlog.load(sys.argv[1]), real=REAL)
+    last = fin["last"]
+    if last is None:
         print("REJECT: no reviewer execution in the log", file=sys.stderr); sys.exit(1)
-    last = evs[-1]
     m = last.get("meta", {})
-    ok = last["exit"] == 0 and wlog.is_clean(last) and (REAL or m.get("result") == "CLEAN") and m.get("state") == sys.argv[3]
+    ok = fin["approved"] and (REAL or m.get("result") == "CLEAN") and m.get("state") == sys.argv[3]
     # WHY start state == verdict state == final state for a real call (r13 finding 2): the shim records `state` when the call STARTS and `endstate` when it returns; an edit made while the
     # reviewer ran changes the tree it judged, so an approval whose two states differ is void. The fake has no such window.
     if REAL:

@@ -93,6 +93,30 @@ def is_clean(ev):
     """Clean means the grammar says clean: APPROVED with no real finding, whichever wrapper produced it, and the call exited 0."""
     return ev["exit"] == 0 and verdict_state("\n".join(verdict_block(ev))) == "clean"
 
+def started(e):
+    """THE ordering key of an event: (start time, log position). Every writer takes its start time from the same source, the wall clock of python's time.time()
+    (evlog.py via EVSTART for the shim, the fake and the spy; codex-call.sh's wrapper-failed event from python3 time.time(), `date` only when python3 itself is missing),
+    so events of different kinds are comparable; the log position (seq) only breaks ties."""
+    return (e.get("ts_start", e["ts"]), e.get("seq", 0))
+
+def review_attempts(events, real=False):
+    """EVERY review attempt of every kind, in start order: the scripted fake (or, with real, the genuine real-codex shim events), a wrapper-failed event of the real wrapper,
+    and the fallback reviewer (spy, `diagnose` excluded: it is not a review). A bare `direct` codex call, the model stand-ins and anything else are not attempts."""
+    def attempt(e):
+        w = e["wrapper"]
+        if w == "spy":
+            return (e.get("argv") or [""])[0] != "diagnose"
+        return is_wrapper_failure(e) or (is_real(e) if real else w == "fake")
+    return sorted((e for e in events if attempt(e)), key=started)
+
+def final_review_state(events, real=False):
+    """The ONE decision "this run ended approved": the LAST review attempt of any kind exited 0 with a clean verdict. Returns {"approved": bool, "last": event or None}.
+    Every checker that decides approval calls this and then adds its own binding (state, phase, tree) on `last`; none may filter attempts itself.
+    WHY all kinds in one list (r25): choosing the final review inside a filtered list (spy only, Codex only) let an earlier clean review stand after a LATER failed attempt of another kind."""
+    att = review_attempts(events, real)
+    last = att[-1] if att else None
+    return {"approved": bool(last and is_clean(last)), "last": last}
+
 def issued_before(evs, i):
     """Thread ids the wrapper itself issued (new, non-resume, successful calls) before event i."""
     # WHY the earlier reply must itself print the id: a call that exited 0 with an empty or malformed reply never

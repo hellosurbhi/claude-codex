@@ -1,4 +1,5 @@
 # Usage: check-review-record.py <repo> <base-sha>
+# APPROVAL-EXEMPT: validates the recorded reply of a Claude reviewer agent, which never appears in the wrapper log; it binds that record to the final diff hash instead
 # Exit 0 when <repo>/.claude/review/final-review.txt records a CLEAN review of the diff the run ended with.
 # The record is what the execute-codex and tdd-execute-codex skills prescribe after every code-reviewer round (a Claude agent, so the
 # wrapper log never sees its verdict): line 1 is `REVIEWED-DIFF: <sha256 of the reviewed diff>`, the rest is the reviewer's reply verbatim.

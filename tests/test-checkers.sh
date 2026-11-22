@@ -2146,6 +2146,30 @@ expect pass "differential control: the valid stream is accepted by both" test "$
 expect pass "differential control: a null thread id is rejected by both" test "$(dfres tid-null)" = "1 1"
 dfres valid >/dev/null
 expect pass "differential control: an accepted row prints the same thread id and message in the wrapper output and the logged reply" python3 -c 'import json,sys; w=open(sys.argv[1]).read(); e=json.loads(open(sys.argv[2]).read().splitlines()[-1])["stdout"]; sys.exit(0 if w and w == e else 1)' "$dfx/w.out.valid" "$dfx/ev.valid"
+# Round 25: ONE decision (wlog.final_review_state) over EVERY review attempt of every kind; the last attempt must be the clean one.
+ral() { python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation; }
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"
+expect pass "r25 control: quota failure then a clean fallback review with nothing after it is approved" ral
+line fake 1 unknown 'codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED.\n'
+expectm fail "r25: quota, clean fallback review, then a FAILED Codex review is not approved" 'REJECT: no valid reviewer call after the quota hit, or the last one is not clean' ral
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"; wfcall --bogus "p"
+expectm fail "r25: quota, clean fallback review, then a wrapper-failed event is not approved" 'REJECT: no valid reviewer call after the quota hit, or the last one is not clean' ral
+expect pass "r25: that log's last verdict is NONE" test "$(python3 "$here/last-verdict.py" "$EVLOG")" = NONE
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"
+expect pass "r25: the last verdict of a clean fallback review is APPROVED" test "$(python3 "$here/last-verdict.py" "$EVLOG")" = APPROVED
+line fake 0 unknown "${TID}VERDICT: BLOCKED\nCRITICAL: x\n"
+expectm fail "r25: a later BLOCKED Codex review also voids the fallback approval" 'REJECT: no valid reviewer call after the quota hit, or the last one is not clean' ral
+mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"
+expectm fail "r25: the existing tree rule still holds (tree changed after the reviewed state)" 'REJECT: the code tree changed after the reviewed state' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+# one comparable ordering key: a spy-kind, a wrapper-failed and a fake event written by their real writers in this order sort in this order
+mkrun; python3 "$here/evlog.py" "$EVLOG" spy 0 "" "" /dev/null /dev/null /dev/null -- S in out; wfcall --bogus "p"; python3 "$here/evlog.py" "$EVLOG" fake 0 "" "" /dev/null /dev/null /dev/null --
+expect pass "r25: spy, wrapper-failed and fake events from their real writers share one clock and sort in call order" python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print([e["wrapper"] for e in wlog.review_attempts(wlog.load(sys.argv[2]))]); sys.exit(0 if [e["wrapper"] for e in wlog.review_attempts(wlog.load(sys.argv[2]))]==["spy","wrapper-failed","fake"] else 1)' "$here" "$EVLOG"
+# the guard: a checker that judges a verdict must use the shared function or say why not
+expect pass "r25: every checker that judges a review verdict uses wlog.final_review_state or carries an APPROVAL-EXEMPT reason" python3 "$here/check-approval-sites.py" "$here"
+mkdir -p "$tmp/sites"; rm -f "$tmp/sites/"*; printf 'import wlog\nprint(wlog.is_clean({"exit":0}))\n' > "$tmp/sites/check-new.py"
+expectm fail "r25: a new checker that picks a verdict without the shared function is caught" 'check-new.py: judges a review verdict' python3 "$here/check-approval-sites.py" "$tmp/sites"
+printf '# APPROVAL-EXEMPT: existence evidence only\nimport wlog\nprint(wlog.is_clean({"exit":0}))\n' > "$tmp/sites/check-new.py"
+expect pass "r25: a documented exemption passes the guard" python3 "$here/check-approval-sites.py" "$tmp/sites"
 # Self-test (round 3 finding 3): these cases need no private reviewer, so they MUST have run (and passed) in every mode, CHECKERS_NO_SPY=1 included.
 for must in "ci.yml declares an explicit contents: read permissions block" "ci.yml checks out with persist-credentials: false" "ci.yml runs the checkers with CHECKERS_NO_SPY=1" \
   "an outside-reviewer call injected into a command is caught" "the reviewer diff command in commands/execute-codex.md lists changes in sibling folders when run from a subfolder" \

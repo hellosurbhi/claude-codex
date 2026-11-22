@@ -1,4 +1,5 @@
 # Usage: check-resume.py <wrapper.jsonl> [--no-verdict] [--real]. Exit 0 when the wrapper log holds a --resume
+# APPROVAL-EXEMPT: asks whether a valid --resume execution of an issued id EXISTS (mechanics evidence), not whether the run ended approved
 # execution that exited 0, returned the same thread id it was asked to resume, and that id was
 # issued by the wrapper itself in an EARLIER non-resume execution of this run. Unless --no-verdict
 # (execute-codex: Codex implements, so a follow-up reply has no verdict), the reply must carry
