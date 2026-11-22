@@ -325,7 +325,7 @@ def rec_of(path):
     m = re.search(re.escape(RECHEAD) + r".*?\n```\n.*?\n```\n.*?\n```\n.*?\n```\n.*?(?:\n\n|$)", t, re.S)
     return (m.group(0), t.count(RECHEAD)) if m else (None, t.count(RECHEAD))
 for n in ("execute-codex", "tdd-execute-codex"):
-    base = "$START_SHA" if n.startswith("tdd-") else "HEAD"
+    base = "\"${START_SHA:?}\"" if n.startswith("tdd-") else "HEAD"
     got = []
     for f in files(n):
         rel = os.path.relpath(f, root)

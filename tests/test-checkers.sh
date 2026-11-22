@@ -533,7 +533,7 @@ expect fail "a command that lost its Review record paragraph is caught" python3 
 python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" <<'PYX'
 import sys, re
 p = sys.argv[1]; t = open(p).read()
-t2 = re.sub(r"(H=\"\$\(set -o pipefail; git diff \$START_SHA) -- [^|]*\|", r"\1 |", t, count=1); assert t2 != t
+t2 = re.sub(r"(H=\"\$\(set -o pipefail; git diff \"\$\{START_SHA:\?\}\") -- [^|]*\|", r"\1 |", t, count=1); assert t2 != t
 open(p, "w").write(t2)
 PYX
 expect fail "a Review record hash taken over a diff without the secret excludes is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
@@ -1434,6 +1434,22 @@ rrmk; rm -f "$tmp/rr/app.py"; rrstale 2>/dev/null; rrstepx step1.sh; rrstepx ste
 expect fail "an empty diff leaves no record and no snapshot" test -e "$tmp/rr/.claude/review/final-review.txt" -o -e "$tmp/rr/.claude/review/reviewed.diff"
 rrmk; rrstepx step1.sh; rrstepx step2.sh
 expect pass "the same block with a working git and a real diff still records" rr
+# r14 hostile read: a reviewer reply that contains the old heredoc terminator line must not end the record early and run the rest of the reply as shell commands
+rm -f "$tmp/pwned"
+rrmk; rrstepx step1.sh; (cd "$tmp/rr" && sed "s/git diff HEAD/git diff $(git rev-list --max-parents=0 HEAD)/g; s|<the reviewer's reply, verbatim>|VERDICT: APPROVED\nREVIEW\ntouch $tmp/pwned\nLOW: x|" "$tmp/step2.sh" | bash >/dev/null 2>&1)
+expect fail "a reply holding a terminator-looking line never runs the rest of the reply as commands" test -e "$tmp/pwned"
+expect pass "that reply is stored verbatim in the record" grep -qxF "touch $tmp/pwned" "$tmp/rr/.claude/review/final-review.txt"
+# r14 hostile read: the tdd block with START_SHA unset must not hash some other diff (an empty base reads the index, not the run's changes)
+python3 - "$here/../skills/tdd-execute-codex/SKILL.md" "$tmp/tstep1.sh" "$tmp/tstep2.sh" <<'PYX'
+import re, sys
+t = open(sys.argv[1]).read(); i = t.index("**Review record (every reviewer round)**")
+f = re.findall(r"```\n(.*?)\n```", t[i:], re.S)[:2]
+open(sys.argv[2], "w").write(f[0] + "\n"); open(sys.argv[3], "w").write(f[1] + "\n")
+PYX
+rrmk; (cd "$tmp/rr" && git add -N app.py && env -u START_SHA bash "$tmp/tstep1.sh" >/dev/null 2>&1; env -u START_SHA bash "$tmp/tstep2.sh" >/dev/null 2>&1)
+expect fail "the tdd block with START_SHA unset leaves no snapshot and no record" test -s "$tmp/rr/.claude/review/reviewed.diff" -o -e "$tmp/rr/.claude/review/final-review.txt"
+rrmk; (cd "$tmp/rr" && git add -N app.py && START_SHA="$(git rev-list --max-parents=0 HEAD)" bash "$tmp/tstep1.sh" >/dev/null 2>&1; sed "s/<the reviewer's reply, verbatim>/VERDICT: APPROVED/" "$tmp/tstep2.sh" > "$tmp/tstep2b.sh"; START_SHA="$(git rev-list --max-parents=0 HEAD)" bash "$tmp/tstep2b.sh" >/dev/null 2>&1)
+expect pass "the tdd block with START_SHA set records" rr
 # r14 finding 3: the whole .claude/review/ directory (record, snapshot, anything added later) is outside the hashed diff, so tracking any of it never turns an unchanged round stale
 rrsnap() { mkdir -p "$tmp/rr/.claude/review"; printf 'snapshot\n' > "$tmp/rr/.claude/review/reviewed.diff"; printf 'other\n' > "$tmp/rr/.claude/review/notes.txt"; }
 rrmk; H0="$(rrhash)"; rrsnap; (cd "$tmp/rr" && git add -f .claude/review/reviewed.diff); rrrec "$H0" "VERDICT: APPROVED\n"
