@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# WHY an explicit block: the default token can write; this job only reads the repository.
+permissions:
+  contents: read
+
+# WHY a group per ref with cancel only for pull requests: a new push to a PR makes the older run pointless,
+# but a run on main must always finish so main never has an unreported result.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # WHY: nothing after checkout pushes, so the token must not stay in .git/config.
+          persist-credentials: false
+      - name: Syntax-check every shell script
+        run: |
+          set -e
+          git ls-files '*.sh' | while IFS= read -r f; do bash -n "$f"; done
+      - name: Mirror consistency
+        run: python3 tests/test-mirrors.py .
+      - name: Checker suite (spy-reviewer cases skipped)
+        # WHY CHECKERS_NO_SPY=1: the spy cases drive the private installed reviewer.sh, which a public clone does not have.
+        # The suite skips only those cases and prints how many, so a silent skip is visible in the log.
+        run: CHECKERS_NO_SPY=1 bash tests/test-checkers.sh

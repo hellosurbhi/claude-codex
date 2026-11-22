@@ -8,7 +8,7 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 fail=0
 # WHY a hard prerequisite (CodeRabbit r47): the launcher cases run the REAL installed reviewer.sh (~/.claude/config/scripts/reviewer.sh, or
 # SPY_CONFIG_DIR); without it they would fail in confusing ways, so stop with one clear line.
-[[ -f "${SPY_CONFIG_DIR:-$HOME/.claude/config}/scripts/reviewer.sh" ]] || { echo "FAIL: installed reviewer.sh not found under ${SPY_CONFIG_DIR:-$HOME/.claude/config}/scripts (required by this suite)"; exit 1; }
+[[ -n "${CHECKERS_NO_SPY:-}" || -f "${SPY_CONFIG_DIR:-$HOME/.claude/config}/scripts/reviewer.sh" ]] || { echo "FAIL: installed reviewer.sh not found under ${SPY_CONFIG_DIR:-$HOME/.claude/config}/scripts (required by this suite)"; exit 1; }
 # WHY a portable timeout (cc11-main-r1): GNU `timeout` is not on stock macOS (coreutils installs it as `gtimeout`), so use whichever exists and
 # otherwise a python3 stand-in with the same contract (kill on expiry, exit 124). TMO_FORCE_PY=1 forces the stand-in so it can be tested.
 tmo() {
@@ -28,7 +28,11 @@ except subprocess.TimeoutExpired:
 }
 ok()  { echo "PASS: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
-expect() { local want="$1" name="$2"; shift 2; "$@" >/dev/null 2>&1; local rc=$?; if { [[ $want == pass && $rc -eq 0 ]] || [[ $want == fail && $rc -ne 0 ]]; }; then ok "$name"; else bad "$name (rc=$rc, wanted $want)"; fi; }
+# WHY CHECKERS_NO_SPY (public CI): the spy-reviewer cases run the PRIVATE installed reviewer.sh, which a clean clone and CI do not have. With
+# CHECKERS_NO_SPY=1 spy-reviewer.sh and copy-config.sh only drop $spymark and exit 0; every `expect` that follows a spy call in the same run
+# directory is skipped and counted (mkrun clears the mark). Nothing else is skipped, and the count is printed at the end so a silent skip is visible.
+skipped=0; spymark="$tmp/spy-used"; export CHECKERS_SPY_MARK="$spymark"
+expect() { local want="$1" name="$2"; shift 2; if [[ -n "${CHECKERS_NO_SPY:-}" && -e "$spymark" ]]; then skipped=$((skipped+1)); echo "SKIP: $name"; return 0; fi; "$@" >/dev/null 2>&1; local rc=$?; if { [[ $want == pass && $rc -eq 0 ]] || [[ $want == fail && $rc -ne 0 ]]; }; then ok "$name"; else bad "$name (rc=$rc, wanted $want)"; fi; }
 # cc11-main-r2 finding 6: the python3 timeout stand-in must kill the whole process group, not only its child, or a timed-out launcher leaves reviewer and tee processes running.
 mkdir -p "$tmp/tmo"; rm -f "$tmp/tmo/gpid"
 TMO_FORCE_PY=1 tmo 1 bash -c 'sleep 60 & echo $! > "$1"; wait' _ "$tmp/tmo/gpid" >/dev/null 2>&1; tmo_rc=$?
@@ -37,7 +41,7 @@ expect pass "the python3 timeout stand-in exits 124 on expiry" test "$tmo_rc" -e
 expect fail "the python3 timeout stand-in leaves no grandchild running after expiry" kill -0 "$(cat "$tmp/tmo/gpid" 2>/dev/null || echo 99999999)"
 kill "$(cat "$tmp/tmo/gpid" 2>/dev/null)" >/dev/null 2>&1 || true  # tidy up when the case above failed
 gdiff() { local f; for f in "$@"; do git diff --no-index --no-color /dev/null "$f"; done; }
-mkrun() { cd "$tmp"; rm -rf "$tmp/run"; mkdir -p "$tmp/run/repo"; (cd "$tmp/run/repo" && git init -q && git remote add origin https://example.invalid/t/r.git && printf 'x=1\n' > app.py); cd "$tmp/run/repo"; export EVLOG="$tmp/run/wrapper.jsonl" FAKE_LOG="$tmp/run/calls.log"; : > "$EVLOG"; : > "$FAKE_LOG"; unset FAKE_LIMIT FAKE_FAIL_FIRST; export FAKE_ROUNDS=0; }
+mkrun() { rm -f "$spymark"; cd "$tmp"; rm -rf "$tmp/run"; mkdir -p "$tmp/run/repo"; (cd "$tmp/run/repo" && git init -q && git remote add origin https://example.invalid/t/r.git && printf 'x=1\n' > app.py); cd "$tmp/run/repo"; export EVLOG="$tmp/run/wrapper.jsonl" FAKE_LOG="$tmp/run/calls.log"; : > "$EVLOG"; : > "$FAKE_LOG"; unset FAKE_LIMIT FAKE_FAIL_FIRST; export FAKE_ROUNDS=0; }
 fake="$here/fake-codex-call.sh"
 # viawrap runs the shim from a script named codex-call.sh, the way the installed wrapper does (shim provenance, r28)
 mkdir -p "$tmp/wrap"; printf '#!/usr/bin/env bash\nbash "%s/shim/codex" "$@"\nrc=$?\nexit $rc\n' "$here" > "$tmp/wrap/codex-call.sh"
@@ -287,6 +291,14 @@ expect pass "codex-call.sh defaults --cd to the repository top when started from
 # cc11-main-r2 finding 5: GNU sed rejects the BSD-only empty backup suffix form of in-place sed. The portable form is `sed -i.bak ... && rm -f <file>.bak`.
 bsd_sed="sed -i ''"
 expect pass "the suite uses no BSD-only in-place sed" test -z "$(grep -n -F -e "$bsd_sed" "$here/test-checkers.sh" | grep -v 'bsd_sed=')"
+
+# C5: the public CI workflow keeps its safety properties (explicit read-only permissions, no persisted credentials, the spy switch, per-ref concurrency).
+ci="$here/../.github/workflows/ci.yml"
+expect pass "ci.yml declares an explicit contents: read permissions block" grep -qE '^permissions:$' "$ci"
+expect pass "ci.yml checks out with persist-credentials: false" grep -q 'persist-credentials: false' "$ci"
+expect pass "ci.yml runs the checkers with CHECKERS_NO_SPY=1" grep -q 'CHECKERS_NO_SPY=1 bash tests/test-checkers.sh' "$ci"
+expect pass "ci.yml cancels superseded pull request runs per ref" grep -q 'cancel-in-progress: ${{ github.event_name == '"'"'pull_request'"'"' }}' "$ci"
+expect pass "ci.yml runs on pull_request and pushes to main only" grep -qE '^  push:$' "$ci"
 
 # C4: codex-call v2 error handling: a JSON error event with no message is reported whole instead of as an empty line, and the contract line is present.
 mkdir -p "$tmp/errbin"
@@ -859,6 +871,7 @@ for op in /dev/stdout /dev/fd/1 /dev/stderr; do
   # WHY the real config path is fixed first: in one assignment list `HOME=... CLAUDE_CONFIG_DIR=$HOME/...` would expand against the NEW HOME.
   cfg="${SPY_CONFIG_DIR:-$HOME/.claude/config}"
   d_out="$(HOME="$tmp/dh" CLAUDE_CONFIG_DIR="$cfg" PATH="$here/fake-models:$PATH" EVLOG="$tmp/direct.jsonl" bash "$cfg/scripts/reviewer.sh" S "$tmp/plan.md" "$op" 2>/dev/null)"; d_rc=$?
+  [[ -n "${CHECKERS_NO_SPY:-}" ]] && : > "$spymark"
   s_out="$(spyrun "$op" 2>/dev/null)"; s_rc=$?
   expect pass "direct production and the launcher agree on rc and stdout for $op (r46)" test "$d_rc:$d_out" = "$s_rc:$s_out"
 done
@@ -875,6 +888,7 @@ for l in open(sys.argv[1]):
 PYT
 expect fail "a CodeRabbit review whose model-time tree digest differs from the launcher's is rejected (r47)" python3 "$here/check-reviewer-after-limit.py" "$tmp/evT.jsonl" --repo "$tmp/run/repo"
 expect pass "a model event keeps its place after the quota event once the quota is ordered" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); q=[e for e in es if e["wrapper"]=="fake"][0]; print(all(e["ts"]>q["ts"] for e in es if e["wrapper"]=="model"))' "$here" "$EVLOG")" = True
+[[ -n "${CHECKERS_NO_SPY:-}" ]] && : > "$spymark"  # the prerequisite check is itself skipped in this mode
 expect fail "the suite stops with a clear line when the installed reviewer.sh is missing" env SPY_CONFIG_DIR="$tmp/no-such-config" bash "$here/test-checkers.sh"
 
 # cc11-main-r1: the portable timeout stand-in kills a slow command with 124 and passes through a fast command's status
@@ -899,4 +913,5 @@ mkrun; (cd "$tmp/run/repo" && git remote remove origin); line fake 1 unknown "$L
 SPY_CONFIG_DIR="$tmp/cfg-noorigin" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
 expect pass "control: an origin-requiring reviewer.sh makes the no-remote case fail (the test can detect the old bug)" test "$rc" = 9
 
+[[ -n "${CHECKERS_NO_SPY:-}" ]] && echo "CHECKERS_NO_SPY=1: skipped $skipped spy-reviewer case(s); they need the installed reviewer.sh"
 exit $fail

@@ -9,6 +9,8 @@
 # What this adds is observation only: a private HOME (reviewer.sh keeps its cache and retry queue under $HOME/.claude/state, which a
 # test must not touch), the run id that ties the fake model events to this call, the tree digest at start, and one `spy` event.
 set -uo pipefail
+# WHY (CHECKERS_NO_SPY): public CI has no installed reviewer.sh; mark the run so test-checkers.sh skips and counts the cases that need it.
+if [[ -n "${CHECKERS_NO_SPY:-}" ]]; then : > "${CHECKERS_SPY_MARK:?}"; exit 0; fi
 here="$(cd "$(dirname "$0")" && pwd)"
 EVSTART="$(python3 -c 'import time; print(time.time())')"
 CONFIG="${SPY_CONFIG_DIR:-$HOME/.claude/config}"
