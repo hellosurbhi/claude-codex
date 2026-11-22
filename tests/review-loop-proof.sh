@@ -65,8 +65,9 @@ case "$skill:$scenario" in execute-codex:usage-limit|tdd-execute-codex:usage-lim
 esac
 cd "$repo"
 git init -q
-# WHY an origin: the REAL reviewer.sh the spy launches derives its retry-queue slug from `git remote get-url origin` and exits without one.
-git remote add origin https://example.invalid/proof/repo.git
+# WHY no origin remote (cc11-main-r1): the quota fallback must work in local repos and scratch folders that have none (scripts/codex-call.sh
+# runs plan audits from scratch folders). An older reviewer.sh exited without an origin, so this fixture used to add one, which hid that
+# bug. The installed reviewer.sh now falls back to a basename slug; adding an origin back here would stop the proof covering that path.
 printf 'def greet(name):\n    return "hi " + name\n' > app.py
 cat > REVIEW.md <<'MD'
 # Review rules

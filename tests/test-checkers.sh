@@ -813,4 +813,22 @@ expect fail "the suite stops with a clear line when the installed reviewer.sh is
 expect pass "tmo python fallback kills a slow command with exit 124" test "$(TMO_FORCE_PY=1 tmo 1 sleep 5 >/dev/null 2>&1; echo $?)" = 124
 expect pass "tmo python fallback passes through the command exit status" test "$(TMO_FORCE_PY=1 tmo 5 bash -c 'exit 3' >/dev/null 2>&1; echo $?)" = 3
 
+# cc11-main-r1: tier S fallback must work in a repo with NO origin remote and for a scratch plan in a folder that is not a repo
+# (scripts/codex-call.sh runs plan audits from scratch folders). The review-loop-proof fixture used to add an origin because an older
+# reviewer.sh exited without one; the real reviewer.sh must now succeed, and so must the fixture, without it.
+mkrun; (cd "$tmp/run/repo" && git remote remove origin); line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
+spyrun "$tmp/out.txt" >/dev/null 2>&1; rc=$?
+expect pass "tier S fallback succeeds in a repo with no origin remote" test "$rc" = 0
+orderfake "$EVLOG"
+expect pass "and the checker sees the clean fallback review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+mkrun; line fake 1 unknown "$LIMIT"; rm -rf "$tmp/scratch"; mkdir -p "$tmp/scratch"; cd "$tmp/scratch"; printf 'plan\n' > "$tmp/plan.md"
+spyrun "$tmp/out.txt" >/dev/null 2>&1; rc=$?
+expect pass "tier S fallback succeeds for a scratch plan outside any git repo" test "$rc" = 0
+# mutation proof source: a reviewer.sh that exits when there is no origin (the old behavior) must make the first case fail
+bash "$here/copy-config.sh" "$tmp/cfg-noorigin"
+sed -i.bak 's|^_rq_slug=\$(git -C "\$REPO_ROOT" remote get-url origin.*$|git -C "$REPO_ROOT" remote get-url origin >/dev/null 2>\&1 \|\| exit 9; _rq_slug=x|' "$tmp/cfg-noorigin/scripts/reviewer.sh"
+mkrun; (cd "$tmp/run/repo" && git remote remove origin); line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
+SPY_CONFIG_DIR="$tmp/cfg-noorigin" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
+expect pass "control: an origin-requiring reviewer.sh makes the no-remote case fail (the test can detect the old bug)" test "$rc" = 9
+
 exit $fail
