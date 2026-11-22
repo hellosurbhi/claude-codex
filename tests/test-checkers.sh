@@ -395,6 +395,62 @@ expect fail "a single-quoted password with an escaped quote leaves no secret tex
 expect fail "an unterminated quoted password masks to the end of the line" sh -c 'printf "%s\n" "+password = \"abSECRET and more TAIL" | "$1" | grep -q "SECRET\|TAIL"' _ "$red"
 expect fail "a value ending in an escaped backslash leaves no secret text" sh -c 'printf "%s\n" "+password = \"abSECRET\\\\\"" | "$1" | grep -q "SECRET"' _ "$red"
 expect pass "text after a value that ends in an escaped backslash is kept" sh -c 'printf "%s\n" "+password = \"abSECRET\\\\\", other = 1" | "$1" | grep -q "other = 1"' _ "$red"
+# r13 finding 1: attack cases, one per shape the header comment claims. Each line is "input|||secret text that must not survive".
+leaks() { printf '+%s\n' "$1" | "$red" | grep -qF -- "$2"; }
+while IFS= read -r case_; do
+  [ -n "$case_" ] || continue
+  expect fail "redact-diff masks: ${case_%%|||*}" leaks "${case_%%|||*}" "${case_##*|||}"
+done <<'ATTACKS'
+Authorization: Bearer abcdefghijklmnop|||abcdefghijklmnop
+Authorization: Bearer zq|||zq
+"Authorization": "Bearer aB+c/d=="|||aB+c/d==
+Authorization: Bearer a.b.c|||a.b.c
+Authorization: Basic dXNlcjpwYXNz|||dXNlcjpwYXNz
+Authorization: Token LEAKtok|||LEAKtok
+headers = {'authorization': 'basic LEAKb64'}|||LEAKb64
+token: Bearer abcdefghijklmnop|||abcdefghijklmnop
+password=ab;cdLEAK|||cdLEAK
+password: ab,cdLEAK|||cdLEAK
+password=ab)cdLEAK|||cdLEAK
+password = LEAKword|||LEAKword
+password => "LEAKx"|||LEAKx
+'password' => 'LEAKx'|||LEAKx
+https://user:LEAKpw@host/path|||LEAKpw
+postgres://u:LEAK%40pw@db:5432/x|||LEAK%40pw
+export DB_PASSWORD=LEAKpw|||LEAKpw
+export TOKEN="LEAK pw spaced"|||spaced
+api_key: LEAKkey|||LEAKkey
+x-api-key: LEAKkey|||LEAKkey
+{"password":"LEAK\"x"}|||LEAK
+{"password": LEAKnum}|||LEAKnum
+ghp_abcd1234ef|||abcd1234ef
+sk-LEAKabcdefg|||LEAKabcdefg
+eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.|||eyJzdWIiOiJ4In0
+xoxs-12345-LEAKabc|||LEAKabc
+passphrase: LEAKphrase|||LEAKphrase
+private_key = LEAKk|||LEAKk
+PASSWORD=LEAKpw|||LEAKpw
+GET /x?password=LEAKpw&user=bob|||LEAKpw
+github_pat_AbCdEfGhIjKl|||AbCdEfGhIjKl
+AKIAABCDEFGHIJKLMNOP|||ABCDEFGHIJKLMNOP
+ATTACKS
+# placeholders and ordinary code stay byte-identical
+while IFS= read -r case_; do
+  [ -n "$case_" ] || continue
+  expect pass "redact-diff leaves a placeholder alone: $case_" sh -c 'printf "+%s\n" "$2" | "$1" | grep -qxF -- "+$2"' _ "$red" "$case_"
+done <<'PLACEHOLDERS'
+Authorization: Bearer ${TOKEN}
+Authorization: Bearer <token>
+Authorization: Bearer $TOKEN
+auth = "Bearer " + token
+f"Bearer {token}"
+password = $PASS
+token = get_token()
+secret = os.environ["X"]
+https://user:${PASS}@host/x
+password: <your-password>
+the task-list and sk-learn notes
+PLACEHOLDERS
 expect pass "redact-diff keeps the line count of the diff" test "$(wc -l < "$fx")" = "$(wc -l < "$tmp/secrets.out")"
 expect pass "redact-diff does not touch a word that merely contains sk-" sh -c 'printf "+x = task-description-for-the-user-that-is-long\n" | "$1" | grep -q "task-description-for-the-user-that-is-long"' _ "$red"
 printf 'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1,2 +1,2 @@\n keep one\n-old line\n+new line\n' > "$tmp/clean.diff"
