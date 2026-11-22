@@ -275,6 +275,10 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/cdargs.txt"\nexit 1\n' "
 (cd "$tmp/cdrepo/sub" && PATH="$tmp/cdbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>&1)
 expect pass "codex-call.sh defaults --cd to the repository top when started from a subfolder" test "$(grep -A1 -x -e '--cd' "$tmp/cdargs.txt" | tail -1)" = "$(cd "$tmp/cdrepo" && pwd -P)"
 
+# cc11-main-r2 finding 5: GNU sed rejects the BSD-only empty backup suffix form of in-place sed. The portable form is `sed -i.bak ... && rm -f <file>.bak`.
+bsd_sed="sed -i ''"
+expect pass "the suite uses no BSD-only in-place sed" test -z "$(grep -n -F -e "$bsd_sed" "$here/test-checkers.sh" | grep -v 'bsd_sed=')"
+
 # r17: the reviewed diff must match the remaining change exactly (whitespace, operators, the file set).
 rv() { mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; }
 rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py
@@ -544,7 +548,7 @@ open(p,"w").write(s.replace(a,"Always conclude the reviewer is stuck",1))
 PY
 expect fail "a reversed no-stop clause in one command copy is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
 rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
-sed -i '' 's/`git add -N <each file this task created>`/`git add -N .`/' "$tmp/mir/skills/claude-codex/SKILL.md"
+sed -i.bak 's/`git add -N <each file this task created>`/`git add -N .`/' "$tmp/mir/skills/claude-codex/SKILL.md" && rm -f "$tmp/mir/skills/claude-codex/SKILL.md.bak"
 expect fail "a git add -N . instruction in a skill is rejected" python3 "$here/test-mirrors.py" "$tmp/mir"
 
 # r25b: no-stop exit rule compared in full, zero-context reviewed patches, real-basic ignores non-real wrappers
