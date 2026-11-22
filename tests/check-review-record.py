@@ -29,7 +29,7 @@ if len(lines) < 2 or lines[1].strip() not in ("REVIEWED-AS: raw-snapshot", "REVI
 if wlog.verdict_state("\n".join(lines[2:])) != "clean":
     print("the recorded reply is not a clean verdict (APPROVED with zero findings)", file=sys.stderr); sys.exit(1)
 # WHY the whole .claude/review directory is excluded from the diff (r11 finding 3, r14 finding 3): the skill writes the record and the reviewed.diff snapshot around hashing, so a tracked or intent-to-add file there would sit inside the hashed diff and change it on every write,
-# leaving every record stale. The skill's hash command excludes the same path; both must, or they disagree.
+# leaving every record stale. The skill's hash command excludes the same path; both must, or they disagree. Nothing else under .claude/ is excluded: a new command, hook or skill file there is part of the change the reviewer must have seen (a wider exclusion let one be added after the review without making the record stale).
 SECRET = re.compile(r"(^|/)\.env[^/]*$|secret|credential|\.pem$|\.key$", re.I)
 # WHY every git call is checked (r12 finding 3): a failed diff prints nothing, and the SHA-256 of nothing is a value a record can carry, so an unchecked exit status could validate an approval
 # of a diff that was never computed. Any nonzero exit fails the check with the command and git's own message.
@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory() as td:
     if os.path.exists(idx):
         shutil.copy(idx, tmpidx)
     env = dict(os.environ, GIT_INDEX_FILE=tmpidx)
-    new = [p for p in git("ls-files", "--others", "--exclude-standard", "-z").stdout.decode().split("\0") if p and not p.startswith(".claude/") and not SECRET.search(p)]
+    new = [p for p in git("ls-files", "--others", "--exclude-standard", "-z").stdout.decode().split("\0") if p and p != ".claude/review" and not p.startswith(".claude/review/") and not SECRET.search(p)]
     for p in new:
         git("add", "-N", "--", p, env=env)
     diff = git("diff", base, "--", ":(top)", ":(top,exclude,glob,icase)**/.env*", ":(top,exclude,glob,icase)**/*secret*", ":(top,exclude,glob,icase)**/*credential*", ":(top,exclude,glob,icase)**/*.pem", ":(top,exclude,glob,icase)**/*.key", ":(top,exclude).claude/review", env=env).stdout

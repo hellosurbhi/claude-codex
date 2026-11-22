@@ -1638,6 +1638,13 @@ rrmk; H0="$(rrhash)"; RRAS="the tree" rrrec "$H0" "VERDICT: APPROVED\n"
 expectm fail "a record whose REVIEWED-AS is neither raw-snapshot nor redacted-snapshot is rejected" 'second line is not REVIEWED-AS' rr
 rrmk; H0="$(rrhash)"; mkdir -p "$tmp/rr/.claude/review"; printf 'REVIEWED-DIFF: %s\nVERDICT: APPROVED\n' "$H0" > "$tmp/rr/.claude/review/final-review.txt"
 expectm fail "a record with no REVIEWED-AS line is rejected" 'second line is not REVIEWED-AS' rr
+# r18 finding 2: only .claude/review is left out of the hashed diff; any other new file under .claude/ (a command, a hook, a skill) is part of what the reviewer must have seen
+rrmk; (cd "$tmp/rr" && git config core.excludesFile /dev/null); H0="$(rrhash)"; rrrec "$H0" "VERDICT: APPROVED\n"
+expect pass "control: a record for the current tree is accepted before a new .claude file exists" rr
+mkdir -p "$tmp/rr/.claude/commands"; printf 'run something\n' > "$tmp/rr/.claude/commands/x.md"
+expectm fail "a new untracked .claude/commands/x.md after the review makes the record stale" 'stale record' rr
+rrmk; (cd "$tmp/rr" && git config core.excludesFile /dev/null); H0="$(rrhash)"; rrrec "$H0" "VERDICT: APPROVED\n"; printf 'x\n' > "$tmp/rr/.claude/review/reviewed.diff"
+expect pass "a new file inside .claude/review (the snapshot itself) does not make the record stale" rr
 rrmk; rrstepx step1.sh; (cd "$tmp/rr" && sed "s/git diff HEAD/git diff $(git rev-list --max-parents=0 HEAD)/g; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED/" "$tmp/step2.sh" | bash >/dev/null 2>&1)
 expectm fail "a block run with the REVIEWED-AS placeholder left unedited records something the checker rejects" 'second line is not REVIEWED-AS' rr
 # r14 hostile read: a reviewer reply that contains the old heredoc terminator line must not end the record early and run the rest of the reply as shell commands
