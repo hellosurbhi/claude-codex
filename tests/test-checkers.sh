@@ -475,6 +475,72 @@ expect pass "a password after the END line text of a multi-line key is masked" s
 expect pass "the key body lines of a multi-line key are masked" sh -c 'o="$(printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY-----" | "$1")"; printf "%s\n" "$o" | grep -qF "[REDACTED" && ! printf "%s\n" "$o" | grep -qF -- KEYBODYLINE' _ "$red"
 expect pass "text after a multi-line key block is processed normally again" sh -c 'printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY-----" "+x = 1" | "$1" | grep -qxF -- "+x = 1"' _ "$red"
 expect pass "a file header line carrying a credential is masked too" sh -c 'o="$(printf "%s\n" "diff --git a/x b/y password=LEAKhdr" | "$1")"; printf "%s\n" "$o" | grep -qF "[REDACTED" && ! printf "%s\n" "$o" | grep -qF -- LEAKhdr' _ "$red"
+# r18 finding 1: the private-key state is kept per side of the diff (old = "-" lines, new = "+" lines, a context line is both), so a key whose BEGIN is context and whose END is rewritten on one side does not unmask the other side
+expect pass "redact-diff masks private keys with separate old-side and new-side state, resets at hunk and file headers, and masks a combined diff to the hunk end" python3 - "$red" <<'PYK'
+import itertools, subprocess, sys
+red = sys.argv[1]
+def run(lines):
+    return subprocess.run([red], input="\n".join(lines) + "\n", capture_output=True, text=True).stdout.split("\n")[:len(lines)]
+fails = []
+# the reviewer's exact shape: BEGIN kept as context, the body replaced, the END line reformatted
+L = [" -----BEGIN PRIVATE KEY-----", "-OLDBODYLEAK", "------END PRIVATE KEY-----", "+NEWBODYLEAK", "+-----END PRIVATE KEY-----", "+x = 1"]
+o = run(["@@ -1,4 +1,4 @@"] + L)
+for tok in ("OLDBODYLEAK", "NEWBODYLEAK"):
+    if any(tok in x for x in o): fails.append("exact shape leaks " + tok)
+if o[-1] != "+x = 1": fails.append("text after both ENDs not back to normal: " + o[-1])
+# interleaved old and new bodies, each side with its own END
+L = ["------BEGIN PRIVATE KEY-----", "-OLD1", "+-----BEGIN PRIVATE KEY-----", "-OLD2", "+NEW1", "------END PRIVATE KEY-----", "+NEW2", "+-----END PRIVATE KEY-----"]
+o = run(["@@ -1 +1 @@"] + L)
+for tok in ("OLD1", "OLD2", "NEW1", "NEW2"):
+    if any(tok in x for x in o): fails.append("interleaved leaks " + tok)
+# a key opened on one side and never closed stays masked on that side only, and the next hunk header resets it
+o = run(["@@ -1 +1 @@", "------BEGIN PRIVATE KEY-----", "-OLDONLY", "+NEWPLAIN", "@@ -9 +9 @@", "-AFTERRESET", "+AFTERRESET2"])
+if "OLDONLY" in o[2]: fails.append("one-sided key leaks its body")
+if o[3] != "+NEWPLAIN": fails.append("new side masked although only the old side opened a key: " + o[3])
+if o[5] != "-AFTERRESET" or o[6] != "+AFTERRESET2": fails.append("hunk header did not reset the key state")
+o = run(["@@ -1 +1 @@", " -----BEGIN PRIVATE KEY-----", "diff --git a/y b/y", "@@ -1 +1 @@", "+PLAINAFTER"])
+if o[-1] != "+PLAINAFTER": fails.append("file header did not reset the key state")
+# combined diff (two prefix columns): masked from BEGIN to the hunk end, closed only by an END on a line with no change marker
+o = run(["@@@ -1,3 -1,3 +1,3 @@@", "  -----BEGIN PRIVATE KEY-----", "- CBODY1", " +CBODY2", "++-----END PRIVATE KEY-----", " +CBODY3", "  -----END PRIVATE KEY-----", "  x = 1"])
+for i, tok in ((2, "CBODY1"), (3, "CBODY2"), (5, "CBODY3")):
+    if tok in o[i]: fails.append("combined diff leaks " + tok)
+if o[-1] != "  x = 1": fails.append("combined diff did not close on the context END: " + o[-1])
+# every key shape x every side prefix for BEGIN, body, body, END, body: a body line is masked exactly when one of its sides is inside the key
+shapes = ["PRIVATE KEY", "RSA PRIVATE KEY", "OPENSSH PRIVATE KEY", "PGP PRIVATE KEY BLOCK"]
+side = {"-": ("o",), "+": ("n",), " ": ("o", "n")}
+cases = []; want = []
+for shape in shapes:
+    for n in (3, 4, 5):
+        kinds = ["B"] + ["b"] * (n - 2) + ["E", "b"]
+        for pf in itertools.product("-+ ", repeat=len(kinds)):
+            st = {"o": 0, "n": 0}; k = 0
+            cases.append("@@ -1 +1 @@")
+            want.append(None)
+            for kd, p in zip(kinds, pf):
+                k += 1
+                inside = any(st[s] for s in side[p])
+                if kd == "B": text = "-----BEGIN %s-----" % shape; w = None
+                elif kd == "E": text = "-----END %s-----" % shape; w = None
+                else: text = "LEAKBODY%d" % len(cases); w = inside
+                cases.append(p + text); want.append((w, text))
+                if kd == "B":
+                    for s in side[p]: st[s] = 1
+                elif kd == "E":
+                    for s in side[p]: st[s] = 0
+out = subprocess.run([red], input="\n".join(cases) + "\n", capture_output=True, text=True).stdout.split("\n")
+bad = 0
+for ln, o, w in zip(cases, out, want):
+    if w is None or w[0] is None: continue
+    if w[0] and w[1] in o:
+        bad += 1
+        if bad <= 10: print("LEAK:", ln, file=sys.stderr)
+    if (not w[0]) and o != ln:
+        bad += 1
+        if bad <= 10: print("OVERMASK:", ln, "->", o, file=sys.stderr)
+for f in fails: print("FAIL:", f, file=sys.stderr)
+print(len(cases), "lines,", bad, "bad,", len(fails), "named failures", file=sys.stderr)
+sys.exit(1 if bad or fails else 0)
+PYK
 # every pair of attack shapes on one line, both orders: neither secret may survive (no rule may skip the others)
 expect pass "redact-diff masks every pair of attack shapes combined on one line, in both orders" python3 - "$red" "$tmp/attacks.txt" <<'PYX'
 import subprocess, sys

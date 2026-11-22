@@ -11,7 +11,7 @@
 # for a non-alphanumeric character before it (otherwise "task-description-long-enough" would be mangled); bash 3.2 and BSD awk compatible (no
 # interval expressions, no gawk extensions).
 # COVERED (the value is replaced, the rest of the line is kept):
-#   - private key blocks (PEM, OpenSSH, PGP), including a block that starts and ends on one line; the text outside a block on its BEGIN and END lines goes through every
+#   - private key blocks (PEM, OpenSSH, PGP; tracked per diff side, old and new, and conservatively in a combined diff), including a block that starts and ends on one line; the text outside a block on its BEGIN and END lines goes through every
 #     other rule, and so does every file header line (a path can carry a credential); no rule prints a line early;
 #   - AKIA and ASIA access keys, ghp_ gho_ ghu_ ghs_ ghr_ and github_pat_ tokens, sk- keys, xoxa xoxb xoxp xoxs xoxr xoxo tokens and JWTs
 #     (these prefixed shapes are masked from a short length up; they are matched only when not glued to a preceding letter or digit);
@@ -110,12 +110,13 @@ function assign(s,   k, ch, ls, out, hs, hl, head, rest, c, q, e, val, tail, lea
   }
   return out s
 }
-# private key blocks: the text between BEGIN and END (a whole line while inside a block) becomes one marker, the text outside it is returned for the other rules. State is kept in inkey across lines.
-function keys(s,   out, rest) {
+# private key blocks: the text between BEGIN and END (a whole line while inside a block) becomes one marker, the text outside it is returned for the other rules. State is kept in inkey across lines
+# (the main block loads inkey from the side the line belongs to and saves it back; canclose is 0 only in a combined diff, see there).
+function keys(s, canclose,   out, rest) {
   out = ""
   while (1) {
     if (inkey) {
-      if (match(s, KEYE)) { out = out "[REDACTED:private-key]"; s = substr(s, RSTART + RLENGTH); inkey = 0; continue }
+      if (canclose && match(s, KEYE)) { out = out "[REDACTED:private-key]"; s = substr(s, RSTART + RLENGTH); inkey = 0; continue }
       return out "[REDACTED:private-key]"
     }
     if (!match(s, KEYB)) return out s
@@ -128,17 +129,29 @@ BEGIN {
   KW = "(password|passwd|passphrase|secret|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)[a-z0-9_-]*[\"\047]?[[:space:]]*[:=]+>?[[:space:]]*"
   KEYB = "-----BEGIN [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----"
   KEYE = "-----END [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----"
-  inkey = 0; inhdr = 0
+  inkey = 0; ko = 0; kn = 0; comb = 0; inhdr = 0
 }
 {
   line = $0
   # WHY no rule prints early (r14 finding 2): every line runs through every rule in sequence and is printed once, at the end. An early print after the key-block rule, the header rule or the
   # END-line rule skipped the remaining redactors, so a password or token elsewhere on the same line survived. File header lines run the credential rules too (a path can carry one) but never open a key block.
-  if (line ~ /^diff --git /) { inhdr = 1; inkey = 0 }
-  else if (line ~ /^@@/) { inhdr = 0; inkey = 0 }
+  if (line ~ /^diff --(git|cc|combined) /) { inhdr = 1; ko = 0; kn = 0; comb = 0 }
+  else if (line ~ /^@@/) { inhdr = 0; ko = 0; kn = 0; comb = (line ~ /^@@@/) }
   if (!inhdr) {
-    pfx = (substr(line, 1, 1) ~ /[-+ ]/) ? substr(line, 1, 1) : ""
-    line = pfx keys(substr(line, length(pfx) + 1))
+    # WHY the key state is per side (r18 finding 1): a unified diff interleaves two files. A "-" line belongs to the old file and a "+" line to the new one, a " " line to both. One shared state let an END on a
+    # "-" line close the key for the "+" body lines that follow it (a context BEGIN, a replaced body and a reformatted END leaked the whole new key). Now "-" lines read and write ko, "+" lines kn, and a context
+    # line (or a line with no prefix) runs on both states (when the sides differ, both are advanced separately and the result of the side that was inside the key is printed), so a context BEGIN opens both sides and a context END closes both. A hunk header or a
+    # file header resets both; they are tested only on an unprefixed line, so a body line cannot fake one. Not reset on "--- " or "+++ ": a removed line "-- x" prints as "--- x".
+    # WHY a combined diff (diff --cc, @@@ hunks, two prefix columns) is masked conservatively: its columns are one per parent, so the two-sided model above does not apply. From a BEGIN the block stays
+    # masked, whole lines, until an END on a line whose prefix is all spaces, or until the next hunk header; an END on a changed line never closes it. That can over-mask the rest of a hunk, never under-mask.
+    plen = comb ? 2 : 1
+    pfx = (substr(line, 1, plen) ~ /^[-+ ]+$/) ? substr(line, 1, plen) : ""
+    body = substr(line, length(pfx) + 1)
+    if (comb) { inkey = ko; line = pfx keys(body, pfx ~ /^ *$/); ko = inkey; kn = inkey }
+    else if (pfx == "-") { inkey = ko; line = pfx keys(body, 1); ko = inkey }
+    else if (pfx == "+") { inkey = kn; line = pfx keys(body, 1); kn = inkey }
+    else if (ko == kn) { inkey = ko; line = pfx keys(body, 1); ko = inkey; kn = inkey }
+    else { was = ko; inkey = ko; ro = keys(body, 1); ko = inkey; inkey = kn; rn = keys(body, 1); kn = inkey; line = pfx (was ? ro : rn) }
   }
   line = tok(line, "(AKIA|ASIA)[0-9A-Z]+", "", "[REDACTED:aws-key]", 16, 0)
   line = tok(line, "gh[pousr]_[A-Za-z0-9]+", "", "[REDACTED:github-token]", 12, 0)
