@@ -9,4 +9,6 @@ if sys.argv[2] == "thread":
     ok = any(e["exit"] == 0 and re.search(r"^THREAD_ID: [0-9a-f-]{8,}", e["stdout"], re.M) for e in evs)
 else:
     ok = any(wlog.valid_verdict(e) for e in evs)
+if not ok:
+    print("REJECT: no real wrapper execution with %s" % ("a THREAD_ID line" if sys.argv[2] == "thread" else "a single valid VERDICT"), file=sys.stderr)
 sys.exit(0 if ok else 1)

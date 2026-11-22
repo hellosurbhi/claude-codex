@@ -26,4 +26,5 @@ for i, e in enumerate(evs):
             sys.exit(0)
     elif wlog.valid_verdict(e):
         sys.exit(0)
+print("REJECT: no valid --resume execution of an id the wrapper issued earlier", file=sys.stderr)
 sys.exit(1)

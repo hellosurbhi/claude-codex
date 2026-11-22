@@ -11,6 +11,8 @@ code = (
 try:
     # WHY the sentinel (CodeRabbit r42): exit 0 alone is not proof the asserts ran, since module code may call os._exit(0) or sys.exit(0) on import.
     r = subprocess.run([sys.executable, "-I", "-c", code, sys.argv[1]], timeout=10, capture_output=True)
-    sys.exit(0 if r.returncode == 0 and r.stdout.rstrip().endswith(b"CHECKS-DONE") else 1)
-except (subprocess.TimeoutExpired, OSError):
-    sys.exit(1)
+    if not (r.returncode == 0 and r.stdout.rstrip().endswith(b"CHECKS-DONE")):
+        print("REJECT: add() failed its checks (exit %d, sentinel %s)" % (r.returncode, "present" if b"CHECKS-DONE" in r.stdout else "missing"), file=sys.stderr); sys.exit(1)
+    sys.exit(0)
+except (subprocess.TimeoutExpired, OSError) as exc:
+    print("REJECT: the add() check could not run: %s" % type(exc).__name__, file=sys.stderr); sys.exit(1)

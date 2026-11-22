@@ -3,4 +3,6 @@
 import sys
 import wlog
 evs = [e for e in wlog.load(sys.argv[1]) if e["wrapper"] in ("fake", "real")]
-sys.exit(0 if wlog.limit_index(evs) is not None else 1)
+if wlog.limit_index(evs) is None:
+    print("REJECT: no real wrapper execution hit the usage limit", file=sys.stderr); sys.exit(1)
+sys.exit(0)

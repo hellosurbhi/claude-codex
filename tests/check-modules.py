@@ -22,6 +22,8 @@ print('CHECKS-DONE')
 try:
     # WHY the sentinel (CodeRabbit r43): exit 0 alone is not proof the checks ran (a module may exit 0 on import).
     r = subprocess.run([sys.executable, "-I", "-c", code, repo], timeout=30, capture_output=True)
-    sys.exit(0 if r.returncode == 0 and r.stdout.rstrip().endswith(b"CHECKS-DONE") else 1)
-except (subprocess.TimeoutExpired, OSError):
-    sys.exit(1)
+    if not (r.returncode == 0 and r.stdout.rstrip().endswith(b"CHECKS-DONE")):
+        print("REJECT: the four modules failed their checks (exit %d, sentinel %s)" % (r.returncode, "present" if b"CHECKS-DONE" in r.stdout else "missing"), file=sys.stderr); sys.exit(1)
+    sys.exit(0)
+except (subprocess.TimeoutExpired, OSError) as exc:
+    print("REJECT: the module checks could not run: %s" % type(exc).__name__, file=sys.stderr); sys.exit(1)

@@ -72,6 +72,11 @@ def patch_sections(lines, names):
         out.append(sc)
     return out
 
+def reject(why):
+    # WHY a printed reason (round 15 finding 1): a silent nonzero exit lets a negative test pass for any cause, a crash included; the reason is what the test asserts on.
+    print("REJECT: " + why, file=sys.stderr)
+    sys.exit(1)
+
 args = sys.argv[1:]
 evs = wlog.load(args[0])
 phase = args[args.index("--phase") + 1] if "--phase" in args else None
@@ -81,7 +86,7 @@ context = "--context" in args
 non_spy = [e for e in evs if e["wrapper"] != "spy"]
 li = wlog.limit_index(non_spy)
 if li is None:
-    sys.exit(1)
+    reject('no quota-limit event in the log')
 limit_done = non_spy[li]["ts"]
 # WHY by start time: a review that began before the quota reply was not a reaction to it, even if it finished later.
 # WHY the LAST review by START time decides: an older approval that merely finished later must not override a newer
@@ -92,31 +97,31 @@ valid_spy = lambda e: len(e["argv"]) >= 3 and e["argv"][0] in ("E", "R", "S") an
 # review, so it must stay in the list and decide; filtering it out let the older approval pass without a retry.
 spies = sorted((e for e in evs if e["wrapper"] == "spy" and (e["argv"] or [""])[0] != "diagnose" and e.get("ts_start", e["ts"]) >= limit_done), key=lambda e: e.get("ts_start", e["ts"]))
 if not spies or not valid_spy(spies[-1]) or not wlog.is_clean(spies[-1]):
-    sys.exit(1)
+    reject('no valid reviewer call after the quota hit, or the last one is not clean')
 if phase is not None and spies[-1]["phase"] != phase:
-    sys.exit(1)
+    reject('the last reviewer call ran in another phase')
 # WHY production decides validity (r38): the launcher ran the REAL reviewer.sh, which already rejected a bad tier, a missing
 # base, an unusable input or an outage (non-zero exit, no clean verdict). This checker only joins the launcher event to the fake
 # model binaries production called (same run id) and asserts WHICH model accepted, with which tier, base and reviewed content.
 run = (spies[-1].get("meta") or {}).get("run")
 models = [e for e in evs if e["wrapper"] == "model" and run and (e.get("meta") or {}).get("run") == run and e["exit"] == 0 and (e.get("meta") or {}).get("bin") in ("claude", "coderabbit")]
 if len(models) != 1:
-    sys.exit(1)
+    reject('not exactly one accepted model call for the launcher run')
 model = models[0]
 mm = model.get("meta") or {}
 tier = spies[-1]["argv"][0]
 spy_in = spies[-1].get("input_text") or ""
 if mm.get("tier") != tier:
-    sys.exit(1)
+    reject('the model call used another tier than the launcher')
 # WHY argv (r41): the fake answers whatever it is called with, so a non-review call must be rejected from what production passed.
 margv = model.get("argv") or []
 if any(a in ("--version", "-v", "--help", "-h") for a in margv) or (mm["bin"] == "claude" and "-p" not in margv):
-    sys.exit(1)
+    reject('the model call was not a review (version or help probe, or claude without -p)')
 if mm["bin"] == "claude":
     # Sonnet reviewed the input file itself, so its prompt must carry the whole input verbatim.
     # WHY rstrip: reviewer.sh builds the prompt with command substitution, which drops trailing newlines.
     if not spy_in.strip() or spy_in.rstrip("\n") not in (model.get("input_text") or ""):
-        sys.exit(1)
+        reject('the review prompt does not carry the input file verbatim')
 def heads_in_order(text, heads):
     # each heading alone on its own line, in this order, and the first section after the first heading holds some text
     pos = -1
@@ -128,34 +133,34 @@ def heads_in_order(text, heads):
     return True
 if context and plan is None and not (heads_in_order(spy_in, ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "OPEN FINDINGS:", "DIFF:"]) and re.search(r"^TASK REQUIREMENTS:[ \t]*\n[ \t]*[^\s<]", spy_in, re.M)):
     # WHY a non-empty requirements text that is not the angle-bracket template placeholder: a context file whose requirements were left as the template carries no requirement at all
-    sys.exit(1)
+    reject('the context input lacks the required sections in order or has a template requirements text')
 if plan is not None:
     # WHY tier S and the full file content: production tier R reviews committed repository state, not a plan file.
     if tier != "S" or mm["bin"] != "claude":
-        sys.exit(1)
+        reject('a plan review must be tier S through claude')
     if not os.path.isfile(plan) or os.path.getsize(plan) == 0:
-        sys.exit(1)
+        reject('the plan file is missing or empty')
     data = open(plan, "rb").read()
     # WHY containment, not a digest of the whole input (r9 finding 2): the prescribed fallback input is the audit instructions and open findings FOLLOWED BY the plan, so the input is
     # never byte-equal to the plan file; the plan text must still appear in full (a stale, edited or truncated plan is not contained) and the spy must have logged the same text.
     ptxt = data.decode("utf-8", "surrogateescape").rstrip("\n")
     if ptxt not in spy_in or ptxt not in (model.get("input_text") or ""):
-        sys.exit(1)
+        reject('the reviewed input does not contain the current plan text')
     if context and not (heads_in_order(spy_in, ["AUDIT INSTRUCTIONS:", "OPEN FINDINGS:", "PLAN:"]) and spy_in.rstrip("\n").endswith(ptxt)):
-        sys.exit(1)
+        reject('the plan context input lacks its sections in order or the plan is not last')
 # WHY a checked git helper (r12 finding 3): an unchecked failing git call prints nothing, and that empty result (no root commit, no head, no status lines) is accepted by the comparisons below as if it were a real answer.
 # A repo with no commit yet legitimately has no root commit, so only a repo that HAS a HEAD must answer rev-list.
 def G(*a, text=True):
     r = subprocess.run(["git", "-C", repo] + list(a), capture_output=True, text=text)
     if r.returncode != 0:
-        sys.exit(1)
+        reject('a git call failed')
     return r.stdout
 if repo is not None:
     # WHY an exact digest of the final .py files: the review must cover exactly the code that remains (all modules, paths,
     # indentation and deletions included), so any edit after the approval fails (r15).
     final = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "treehash.py"), repo], capture_output=True, text=True).stdout.strip()
     if not final or spies[-1].get("tree_sha256") != final:
-        sys.exit(1)
+        reject('the code tree changed after the reviewed state')
     # WHY exact per-file changes: the digest pins the code state at review time, but a stale or partial diff would still be
     # "approved". The reviewed input must hold, for every changed .py file and for no other, exactly the added and removed
     # lines (order, indentation and operators intact, only the one-character diff prefix removed) that turn the first
@@ -189,7 +194,7 @@ if repo is not None:
         av = model.get("argv") or []
         kind = av[av.index("-t") + 1] if "-t" in av[:-1] else None
         if "review" not in av or kind != "committed" or "--base" not in av:
-            sys.exit(1)
+            reject('the coderabbit call was not a committed review against a base')
         # WHY committed state (r38): production tier R/E reviewed `git diff <base> HEAD`, never the input file. It must have run on a
         # clean tracked tree, at the repo's current HEAD, against a base that adds no .py change beyond the root commit's.
         head = G("rev-parse", "HEAD").strip()
@@ -198,28 +203,28 @@ if repo is not None:
         # committed diff cannot have covered it (r39).
         if [l for l in G("status", "--porcelain", "--ignored", "-uall", "--", "*.py").splitlines() if l[:2] in ("??", "!!") and not re.search(r"(^|/)(node_modules|\.claude|__pycache__|\.pytest_cache)/", l[3:])] or \
            G("status", "--porcelain", "--untracked-files=no").strip():
-            sys.exit(1)
+            reject('the repo has untracked or modified python files the committed review could not cover')
         # WHY the model-time digest (CodeRabbit r47): the launcher digest is taken at call start, so the code state CodeRabbit really saw must match it too.
         if mm.get("tree") in (None, "none", "") or mm.get("tree") != spies[-1].get("tree_sha256"):
-            sys.exit(1)
+            reject('the coderabbit tree digest does not match the launcher digest')
         if mm.get("dirty") != "0" or mm.get("head") != head or mm.get("base") in (None, "none", "") or not rootc:
-            sys.exit(1)
+            reject('the coderabbit call was dirty, at another head or had no base')
         if subprocess.run(["git", "-C", repo, "diff", "--quiet", rootc, mm["base"], "--", "*.py"]).returncode != 0:
-            sys.exit(1)
+            reject('the coderabbit base adds python changes beyond the root commit')
         # WHY bytes (r41): text=True would turn CRLF into LF while the model event keeps the carriage returns.
         want = G("diff", "--no-color", mm["base"], head, text=False).decode("utf-8", "surrogateescape")
         if want != (model.get("input_text") or ""):
-            sys.exit(1)
+            reject('the coderabbit input is not the committed diff')
         sys.exit(0)
     got = reviewed_changes((spies[-1].get("input_text") or "").split("\n"))
     if set(got) != set(expected) or any(got[n] != expected[n] for n in expected):
-        sys.exit(1)
+        reject('the reviewed changes differ from the code that remains')
     # WHY apply the reviewed patch: matching added/removed lines alone accepts a stale patch whose lines sit at other
     # locations or in other context. Applying the full patch (hunk headers and context included) to the baseline must
     # reproduce every final .py file exactly (r20).
     secs = patch_sections((spies[-1].get("input_text") or "").split("\n"), names)
     if secs is None:
-        sys.exit(1)
+        reject('the reviewed patch is malformed or names files outside the repo')
     with tempfile.TemporaryDirectory() as d:
         for name in names:
             base = b""
@@ -236,10 +241,10 @@ if repo is not None:
             # WHY --unidiff-zero: a reviewer may legitimately be shown a -U0 diff; the byte comparison below still guards the result (r25b).
             r = subprocess.run(["git", "apply", "-p1", "--whitespace=nowarn", "--unidiff-zero", "-"], input=patch.encode("utf-8", "surrogateescape"), cwd=d, capture_output=True)
             if r.returncode != 0:
-                sys.exit(1)
+                reject('the reviewed patch does not apply to the baseline')
         for name in names:
             p2 = os.path.join(repo, name)
             q = os.path.join(d, name)
             if os.path.isfile(p2) != os.path.isfile(q) or (os.path.isfile(p2) and open(p2, "rb").read() != open(q, "rb").read()):
-                sys.exit(1)
+                reject('the patched baseline differs from the final files')
 sys.exit(0)

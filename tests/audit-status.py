@@ -10,10 +10,10 @@ lines = [l.rstrip() for l in open(args[0], encoding="utf-8", errors="replace").r
 nonblank = [l for l in lines if l.strip()]
 status = [l for l in nonblank if l.startswith("AUDIT-STATUS:")]
 if len(status) != 1 or nonblank[-1] != status[0]:
-    sys.exit(1)
+    print("REJECT: the report needs exactly one AUDIT-STATUS line and it must be the last non-blank line (found %d)" % len(status), file=sys.stderr); sys.exit(1)
 m = re.fullmatch(r"AUDIT-STATUS: (APPROVED|UNREVIEWED) reviewer=(\S.*)", status[0])
 if not m:
-    sys.exit(1)
+    print("REJECT: the AUDIT-STATUS line is malformed", file=sys.stderr); sys.exit(1)
 if "--expect" in args and m.group(1) != args[args.index("--expect") + 1]:
-    sys.exit(1)
+    print("REJECT: the status is %s, not the expected one" % m.group(1), file=sys.stderr); sys.exit(1)
 print(m.group(1))

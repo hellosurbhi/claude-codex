@@ -15,6 +15,8 @@ if mode == "rounds":
     for e in evs:
         if e["exit"] == 0 and e.get("meta", {}).get("round") == str(k + 1):
             k += 1
+    if k != int(sys.argv[3]):
+        print("REJECT: finding rounds 1..%s did not all appear in order (reached %d)" % (sys.argv[3], k), file=sys.stderr)
     sys.exit(0 if k == int(sys.argv[3]) else 1)
 if mode == "final" and "--audit" in sys.argv:
     # tdd-execute-codex (r10 finding 2, r11 finding 2): Codex only AUDITS the tests there (a Claude agent reviews the implementation). The LATEST audit attempt must
@@ -25,11 +27,14 @@ if mode == "final" and "--audit" in sys.argv:
     a = [e for e in evs if e.get("meta", {}).get("audit") == "yes"]
     # WHY start == end state (r13 finding 2): a file edited while the audit ran must not inherit the audit's approval.
     am = a[-1].get("meta", {}) if a else {}
-    sys.exit(0 if a and a[-1]["exit"] == 0 and wlog.is_clean(a[-1]) and am.get("state") and am.get("endstate") == am.get("state") else 1)
+    good = bool(a and a[-1]["exit"] == 0 and wlog.is_clean(a[-1]) and am.get("state") and am.get("endstate") == am.get("state"))
+    if not good:
+        print("REJECT: the last test audit is %s" % ("missing" if not a else "not a clean exit-0 verdict bound to one state"), file=sys.stderr)
+    sys.exit(0 if good else 1)
 if mode == "final":
     # the LAST execution is a clean reply, given for the state the run ended in (and, with --impl, after add() existed)
     if not evs:
-        sys.exit(1)
+        print("REJECT: no reviewer execution in the log", file=sys.stderr); sys.exit(1)
     last = evs[-1]
     m = last.get("meta", {})
     ok = last["exit"] == 0 and wlog.is_clean(last) and (REAL or m.get("result") == "CLEAN") and m.get("state") == sys.argv[3]
@@ -39,10 +44,15 @@ if mode == "final":
         ok = ok and m.get("endstate") == m.get("state")
     if "--impl" in sys.argv:
         ok = ok and m.get("impl") == "yes"
+    if not ok:
+        print("REJECT: the last execution is not a clean verdict for the final state%s" % (" with a stable start and verdict state" if REAL else ""), file=sys.stderr)
     sys.exit(0 if ok else 1)
 if mode == "failfirst":
     n = int(sys.argv[3])
     # the first N executions returned no valid verdict, the very next one did, and every later one did too
     bad = [wlog.valid_verdict(e) is None for e in evs]
-    sys.exit(0 if len(evs) > n and all(bad[:n]) and not any(bad[n:]) else 1)
+    good = len(evs) > n and all(bad[:n]) and not any(bad[n:])
+    if not good:
+        print("REJECT: the first %d executions were not all invalid followed only by valid ones" % n, file=sys.stderr)
+    sys.exit(0 if good else 1)
 sys.exit(2)

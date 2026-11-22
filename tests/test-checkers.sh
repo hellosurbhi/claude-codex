@@ -34,9 +34,26 @@ bad() { echo "FAIL: $1"; fail=1; }
 # a spy call in the same run, which hid unrelated secret-guard, CI-config and wrapper checks in public CI. The self-test at the end fails when a
 # named non-spy case did not run, so a case wrongly written as expect_spy cannot hide.
 skipped=0; plain_ran=0; ran_names=""
-expect_run() { local want="$1" name="$2"; shift 2; "$@" >/dev/null 2>&1; local rc=$?; plain_ran=$((plain_ran+1)); if { [[ $want == pass && $rc -eq 0 ]] || [[ $want == fail && $rc -ne 0 ]]; }; then ran_names+="$name"$'\n'; ok "$name"; else bad "$name (rc=$rc, wanted $want)"; fi; }
+# round 15 finding 1: a negative case passes only for the INTENDED reason. expect_run keeps the combined output; a `fail` case is refused when the output
+# shows a crash (traceback, missing file, unset variable, command not found) instead of a verdict, and expectm also demands its message regex.
+# WHY the crash list: a checker that dies on a missing fixture exits nonzero exactly like one that rejects the input, so a bare exit-code check
+# passes vacuously (the README.md fixture bug). EXPECT_DUMP=<file> appends each negative case and its first output line, to write new regexes from.
+crashre='Traceback \(most recent|FileNotFoundError|No such file or directory|command not found|unbound variable|syntax error|IndexError|KeyError'
+expect_run() { local want="$1" name="$2" out rc; shift 2; out="$("$@" 2>&1)"; rc=$?; plain_ran=$((plain_ran+1))
+  [[ -n "${EXPECT_DUMP:-}" && $want == fail ]] && printf '%s\t%s\n' "$name" "$(head -n1 <<<"$out" | cut -c1-200)" >> "$EXPECT_DUMP"
+  if [[ $want == pass && $rc -eq 0 ]] || { [[ $want == fail && $rc -ne 0 ]] && ! grep -Eq -- "$crashre" <<<"$out" && { [[ -z "${want_re:-}" ]] || grep -Eq -- "$want_re" <<<"$out"; }; }; then ran_names+="$name"$'\n'; ok "$name"
+  else bad "$name (rc=$rc, wanted $want${want_re:+ matching /$want_re/}; got: $(head -c 240 <<<"$out" | tr '\n' ' '))"; fi; }
+expectm_spy() { if [[ -n "${CHECKERS_NO_SPY:-}" ]]; then skipped=$((skipped+1)); echo "SKIP: $2"; return 0; fi; expectm "$@"; }
+expectm() { local want="$1" name="$2" re="$3"; shift 3; want_re="$re" expect_run "$want" "$name" "$@"; }
 expect() { expect_run "$@"; }
 expect_spy() { if [[ -n "${CHECKERS_NO_SPY:-}" ]]; then skipped=$((skipped+1)); echo "SKIP: $2"; return 0; fi; expect_run "$@"; }
+# round 15 finding 1: a negative mirror case must fail for the INTENDED reason. test-mirrors.py opens README.md, so a fixture without it dies on
+# FileNotFoundError and every `expect fail` passes vacuously. mirfresh builds a complete fixture and proves the pristine copy passes first; mirneg
+# demands the expected message and refuses a crash.
+mirn=0
+mirfresh() { rm -rf "$1"; mkdir -p "$1"; cp -R "$here/../skills" "$here/../commands" "$here/../README.md" "$1/"; mirn=$((mirn+1)); expect pass "the pristine fixture $mirn passes before its mutation" python3 "$here/test-mirrors.py" "$1"; }
+mirneg() { local name="$1" re="$2" dir="$3" out rc; out="$(python3 "$here/test-mirrors.py" "$dir" 2>&1)"; rc=$?; plain_ran=$((plain_ran+1))
+  if [[ $rc -ne 0 ]] && grep -Eq -- "$re" <<<"$out" && ! grep -Eq 'Traceback|FileNotFoundError' <<<"$out"; then ran_names+="$name"$'\n'; ok "$name"; else bad "$name (rc=$rc, wanted /$re/ and no crash; got: $(head -c 300 <<<"$out" | tr '\n' ' '))"; fi; }
 # cc11-main-r2 finding 6: the python3 timeout stand-in must kill the whole process group, not only its child, or a timed-out launcher leaves reviewer and tee processes running.
 mkdir -p "$tmp/tmo"; rm -f "$tmp/tmo/gpid"
 TMO_FORCE_PY=1 tmo 1 bash -c 'sleep 60 & echo $! > "$1"; wait' _ "$tmp/tmo/gpid" >/dev/null 2>&1; tmo_rc=$?
@@ -79,22 +96,22 @@ LIMIT='codex-call: Codex turn did not complete\nERROR: You have hit your usage l
 
 # (r11 a) a tests-only review after the quota hit is not the implementation review.
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 tests "$CLEANR"
-expect fail "tests-only reviewer after the quota hit is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+expectm fail "tests-only reviewer after the quota hit is rejected" 'REJECT: the last reviewer call ran in another ph' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 line spy 0 implementation "$CLEANR"
 expect pass "a later clean implementation review is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 mkrun; line spy 0 implementation "$CLEANR"; line fake 1 unknown "$LIMIT"
-expect fail "a review that ran BEFORE the quota hit does not count" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+expectm fail "a review that ran BEFORE the quota hit does not count" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 
 # (r11 e) extra finding text after the five clean lines is not clean.
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "${CLEAN}HIGH: add() mishandles floats\n"
-expect fail "clean lines followed by extra finding text are rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+expectm fail "clean lines followed by extra finding text are rejected" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\nAlso: rename x\n'
-expect fail "clean lines followed by any extra line are rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+expectm fail "clean lines followed by any extra line are rejected" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 
 # (r11 b) a thread id the wrapper never issued (a quoted example in the transcript) cannot seed a resume.
 mkrun; cd "$tmp/run/repo"
 bash "$fake" --resume 01a1d2dc-5af3-7192-9860-6e8ea8ed1425 "follow up" >/dev/null 2>&1
-expect fail "resuming an id the wrapper never issued fails and does not count" python3 "$here/check-resume.py" "$EVLOG"
+expectm fail "resuming an id the wrapper never issued fails and does not count" 'REJECT: no valid --resume execution of an id the' python3 "$here/check-resume.py" "$EVLOG"
 expect pass "the wrapper refused the unknown thread (exit 1, logged)" test "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; e = wlog.load(sys.argv[2]); print(len(e), e[0]["exit"])' "$here" "$EVLOG")" = "1 1"
 
 # (r11 c) a resume through a shell variable and several wrapper runs in one command are real executions.
@@ -139,16 +156,16 @@ PYT
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; retime 0:9:10 1:11:20
 expect pass "control: a review that started after the quota reply and finished later is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; retime 0:9:10 1:5:20
-expect fail "a review that started before the quota reply but finished after is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+expectm fail "a review that started before the quota reply but finished after is rejected" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 # THREAD_ID text inside a spy reply is extra text, not a transport line.
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation "THREAD_ID: abc\n$CLEAN"
-expect fail "a THREAD_ID line inside a reviewer reply breaks clean" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+expectm fail "a THREAD_ID line inside a reviewer reply breaks clean" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 # plan-codex: the clean review must be of the current non-empty plan file.
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 plan "$CLEANR"
 : > "$tmp/plan.md"
-expect fail "an empty plan file never satisfies the plan review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+expectm fail "an empty plan file never satisfies the plan review" 'REJECT: the plan file is missing or empty' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 printf 'the plan\n' > "$tmp/plan.md"
-expect fail "a plan that differs from the reviewed input is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+expectm fail "a plan that differs from the reviewed input is rejected" 'REJECT: the reviewed input does not contain the ' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 # a real spy run on the plan file logs its sha, which then matches.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
 printf 'the plan\n' > "$tmp/plan.md"; bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
@@ -162,7 +179,7 @@ rows[0]["thread_id"] = "t-1"
 rows.append({"seq": 2, "wrapper": "fake", "argv": [], "exit": 0, "resume": "t-1", "thread_id": "t-1", "phase": "unknown", "stdout": "THREAD_ID: t-1\nbody\n", "stderr": "", "ts": 2})
 open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
 PY
-expect fail "resume of an id the earlier reply never printed is rejected" python3 "$here/check-resume.py" "$EVLOG" --no-verdict
+expectm fail "resume of an id the earlier reply never printed is rejected" 'REJECT: no valid --resume execution of an id the' python3 "$here/check-resume.py" "$EVLOG" --no-verdict
 mkrun; T="$(cd "$tmp/run/repo" && bash "$fake" "review" | sed -n 's/^THREAD_ID: //p')"; (cd "$tmp/run/repo" && bash "$fake" --resume "$T" "again" >/dev/null 2>&1)
 expect pass "--no-verdict accepts a follow-up with or without a valid verdict" python3 "$here/check-resume.py" "$EVLOG" --no-verdict
 # unique thread ids even for calls made in the same instant.
@@ -218,12 +235,12 @@ PYB
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; retime 0:0.5:1 1:5:30
 expect pass "control: the same approval with no newer review is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 addblocked
-expect fail "an older approval that finished later does not override a newer blocked review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+expectm fail "an older approval that finished later does not override a newer blocked review" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 # a failed spy call (missing input) is logged and, being the latest review, defeats an earlier approval.
 mkrun; line fake 1 unknown "$LIMIT"; line spy 0 implementation 'VERDICT: APPROVED\n'; cd "$tmp/run/repo"
 bash "$here/spy-reviewer.sh" S "$tmp/no-such-input" "$tmp/o.txt" >/dev/null 2>&1
 expect_spy pass "the failed spy call with a missing input is logged" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; e=wlog.load(sys.argv[2]); print(len(e)==4 and e[-1]["exit"]!=0)' "$here" "$EVLOG")" = "True"
-expect_spy fail "a later failed review means the last review is not clean" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+expectm_spy fail "a later failed review means the last review is not clean" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 # an unchanged CRLF plan hashes by raw bytes and matches.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan line\r\nsecond\r\n' > "$tmp/plan.md"
 bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
@@ -237,11 +254,11 @@ for l in open(sys.argv[1]):
     if e["wrapper"] == "spy": e["argv"][0] = "R"
     out.write(json.dumps(e) + "\n")
 PYR
-expect_spy fail "a tier R spy review does not validate the plan file" python3 "$here/check-reviewer-after-limit.py" "$tmp/evR.jsonl" --plan-file "$tmp/plan.md"
+expectm_spy fail "a tier R spy review does not validate the plan file" 'REJECT: the model call used another tier than th' python3 "$here/check-reviewer-after-limit.py" "$tmp/evR.jsonl" --plan-file "$tmp/plan.md"
 # the event describes the snapshot, so a plan edited DURING the review no longer matches.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan v1\n' > "$tmp/plan.md"
 EDIT_DURING="$tmp/plan.md" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy fail "a plan edited while it was being reviewed is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+expectm_spy fail "a plan edited while it was being reviewed is rejected" 'REJECT: the reviewed input does not contain the ' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 # the clean review is bound to the exact final .py state (paths, bytes, indentation, other modules, deletions).
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
 printf 'x=1\ndef add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > other.py
@@ -257,13 +274,13 @@ for sub in rev-list ls-tree; do
   expect_spy fail "a failing git $sub fails the reviewed-state check" env FAILSUB=$sub PATH="$tmp/stubgit:$PATH" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 done
 printf 'def evil():\n    pass\n' >> app.py
-expect_spy fail "code edited after the approval is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm_spy fail "code edited after the approval is rejected" 'REJECT: the code tree changed after the reviewed' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 cp "$tmp/app.good" app.py; printf 'def sub(a, b):\n    return a - b - 1\n' > other.py
-expect_spy fail "an edit to ANOTHER module after the approval is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm_spy fail "an edit to ANOTHER module after the approval is rejected" 'REJECT: the code tree changed after the reviewed' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 printf 'def sub(a, b):\n    return a - b\n' > other.py; sed -i.bak 's/^    return/        return/' app.py; rm -f app.py.bak
-expect_spy fail "an indentation-only change after the approval is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm_spy fail "an indentation-only change after the approval is rejected" 'REJECT: the code tree changed after the reviewed' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 cp "$tmp/app.good" app.py; rm other.py
-expect_spy fail "a deleted module after the approval is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm_spy fail "a deleted module after the approval is rejected" 'REJECT: the code tree changed after the reviewed' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 # last-verdict.py picks the latest execution by START time.
 mkrun; python3 - "$EVLOG" <<'PY'
 import json, sys
@@ -300,7 +317,7 @@ mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"
 printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > other.py
 gdiff app.py > "$tmp/diff.txt"
 bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy fail "a partial diff that omits another current module is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm_spy fail "a partial diff that omits another current module is rejected" 'REJECT: the reviewed changes differ from the cod' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 # a failing model binary: production rejects it, the launcher exits non-zero and the model event keeps what the binary printed.
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
 FAKE_CLAUDE_MODE=fail bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
@@ -318,11 +335,11 @@ bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect_spy pass "control: the same call with a zero exit and the same approval is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 
 # cc11-main-r8: no skill, command or reference file calls an outside reviewer; a re-added call, a content scan or a fallback that skips tier S is caught by test-mirrors.py.
-rm -rf "$tmp/mir8"; mkdir -p "$tmp/mir8"; cp -R "$here/../skills" "$here/../commands" "$here/../README.md" "$tmp/mir8/"
+mirfresh "$tmp/mir8"
 printf '\nRun `REVIEW_BASE_SHA=x ~/.claude/config/scripts/reviewer.sh R <diff-file> <out-file>` first.\n' >> "$tmp/mir8/commands/claude-codex.md"
-expect fail "an outside-reviewer call injected into a command is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"
+mirneg "an outside-reviewer call injected into a command is caught" 'names an outside reviewer or a content scan outside.*REVIEW_BASE_SHA' "$tmp/mir8"
 cp "$here/../commands/claude-codex.md" "$tmp/mir8/commands/claude-codex.md"; printf '\nThen ask the gemini CLI to review.\n' >> "$tmp/mir8/commands/claude-codex.md"
-expect fail "a Gemini instruction injected into a command is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"
+mirneg "a Gemini instruction injected into a command is caught" 'names an outside reviewer or a content scan outside.*gemini' "$tmp/mir8"
 cp "$here/../commands/claude-codex.md" "$tmp/mir8/commands/claude-codex.md"
 expect pass "the pristine copy of the skills and commands passes the outside-reviewer rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 # cc11-main-r9 finding 2: the tier S fallback must carry the Codex context (task requirements, instructions, carried and contested findings), not a bare diff.
@@ -331,36 +348,36 @@ python3 - "$tmp/mir8/skills/tdd-claude-codex/SKILL.md" <<'PY'
 import sys; p = sys.argv[1]; t = open(p).read()
 open(p, "w").write(t.replace("reviewer.sh S <context-file> <out-file>", "reviewer.sh S <diff-file> <out-file>", 1))
 PY
-expect fail "a tier S fallback reverted to a bare diff file is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-claude-codex
+mirneg "a tier S fallback reverted to a bare diff file is caught" 'appears 3 times in the skill and 4 in the command' "$tmp/mir8"; mirc tdd-claude-codex
 python3 - "$tmp/mir8/skills/tdd-claude-codex/SKILL.md" "$tmp/mir8/commands/tdd-claude-codex.md" <<'PY'
 import sys
 for p in sys.argv[1:]:
     t = open(p).read(); open(p, "w").write(t.replace("TASK REQUIREMENTS:", "NOTES:"))
 PY
-expect fail "a fallback input sequence without the task requirements section is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-claude-codex
+mirneg "a fallback input sequence without the task requirements section is caught" 'Fallback input sequence lacks .TASK REQUIREMENTS:' "$tmp/mir8"; mirc tdd-claude-codex
 python3 - "$tmp/mir8/commands/tdd-execute-codex.md" <<'PY'
 import sys, re; p = sys.argv[1]; t = open(p).read()
 open(p, "w").write(re.sub(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n.*?\n```\n", "", t, flags=re.S))
 PY
-expect fail "a command that lost its Fallback input paragraph is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
+mirneg "a command that lost its Fallback input paragraph is caught" 'has a tier S fallback but no Fallback input paragraph' "$tmp/mir8"; mirc tdd-execute-codex
 python3 - "$tmp/mir8/skills/plan-codex/SKILL.md" "$tmp/mir8/commands/plan-codex.md" <<'PY'
 import sys
 for p in sys.argv[1:]:
     t = open(p).read(); open(p, "w").write(t.replace("OPEN FINDINGS:", "OTHER:"))
 PY
-expect fail "a plan fallback sequence without the open findings section is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc plan-codex
+mirneg "a plan fallback sequence without the open findings section is caught" 'Fallback input sequence lacks .OPEN FINDINGS:' "$tmp/mir8"; mirc plan-codex
 python3 - "$tmp/mir8/skills/claude-codex/SKILL.md" "$tmp/mir8/commands/claude-codex.md" <<'PY'
 import sys
 for p in sys.argv[1:]:
     t = open(p).read(); open(p, "w").write(t.replace(">> \"$CTX\"", "> \"$CTX\""))
 PY
-expect fail "a fallback sequence whose diff overwrites the context file instead of appending is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc claude-codex
+mirneg "a fallback sequence whose diff overwrites the context file instead of appending is caught" 'Fallback input sequence lacks .*set -o pipefail; git diff HEAD' "$tmp/mir8"; mirc claude-codex
 python3 - "$tmp/mir8/skills/claude-codex/SKILL.md" "$tmp/mir8/commands/claude-codex.md" <<'PY'
 import sys
 for p in sys.argv[1:]:
     t = open(p).read(); open(p, "w").write(t.replace(" | ~/.claude/config/scripts/redact-diff.sh >>", " >>"))
 PY
-expect fail "a fallback sequence that skips redact-diff.sh is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc claude-codex
+mirneg "a fallback sequence that skips redact-diff.sh is caught" 'Fallback input sequence lacks .*set -o pipefail; git diff HEAD' "$tmp/mir8"; mirc claude-codex
 # r11 finding 1: scripts/redact-diff.sh masks credential values in a diff (added AND deleted lines), keeps the diff structure, leaves a clean diff byte-identical.
 red="$here/../scripts/redact-diff.sh"
 fx="$tmp/secrets.diff"
@@ -384,18 +401,26 @@ fx="$tmp/secrets.diff"
   printf ' tail = 1\n'
 } > "$fx"
 "$red" < "$fx" > "$tmp/secrets.out"
+# round 15 finding 1: a redaction case passes only when the redactor really ran (it printed its [REDACTED] marker) AND the secret text is gone.
+# WHY: "grep finds nothing" is also true when the redactor crashed or printed nothing, which made every one of these negative cases vacuous.
+masked() { local o; o="$(printf '+%s\n' "$1" | "$red")"; grep -qF '[REDACTED' <<<"$o" && ! grep -qF -- "$2" <<<"$o"; }
+masked_file() { grep -qF '[REDACTED' "$2" && ! grep -qF -- "$1" "$2"; }
 for v in AKIAIOSFODNN7EXAMPLE ghp_abcdefghij github_pat_11ABC sk-ant-api03 xoxb-1234 abc123def456ghi789 eyJhbGciOiJIUzI1NiJ9 hunter2hunter2 zzTopSecretValue99 MIIEowIBAAKCAQEAsupersecretkeybody; do
-  expect fail "redact-diff leaves no trace of $v" grep -qF "$v" "$tmp/secrets.out"
+  expect pass "redact-diff leaves no trace of $v" masked_file "$v" "$tmp/secrets.out"
 done
 expect pass "redact-diff keeps the hunk header, context lines and the +/- prefixes" test "$(grep -c '^@@ -1,9 +1,9 @@' "$tmp/secrets.out")$(grep -c '^ tail = 1$' "$tmp/secrets.out")$(grep -c '^-' "$tmp/secrets.out")$(grep -c '^+' "$tmp/secrets.out")" = "111313"
 # r12 finding 2: escaped delimiters inside a quoted value must not end the value early.
 rq() { printf '%s\n' "$1" | "$red"; }
-expect fail "a double-quoted password with an escaped quote leaves no secret text" sh -c 'printf "%s\n" "+password = \"abSECRET\\\"cdTAIL\"" | "$1" | grep -q "SECRET\|TAIL"' _ "$red"
-expect fail "a single-quoted password with an escaped quote leaves no secret text" sh -c "printf '%s\n' \"+token = 'abSECRET\\\\'cdTAIL'\" | \"\$1\" | grep -q 'SECRET\\|TAIL'" _ "$red"
-expect fail "an unterminated quoted password masks to the end of the line" sh -c 'printf "%s\n" "+password = \"abSECRET and more TAIL" | "$1" | grep -q "SECRET\|TAIL"' _ "$red"
-expect fail "a value ending in an escaped backslash leaves no secret text" sh -c 'printf "%s\n" "+password = \"abSECRET\\\\\"" | "$1" | grep -q "SECRET"' _ "$red"
+expect pass "a double-quoted password with an escaped quote leaves no secret text" sh -c 'o="$(printf "%s\n" "+password = \"abSECRET\\\"cdTAIL\"" | "$1")"; printf "%s\n" "$o" | grep -qF "[REDACTED" && ! printf "%s\n" "$o" | grep -q "SECRET\|TAIL"' _ "$red"
+expect pass "a single-quoted password with an escaped quote leaves no secret text" sh -c "o=\"\$(printf '%s\n' \"+token = 'abSECRET\\\\'cdTAIL'\" | \"\$1\")\"; printf '%s\n' \"\$o\" | grep -qF '[REDACTED' && ! printf '%s\n' \"\$o\" | grep -q 'SECRET\\|TAIL'" _ "$red"
+expect pass "an unterminated quoted password masks to the end of the line" sh -c 'o="$(printf "%s\n" "+password = \"abSECRET and more TAIL" | "$1")"; printf "%s\n" "$o" | grep -qF "[REDACTED" && ! printf "%s\n" "$o" | grep -q "SECRET\|TAIL"' _ "$red"
+expect pass "a value ending in an escaped backslash leaves no secret text" sh -c 'o="$(printf "%s\n" "+password = \"abSECRET\\\\\"" | "$1")"; printf "%s\n" "$o" | grep -qF "[REDACTED" && ! printf "%s\n" "$o" | grep -q "SECRET"' _ "$red"
 expect pass "text after a value that ends in an escaped backslash is kept" sh -c 'printf "%s\n" "+password = \"abSECRET\\\\\", other = 1" | "$1" | grep -q "other = 1"' _ "$red"
 # r13 finding 1: attack cases, one per shape the header comment claims. Each line is "input|||secret text that must not survive".
+stubmask() { local red=/usr/bin/true; masked "password=LEAKx" LEAKx; }
+stubleak() { local red=/usr/bin/true; leaks "password=LEAKx" LEAKx; }
+expect fail "control: the old leak check passes vacuously for a redactor that prints nothing" stubleak
+expect fail "a redactor that prints nothing does not satisfy the masked check" stubmask
 leaks() { printf '+%s\n' "$1" | "$red" | grep -qF -- "$2"; }
 cat > "$tmp/attacks.txt" <<'ATTACKS'
 -----BEGIN RSA PRIVATE KEY-----LEAKKEYBODY-----END RSA PRIVATE KEY-----|||LEAKKEYBODY
@@ -434,16 +459,16 @@ AKIAABCDEFGHIJKLMNOP|||ABCDEFGHIJKLMNOP
 ATTACKS
 while IFS= read -r case_; do
   [ -n "$case_" ] || continue
-  expect fail "redact-diff masks: ${case_%%|||*}" leaks "${case_%%|||*}" "${case_##*|||}"
+  expect pass "redact-diff masks: ${case_%%|||*}" masked "${case_%%|||*}" "${case_##*|||}"
 done < "$tmp/attacks.txt"
 # r14 finding 2: no rule may print a line early. A single-line key block, the END line of a block and the BEGIN line of a block still pass through every other rule for the text outside the block.
-expect fail "a password after a single-line private key on the same line is masked" leaks "-----BEGIN PRIVATE KEY-----KEYBODY-----END PRIVATE KEY----- password=LEAKafter" "LEAKafter"
-expect fail "a token before a single-line private key on the same line is masked" leaks "password=LEAKbefore -----BEGIN PRIVATE KEY-----KEYBODY-----END PRIVATE KEY-----" "LEAKbefore"
-expect fail "a password before the BEGIN line text of a multi-line key is masked" leaks "password=LEAKbefore2 -----BEGIN PRIVATE KEY-----" "LEAKbefore2"
-expect fail "a password after the END line text of a multi-line key is masked" sh -c 'printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY----- password=LEAKend" | "$1" | grep -qF -- LEAKend' _ "$red"
-expect fail "the key body lines of a multi-line key are masked" sh -c 'printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY-----" | "$1" | grep -qF -- KEYBODYLINE' _ "$red"
+expect pass "a password after a single-line private key on the same line is masked" masked "-----BEGIN PRIVATE KEY-----KEYBODY-----END PRIVATE KEY----- password=LEAKafter" "LEAKafter"
+expect pass "a token before a single-line private key on the same line is masked" masked "password=LEAKbefore -----BEGIN PRIVATE KEY-----KEYBODY-----END PRIVATE KEY-----" "LEAKbefore"
+expect pass "a password before the BEGIN line text of a multi-line key is masked" masked "password=LEAKbefore2 -----BEGIN PRIVATE KEY-----" "LEAKbefore2"
+expect pass "a password after the END line text of a multi-line key is masked" sh -c 'o="$(printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY----- password=LEAKend" | "$1")"; printf "%s\n" "$o" | grep -qF "[REDACTED" && ! printf "%s\n" "$o" | grep -qF -- LEAKend' _ "$red"
+expect pass "the key body lines of a multi-line key are masked" sh -c 'o="$(printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY-----" | "$1")"; printf "%s\n" "$o" | grep -qF "[REDACTED" && ! printf "%s\n" "$o" | grep -qF -- KEYBODYLINE' _ "$red"
 expect pass "text after a multi-line key block is processed normally again" sh -c 'printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY-----" "+x = 1" | "$1" | grep -qxF -- "+x = 1"' _ "$red"
-expect fail "a file header line carrying a credential is masked too" sh -c 'printf "%s\n" "diff --git a/x b/y password=LEAKhdr" | "$1" | grep -qF -- LEAKhdr' _ "$red"
+expect pass "a file header line carrying a credential is masked too" sh -c 'o="$(printf "%s\n" "diff --git a/x b/y password=LEAKhdr" | "$1")"; printf "%s\n" "$o" | grep -qF "[REDACTED" && ! printf "%s\n" "$o" | grep -qF -- LEAKhdr' _ "$red"
 # every pair of attack shapes on one line, both orders: neither secret may survive (no rule may skip the others)
 expect pass "redact-diff masks every pair of attack shapes combined on one line, in both orders" python3 - "$red" "$tmp/attacks.txt" <<'PYX'
 import subprocess, sys
@@ -517,45 +542,45 @@ PYX
 }
 for cs in "plan-codex:skills/plan-codex/SKILL.md" "execute-codex:commands/execute-codex.md" "tdd-claude-codex:commands/tdd-claude-codex.md" "tdd-execute-codex:skills/tdd-execute-codex/SKILL.md" "claude-codex:skills/claude-codex/SKILL.md" "plan-codex:commands/plan-codex.md"; do
   revert_exit "$tmp/mir8/${cs#*:}"
-  expect fail "a delivery exit reverted to bare 'no findings' in ${cs#*:} is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc "${cs%%:*}"
+  mirneg "a delivery exit reverted to bare 'no findings' in ${cs#*:} is caught" 'delivery exit lacks .*VERDICT: APPROVED' "$tmp/mir8"; mirc "${cs%%:*}"
 done
 python3 - "$tmp/mir8/skills/codex-mcp/reference.md" <<'PYX'
 import sys
 p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("replies exactly `VERDICT: APPROVED` with zero findings at any severity", "lists no accepted findings at any severity"))
 PYX
-expect fail "a codex-mcp loop exit that no longer requires APPROVED with zero findings is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; cp "$here/../skills/codex-mcp/reference.md" "$tmp/mir8/skills/codex-mcp/reference.md"
+mirneg "a codex-mcp loop exit that no longer requires APPROVED with zero findings is caught" 'the loop exit does not require VERDICT: APPROVED with zero findings' "$tmp/mir8"; cp "$here/../skills/codex-mcp/reference.md" "$tmp/mir8/skills/codex-mcp/reference.md"
 # r10 finding 2: the review record paragraph is mirrored and enforced
 python3 - "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 p = sys.argv[1]; t = open(p).read(); i = t.index("**Review record (every reviewer round)**"); j = t.index("### Route A: Small"); open(p, "w").write(t[:i] + t[j:])
 PYX
-expect fail "a command that lost its Review record paragraph is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+mirneg "a command that lost its Review record paragraph is caught" 'expected exactly one Review record paragraph with its command sequence \(found 0\)' "$tmp/mir8"; mirc execute-codex
 python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" <<'PYX'
 import sys, re
 p = sys.argv[1]; t = open(p).read()
 t2 = re.sub(r"(H=\"\$\(set -o pipefail; git diff \"\$\{START_SHA:\?\}\") -- [^|]*\|", r"\1 |", t, count=1); assert t2 != t
 open(p, "w").write(t2)
 PYX
-expect fail "a Review record hash taken over a diff without the secret excludes is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
+mirneg "a Review record hash taken over a diff without the secret excludes is caught" 'Review record sequence lacks .if H=' "$tmp/mir8"; mirc tdd-execute-codex
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
     t = open(p).read(); t2 = t.replace(" ':(top,exclude).claude/review'", ""); assert t2 != t
     open(p, "w").write(t2)
 PYX
-expect fail "a Review record hash that does not exclude the .claude/review directory is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+mirneg "a Review record hash that does not exclude the .claude/review directory is caught" 'Review record sequence lacks .if H=' "$tmp/mir8"; mirc execute-codex
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
     t = open(p).read(); t2 = t.replace("""printf 'REVIEWED-DIFF: %s\\n' "$H\"""", """printf 'REVIEWED-DIFF: %s\\n' "$(git diff HEAD | shasum -a 256)\""""); assert t2 != t
     open(p, "w").write(t2)
 PYX
-expect fail "a Review record hash computed inside the redirect (not into H first) is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+mirneg "a Review record hash computed inside the redirect (not into H first) is caught" 'Review record sequence lacks .*REVIEWED-DIFF: %s' "$tmp/mir8"; mirc execute-codex
 python3 - "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
 import sys
 p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("} > .claude/review/final-review.txt", "} > /dev/null", 1))
 PYX
-expect fail "a Review record that no longer writes the record file is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
+mirneg "a Review record that no longer writes the record file is caught" 'Review record sequence lacks .> .claude/review/final-review.txt' "$tmp/mir8"; mirc tdd-execute-codex
 # r13 finding 2: the hash is taken and the exact diff snapshotted BEFORE the reviewer is dispatched, and compared with the tree after the reply
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
@@ -563,21 +588,21 @@ for p in sys.argv[1:]:
     t = open(p).read(); t2 = t.replace("""H="$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"""", """H="$(git diff HEAD | shasum -a 256 | cut -d' ' -f1)\""""); assert t2 != t
     open(p, "w").write(t2)
 PYX
-expect fail "a Review record whose hash is moved back to after the reviewer call is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+mirneg "a Review record whose hash is moved back to after the reviewer call is caught" 'Review record sequence lacks .H=\"\$\(shasum' "$tmp/mir8"; mirc execute-codex
 python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
     t = open(p).read(); t2 = t.replace(" | tee .claude/review/reviewed.diff", "", 1); assert t2 != t
     open(p, "w").write(t2)
 PYX
-expect fail "a Review record that no longer snapshots the reviewed diff before dispatch is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
+mirneg "a Review record that no longer snapshots the reviewed diff before dispatch is caught" 'Review record sequence lacks .if H=' "$tmp/mir8"; mirc tdd-execute-codex
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
     t = open(p).read(); t2 = t.replace("""= "$H" ]""", """= "" ]"""); assert t2 != t
     open(p, "w").write(t2)
 PYX
-expect fail "a Review record that no longer compares the tree after the reply with the pre-dispatch hash is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+mirneg "a Review record that no longer compares the tree after the reply with the pre-dispatch hash is caught" 'Review record sequence lacks .if N=' "$tmp/mir8"; mirc execute-codex
 # r14 finding 1: both steps check the diff pipeline status and reject an empty snapshot
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
@@ -585,21 +610,21 @@ for p in sys.argv[1:]:
     t = open(p).read(); t2 = t.replace("""N="$(set -o pipefail; git diff""", """N="$(git diff"""); assert t2 != t
     open(p, "w").write(t2)
 PYX
-expect fail "a Review record step 2 that no longer checks the diff pipeline status is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+mirneg "a Review record step 2 that no longer checks the diff pipeline status is caught" 'Review record sequence lacks .if N=' "$tmp/mir8"; mirc execute-codex
 python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
     t = open(p).read(); t2 = t.replace("""H="$(set -o pipefail; git diff""", """H="$(git diff"""); assert t2 != t
     open(p, "w").write(t2)
 PYX
-expect fail "a Review record step 1 that no longer checks the diff pipeline status is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc tdd-execute-codex
+mirneg "a Review record step 1 that no longer checks the diff pipeline status is caught" 'Review record sequence lacks .if H=' "$tmp/mir8"; mirc tdd-execute-codex
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
     t = open(p).read(); t2 = t.replace(""" && [ -s .claude/review/reviewed.diff ] && [ "$N\"""", """ && [ "$N\""""); assert t2 != t
     open(p, "w").write(t2)
 PYX
-expect fail "a Review record step 2 that accepts an empty snapshot is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+mirneg "a Review record step 2 that accepts an empty snapshot is caught" 'Review record sequence lacks .if N=' "$tmp/mir8"; mirc execute-codex
 expect pass "the pristine copies pass every r10 rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 
 # cc11-main-r2 finding 3: the diff command each workflow prescribes is relative to the repository top, not to the shell's folder.
@@ -647,15 +672,15 @@ expect_spy pass "an exact git diff of every changed module is accepted" python3 
 rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py
 gdiff app.py > "$tmp/diff.txt"
 bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy fail "a diff omitting a module whose lines duplicate reviewed ones is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm_spy fail "a diff omitting a module whose lines duplicate reviewed ones is rejected" 'REJECT: the reviewed changes differ from the cod' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 rv; printf 'def add(a, b):\n        return a + b\n' > app.py
 gdiff app.py | sed 's/^+        return/+    return/' > "$tmp/diff.txt"
 bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy fail "a diff line with different indentation than the final code is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm_spy fail "a diff line with different indentation than the final code is rejected" 'REJECT: the reviewed changes differ from the cod' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 rv; printf 'def add(a, b):\n    return a + b\n-x\n' > app.py
 gdiff app.py | sed 's/^+-x$/+x/' > "$tmp/diff.txt"
 bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy fail "a source operator dropped from a diff line is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm_spy fail "a source operator dropped from a diff line is rejected" 'REJECT: the reviewed changes differ from the cod' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 rv; printf 'def add(a, b):\n    return a + b\n-x\n' > app.py
 gdiff app.py > "$tmp/diff.txt"
 bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
@@ -671,22 +696,22 @@ mkrun; cd "$tmp/run/repo"; export FAKE_ROUNDS=1 FAKE_TARGET=code
 bash "$fake" review >/dev/null 2>&1; printf '# review-fix-1\n' >> app.py; bash "$fake" review >/dev/null 2>&1
 st="$(python3 "$here/state-hash.py" .)"
 expect pass "scripted: a finding round then a clean reply for the final state passes" sh -c "python3 '$here/check-scripted.py' '$EVLOG' rounds 1 && python3 '$here/check-scripted.py' '$EVLOG' final $st"
-expect fail "scripted: a clean reply for another state fails" python3 "$here/check-scripted.py" "$EVLOG" final 0000000000000000
+expectm fail "scripted: a clean reply for another state fails" 'REJECT: the last execution is not a clean verdic' python3 "$here/check-scripted.py" "$EVLOG" final 0000000000000000
 bash "$fake" --resume never-issued again >/dev/null 2>&1
-expect fail "scripted: a failed resume after the clean call means the last execution is not clean" python3 "$here/check-scripted.py" "$EVLOG" final "$st"
+expectm fail "scripted: a failed resume after the clean call means the last execution is not clean" 'REJECT: the last execution is not a clean verdic' python3 "$here/check-scripted.py" "$EVLOG" final "$st"
 mkrun; cd "$tmp/run/repo"; export FAKE_ROUNDS=2; bash "$fake" review >/dev/null 2>&1
-expect fail "scripted: a finding round never followed by round 2 fails the rounds check" python3 "$here/check-scripted.py" "$EVLOG" rounds 2
+expectm fail "scripted: a finding round never followed by round 2 fails the rounds check" 'REJECT: finding rounds ' python3 "$here/check-scripted.py" "$EVLOG" rounds 2
 mkrun; cd "$tmp/run/repo"; export FAKE_ROUNDS=0 FAKE_FAIL_FIRST=2; for i in 1 2 3; do bash "$fake" review >/dev/null 2>&1; done
 expect pass "scripted: two dead calls then a verdict satisfies failfirst 2" python3 "$here/check-scripted.py" "$EVLOG" failfirst 2
 bash "$fake" --resume nope again >/dev/null 2>&1
-expect fail "scripted: a bad call after the first verdict fails failfirst" python3 "$here/check-scripted.py" "$EVLOG" failfirst 2
+expectm fail "scripted: a bad call after the first verdict fails failfirst" 'REJECT: the first ' python3 "$here/check-scripted.py" "$EVLOG" failfirst 2
 
 
 # r18: nested modules, start-time order, spy success stderr, shim header.
 rv; mkdir -p pkg; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a - b\n' > pkg/mod.py
 gdiff app.py > "$tmp/diff.txt"
 bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
-expect_spy fail "a diff omitting a nested module is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm_spy fail "a diff omitting a nested module is rejected" 'REJECT: the reviewed changes differ from the cod' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 gdiff app.py pkg/mod.py > "$tmp/diff.txt"; : > "$EVLOG"; line fake 1 unknown "$LIMIT"
 bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect_spy pass "a complete diff including a nested module is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
@@ -697,7 +722,7 @@ clean = "THREAD_ID: t\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: no
 rows = [ev(1, 20, 21, "THREAD_ID: t\nVERDICT: WARNING\n", {"result": "HIGH", "round": "1", "state": "s", "impl": "yes"}), ev(2, 5, 30, clean, {"result": "CLEAN", "state": "s", "impl": "yes"})]
 open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
 PY
-expect fail "an older clean call that finished later is not the last execution" python3 "$here/check-scripted.py" "$EVLOG" final s
+expectm fail "an older clean call that finished later is not the last execution" 'REJECT: the last execution is not a clean verdic' python3 "$here/check-scripted.py" "$EVLOG" final s
 mkrun; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"
 FAKE_CLAUDE_NOISE="noise from the model" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 # WHY the noise is generated by the fake model (r41): the launcher's PATH prefix shadows any stub placed in front of it.
@@ -795,17 +820,17 @@ rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrap
 fake[0]["ts"]=spy[0]["ts_start"]-5; fake[0]["ts_start"]=fake[0]["ts"]-1
 open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in fake+spy)+"\n")
 PY
-expect_spy fail "a stale patch with the same added line at another location is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm_spy fail "a stale patch with the same added line at another location is rejected" 'REJECT: the patched baseline differs from the fi' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 
 # r20: the proof asserts on one structured AUDIT-STATUS line only
 st() { printf '%s\n' "$1" > "$tmp/rep.txt"; shift; python3 "$here/audit-status.py" "$tmp/rep.txt" "$@"; }
 expect pass "a report ending in an APPROVED status line is accepted" st $'Initial review: UNREVIEWED. Retry ok.\nAUDIT-STATUS: APPROVED reviewer=codex' --expect APPROVED
-expect fail "prose saying UNREVIEWED with no status line is rejected" st "The changes remain UNREVIEWED."
-expect fail "an UNREVIEWED status is rejected when APPROVED is expected" st $'x\nAUDIT-STATUS: UNREVIEWED reviewer=none' --expect APPROVED
+expectm fail "prose saying UNREVIEWED with no status line is rejected" 'REJECT: the report needs exactly one AUDIT-STATU' st "The changes remain UNREVIEWED."
+expectm fail "an UNREVIEWED status is rejected when APPROVED is expected" 'REJECT: the status is UNREVIEWED, not the expect' st $'x\nAUDIT-STATUS: UNREVIEWED reviewer=none' --expect APPROVED
 expect pass "an UNREVIEWED status matches an UNREVIEWED expectation" st $'x\nAUDIT-STATUS: UNREVIEWED reviewer=none' --expect UNREVIEWED
-expect fail "two status lines are rejected" st $'AUDIT-STATUS: UNREVIEWED reviewer=none\nAUDIT-STATUS: APPROVED reviewer=codex'
-expect fail "a status line that is not last is rejected" st $'AUDIT-STATUS: APPROVED reviewer=codex\nThanks'
-expect fail "a malformed status line is rejected" st $'AUDIT-STATUS: DONE reviewer=codex'
+expectm fail "two status lines are rejected" 'REJECT: the report needs exactly one AUDIT-STATU' st $'AUDIT-STATUS: UNREVIEWED reviewer=none\nAUDIT-STATUS: APPROVED reviewer=codex'
+expectm fail "a status line that is not last is rejected" 'REJECT: the report needs exactly one AUDIT-STATU' st $'AUDIT-STATUS: APPROVED reviewer=codex\nThanks'
+expectm fail "a malformed status line is rejected" 'REJECT: the AUDIT-STATUS line is malformed' st $'AUDIT-STATUS: DONE reviewer=codex'
 expect pass "a trailing blank line after the status is fine" st $'AUDIT-STATUS: APPROVED reviewer=sonnet\n\n' --expect APPROVED
 expect pass "every skill and command carries identical mirrored instructions" python3 "$here/test-mirrors.py"
 
@@ -819,7 +844,7 @@ printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py
 git diff --no-color HEAD -- app.py > "$tmp/trav.diff"
 printf 'diff --git a/app.py b/../escape.py\ncopy from app.py\ncopy to ../escape.py\n' >> "$tmp/trav.diff"
 limit_then_spy "$tmp/trav.diff"
-expect_spy fail "a copy-only section that writes outside the sandbox is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm_spy fail "a copy-only section that writes outside the sandbox is rejected" 'REJECT: the reviewed patch is malformed or names' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 test ! -e "$tmp/run/escape.py"; expect_spy pass "the escaping copy target was never created" test ! -e "$tmp/run/escape.py"
 mkrun; cd "$tmp/run/repo"; printf 'k\r\ndef add(a, b):\r\n    return a + b\r\n' > app.py; commitbase
 printf 'k\r\nNEW\r\ndef add(a, b):\r\n    return a + b\r\n' > app.py
@@ -828,7 +853,7 @@ limit_then_spy "$tmp/crlf.diff"
 expect_spy pass "a correctly reviewed CRLF file is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 mkrun; bash "$here/spy-reviewer.sh" S "$tmp/plan.md" /dev/stderr >"$tmp/so.txt" 2>"$tmp/se.txt"
 expect_spy pass "a reply to /dev/stderr never reaches the caller twice" test "$(cat "$tmp/so.txt" "$tmp/se.txt" | grep -c '^VERDICT')" -le 1
-rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+mirfresh "$tmp/mir"
 python3 - "$tmp/mir/commands/claude-codex.md" <<'PY'
 import sys; p=sys.argv[1]; s=open(p).read()
 assert "no Codex thread is required" in s or "tier S included" in s
@@ -836,7 +861,7 @@ assert "it must record its evidence" in s
 s=s.replace("it must record its evidence","it need not record its evidence",1)
 open(p,"w").write(s)
 PY
-expect fail "a reversed clause in one command copy is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
+mirneg "a reversed clause in one command copy is caught by the mirror test" 'differs between copies' "$tmp/mir"
 expect pass "every audit-status assertion in the proof is skipped for the codex-mcp guide" test "$(grep -c 'audit-status.py' "$here/review-loop-proof.sh")" = "$(grep 'audit-status.py' "$here/review-loop-proof.sh" | grep -c 'codex-mcp')"
 
 # r22: formatting-independent phase, resume reply that repeats its thread id, whole quota paragraphs mirrored
@@ -851,14 +876,14 @@ rows = [{"seq": 1, "wrapper": "fake", "argv": [], "exit": 0, "resume": "", "thre
 open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
 PY
 expect pass "--no-verdict accepts a correct resume whose message repeats the thread id" python3 "$here/check-resume.py" "$EVLOG" --no-verdict
-rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+mirfresh "$tmp/mir"
 python3 - "$tmp/mir/commands/execute-codex.md" <<'PY'
 import sys; p=sys.argv[1]; s=open(p).read()
 a="never counts as the review then"
 assert a in s
 open(p,"w").write(s.replace(a, "counts as the review then", 1))
 PY
-expect fail "a contradicting quota paragraph in one command copy is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
+mirneg "a contradicting quota paragraph in one command copy is caught by the mirror test" 'paragraph .If Codex hit its usage limit. differs between skill and command' "$tmp/mir"
 
 # r23: unchanged empty baseline file, reply routed to stderr, closing code fence after the status
 mkrun; cd "$tmp/run/repo"; : > __init__.py; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
@@ -876,8 +901,8 @@ rows=[json.loads(l) for l in open(sys.argv[1])]; spy=[r for r in rows if r["wrap
 fake[0]["ts"]=spy[0]["ts_start"]-5; fake[0]["ts_start"]=fake[0]["ts"]-1
 open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in fake+spy)+"\n")
 PY
-expect_spy fail "a review sent to /dev/stderr (lost in production) does not count as clean" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
-expect fail "a report whose last non-blank line is a closing fence after the status is rejected" st $'```\nAUDIT-STATUS: APPROVED reviewer=codex\n```'
+expectm_spy fail "a review sent to /dev/stderr (lost in production) does not count as clean" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+expectm fail "a report whose last non-blank line is a closing fence after the status is rejected" 'REJECT: the report needs exactly one AUDIT-STATU' st $'```\nAUDIT-STATUS: APPROVED reviewer=codex\n```'
 
 # r24: structural phase, no-stop clause mirrored, shim subcommand parsing, git add -N never adds every untracked file
 mkrun; cd "$tmp/run/repo"
@@ -899,47 +924,47 @@ REAL_CODEX="$tmp/bin/stubok" viawrap exec -p review --sandbox read-only --cd "$t
 expect pass "a new call whose prompt is the word resume is not logged as a resume" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["resume"])' "$here" "$EVLOG")" = "None"
 REAL_CODEX="$tmp/bin/stubok" viawrap exec -p review --sandbox read-only --cd "$tmp/run/repo" resume --json --skip-git-repo-check T-real "again" >/dev/null 2>&1
 expect pass "a real resume is logged with its thread id" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["resume"])' "$here" "$EVLOG")" = "T-real"
-rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+mirfresh "$tmp/mir"
 python3 - "$tmp/mir/commands/tdd-execute-codex.md" <<'PY'
 import sys; p=sys.argv[1]; s=open(p).read()
 a="Never conclude the reviewer is stuck"; assert a in s
 open(p,"w").write(s.replace(a,"Always conclude the reviewer is stuck",1))
 PY
-expect fail "a reversed no-stop clause in one command copy is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
-rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+mirneg "a reversed no-stop clause in one command copy is caught by the mirror test" 'Never conclude the reviewer is stuck.*appears 3 times in the skill and 2 in the command' "$tmp/mir"
+mirfresh "$tmp/mir"
 sed -i.bak 's/`git add -N <each file this task created>`/`git add -N .`/' "$tmp/mir/skills/claude-codex/SKILL.md" && rm -f "$tmp/mir/skills/claude-codex/SKILL.md.bak"
-expect fail "a git add -N . instruction in a skill is rejected" python3 "$here/test-mirrors.py" "$tmp/mir"
+mirneg "a git add -N . instruction in a skill is rejected" 'adds every untracked file' "$tmp/mir"
 
 # r25b: no-stop exit rule compared in full, zero-context reviewed patches, real-basic ignores non-real wrappers
-rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+mirfresh "$tmp/mir"
 python3 - "$tmp/mir/commands/tdd-execute-codex.md" <<'PY2'
 import sys; p=sys.argv[1]; s=open(p).read()
 a="and the only other exit is the failed-review rule."; assert a in s
 open(p,"w").write(s.replace(a,"and you may stop after three rounds.",1))
 PY2
-expect fail "a command that permits stopping after three rounds is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
+mirneg "a command that permits stopping after three rounds is caught by the mirror test" 'no-stop clause does not end with the failed-review exit rule' "$tmp/mir"
 mkrun; cd "$tmp/run/repo"; printf 'k\ndef add(a, b):\n    return a + b\n' > app.py; commitbase
 printf 'k\nNEW\ndef add(a, b):\n    return a + b\n' > app.py
 git diff -U0 --no-color HEAD -- app.py > "$tmp/u0.diff"
 limit_then_spy "$tmp/u0.diff"
 expect_spy pass "a correctly reviewed zero-context patch is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 mkrun; line spy 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
-expect fail "a spy reply does not satisfy the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
-expect fail "a spy reply does not satisfy the real verdict check" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+expectm fail "a spy reply does not satisfy the real thread check" 'REJECT: no real wrapper execution with a THREAD_' python3 "$here/check-real-basic.py" "$EVLOG" thread
+expectm fail "a spy reply does not satisfy the real verdict check" 'REJECT: no real wrapper execution with a single ' python3 "$here/check-real-basic.py" "$EVLOG" verdict
 mkrun; line real 0 implementation 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
 expect pass "a real wrapper reply satisfies the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
 expect pass "a real wrapper reply satisfies the real verdict check" python3 "$here/check-real-basic.py" "$EVLOG" verdict
 
 # r26: mkrun never leaves the caller in a deleted directory, a folded quota stop rule is mirrored, an indented status line is rejected
-rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+mirfresh "$tmp/mir"
 python3 - "$tmp/mir/commands/tdd-claude-codex.md" <<'PY2'
 import sys; p=sys.argv[1]; s=open(p).read()
 a="a Codex usage limit is never a blocker while tier S can run"; assert a in s
 open(p,"w").write(s.replace(a,"a Codex usage limit is a blocker even while tier S can run",1))
 PY2
-expect fail "a folded failure paragraph that lets a usage limit stop the loop is caught" python3 "$here/test-mirrors.py" "$tmp/mir"
+mirneg "a folded failure paragraph that lets a usage limit stop the loop is caught" 'differs between copies' "$tmp/mir"
 printf 'done\n\n    AUDIT-STATUS: APPROVED reviewer=codex\n' > "$tmp/ind.txt"
-expect fail "an indented status line (a code block) is rejected" python3 "$here/audit-status.py" "$tmp/ind.txt"
+expectm fail "an indented status line (a code block) is rejected" 'REJECT: the report needs exactly one AUDIT-STATU' python3 "$here/audit-status.py" "$tmp/ind.txt"
 printf 'done\n\nAUDIT-STATUS: APPROVED reviewer=codex\n' > "$tmp/ok.txt"
 expect pass "an unindented status line is accepted" python3 "$here/audit-status.py" "$tmp/ok.txt" --expect APPROVED
 mkrun; cd "$tmp/run/repo"; mkrun; expect pass "mkrun leaves the shell inside the recreated fixture" test "$(git rev-parse --show-toplevel)" = "$(cd "$tmp/run/repo" && git rev-parse --show-toplevel)"
@@ -954,7 +979,7 @@ r=dict(rows[0]); r.update(seq=2, wrapper="fake", resume="abcdef12-3456", ts=2)
 rows.append(r); open(sys.argv[1],"w").write("\n".join(json.dumps(x) for x in rows)+"\n")
 PY2
 expect pass "a fake resume of a real thread passes the unrestricted resume check" python3 "$here/check-resume.py" "$EVLOG"
-expect fail "a fake resume of a real thread fails the real-only resume check" python3 "$here/check-resume.py" "$EVLOG" --real
+expectm fail "a fake resume of a real thread fails the real-only resume check" 'REJECT: no valid --resume execution of an id the' python3 "$here/check-resume.py" "$EVLOG" --real
 python3 - "$EVLOG" <<'PY2'
 import json,sys
 rows=[json.loads(l) for l in open(sys.argv[1])]; rows[1]["wrapper"]="real"
@@ -990,7 +1015,7 @@ wrapper_kind() { python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import 
 mkrun
 REAL_CODEX="$tmp/realbin/codex" bash "$here/shim/codex" exec --json "prompt" >/dev/null 2>&1
 expect pass "a bare codex exec call is logged as direct, not real" test "$(wrapper_kind)" = direct
-expect fail "a bare codex exec call does not satisfy the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
+expectm fail "a bare codex exec call does not satisfy the real thread check" 'REJECT: no real wrapper execution with a THREAD_' python3 "$here/check-real-basic.py" "$EVLOG" thread
 bash -c "REAL_CODEX='$tmp/realbin/codex' bash '$here/shim/codex' exec --json 'codex-call.sh'; true # codex-call.sh" >/dev/null 2>&1
 expect pass "a bare call whose parent command text mentions codex-call.sh is still direct" test "$(wrapper_kind)" = direct
 REAL_CODEX="$tmp/realbin/codex" viawrap exec --json "prompt" >/dev/null 2>&1
@@ -999,22 +1024,22 @@ expect pass "that call satisfies the real thread check" python3 "$here/check-rea
 expect pass "that call satisfies the real verdict check" python3 "$here/check-real-basic.py" "$EVLOG" verdict
 mkrun; bash -c "exec 255<'$tmp/wrap/codex-call.sh'; REAL_CODEX='$tmp/realbin/codex' bash '$here/shim/codex' exec --json prompt; true" >/dev/null 2>&1
 expect pass "a bare caller that opened the wrapper on fd 255 itself is logged as direct" test "$(wrapper_kind)" = direct
-expect fail "that fd 255 spoof does not satisfy the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
+expectm fail "that fd 255 spoof does not satisfy the real thread check" 'REJECT: no real wrapper execution with a THREAD_' python3 "$here/check-real-basic.py" "$EVLOG" thread
 mkrun; mkdir -p "$tmp/wrap2"; { cat "$tmp/wrap/codex-call.sh"; echo '# edited copy'; } > "$tmp/wrap2/codex-call.sh"
 REAL_CODEX="$tmp/realbin/codex" bash "$tmp/wrap2/codex-call.sh" exec --json "prompt" >/dev/null 2>&1
 expect pass "an edited copy of the wrapper is logged as direct" test "$(wrapper_kind)" = direct
 mkrun; REAL_CODEX="$tmp/realbin/codex" EVNONCE=other viawrap exec --json "prompt" >/dev/null 2>&1
-expect fail "a run stamped with a different nonce is rejected by the checker" python3 "$here/check-real-basic.py" "$EVLOG" thread
+expectm fail "a run stamped with a different nonce is rejected by the checker" 'REJECT: no real wrapper execution with a THREAD_' python3 "$here/check-real-basic.py" "$EVLOG" thread
 mkrun; cp "$tmp/realbin/codex" "$tmp/shimcopy"; mkdir -p "$tmp/xs/shim"; cp "$tmp/realbin/codex" "$tmp/xs/shim/codex"
 REAL_CODEX="$tmp/xs/shim/codex" viawrap exec --json "prompt" >/dev/null 2>&1
-expect fail "a run whose codex binary is not the expected real one is rejected" python3 "$here/check-real-basic.py" "$EVLOG" thread
+expectm fail "a run whose codex binary is not the expected real one is rejected" 'REJECT: no real wrapper execution with a THREAD_' python3 "$here/check-real-basic.py" "$EVLOG" thread
 mkrun; line fake 0 unknown 'THREAD_ID: abcdef12-3456\nVERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
-expect fail "a fake wrapper reply does not satisfy the real verdict check" python3 "$here/check-real-basic.py" "$EVLOG" verdict
+expectm fail "a fake wrapper reply does not satisfy the real verdict check" 'REJECT: no real wrapper execution with a single ' python3 "$here/check-real-basic.py" "$EVLOG" verdict
 mkdir -p "$tmp/sh1" "$tmp/sh2"; printf 'def add(a, b):\n    return a + b\n' > "$tmp/sh1/app.py"; : > "$tmp/sh1/test_app.py"
 : > "$tmp/sh2/app.py"; printf 'def add(a, b):\n    return a + b\n' > "$tmp/sh2/test_app.py"
 expect pass "moving add() into the test file changes the state hash" test "$(python3 "$here/state-hash.py" "$tmp/sh1")" != "$(python3 "$here/state-hash.py" "$tmp/sh2")"
 mkrun; line fake 1 unknown 'codex-call: Codex CLI said:\nno saved session found with ID usage limit\n'
-expect fail "an echoed argument named usage limit is not a quota error" python3 "$here/check-limit-hit.py" "$EVLOG"
+expectm fail "an echoed argument named usage limit is not a quota error" 'REJECT: no real wrapper execution hit the usage ' python3 "$here/check-limit-hit.py" "$EVLOG"
 mkrun; line fake 1 unknown "$LIMIT"
 expect pass "a real quota sentence is a quota error" python3 "$here/check-limit-hit.py" "$EVLOG"
 
@@ -1033,13 +1058,13 @@ rows.append(ev("fake",1,[],1,"ERROR: You have hit your usage limit.\n"))
 rows.append(ev("spy",0,["diagnose","f"],10,"VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n"))
 open(sys.argv[1],"w").write("\n".join(json.dumps(r) for r in rows)+"\n")
 PY2
-expect fail "a diagnose invocation does not pass the fallback check" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+expectm fail "a diagnose invocation does not pass the fallback check" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
 
 # r31: forged argv[0], deleted helper module, an output path that is a dup of the caller's stdout
 mkrun; W="$tmp/wrap/codex-call.sh"
 ( exec -a "bash $W" bash -c "exec 255<'$W'; REAL_CODEX='$tmp/realbin/codex' bash '$here/shim/codex' exec --json prompt; true" ) >/dev/null 2>&1
 expect pass "a shell with argv[0] forged to run the wrapper (really -c) is logged as direct" test "$(wrapper_kind)" = direct
-expect fail "the forged argv[0] does not satisfy the real thread check" python3 "$here/check-real-basic.py" "$EVLOG" thread
+expectm fail "the forged argv[0] does not satisfy the real thread check" 'REJECT: no real wrapper execution with a THREAD_' python3 "$here/check-real-basic.py" "$EVLOG" thread
 mkdir -p "$tmp/sh3"; printf 'import helper\n' > "$tmp/sh3/app.py"; printf 'X=1\n' > "$tmp/sh3/helper.py"; before="$(python3 "$here/state-hash.py" "$tmp/sh3")"; rm "$tmp/sh3/helper.py"
 expect pass "deleting an imported helper module changes the state hash" test "$before" != "$(python3 "$here/state-hash.py" "$tmp/sh3")"
 
@@ -1053,24 +1078,24 @@ rrun; REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/
 expect_spy pass "production accepts tier R with a base and the CodeRabbit fake ran on committed state" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); m=[e for e in es if e["wrapper"]=="model"][-1]; print(m["meta"]["bin"], m["meta"]["tier"], m["meta"]["dirty"], m["meta"]["base"]==sys.argv[3])' "$here" "$EVLOG" "$R0")" = "coderabbit R 0 True"
 orderfake "$EVLOG"
 expect_spy pass "a clean tier R review of committed state is accepted for the code" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
-expect_spy fail "a tier R review never validates a plan file" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/rin.txt"
+expectm_spy fail "a tier R review never validates a plan file" 'REJECT: a plan review must be tier S through cla' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/rin.txt"
 printf 'x=1\ndef add(a, b):\n    return a - b\n' > app.py
-expect_spy fail "code edited after the R review is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+expectm_spy fail "code edited after the R review is rejected" 'REJECT: the code tree changed after the reviewed' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 rrun; printf 'x=1\ndef add(a, b):\n    return a - b\n' > app.py
 REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect_spy pass "production lets tier R review while uncommitted changes exist (the fake records dirty=1)" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); print([e for e in es if e["wrapper"]=="model"][-1]["meta"]["dirty"])' "$here" "$EVLOG")" = 1
 orderfake "$EVLOG"
-expect_spy fail "a tier R review with uncommitted changes is rejected by the checker" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+expectm_spy fail "a tier R review with uncommitted changes is rejected by the checker" 'REJECT: the repo has untracked or modified pytho' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 rrun; REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
 orderfake "$EVLOG"
 expect_spy pass "a committed R review is accepted before a new file appears" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 printf 'def sneaky():\n    return 1\n' > "$tmp/run/repo/new_untracked.py"
-expect_spy fail "an untracked .py file no commit holds is rejected (r39)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+expectm_spy fail "an untracked .py file no commit holds is rejected (r39)" 'REJECT: the code tree changed after the reviewed' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 rm -f "$tmp/run/repo/new_untracked.py"
 rrun; printf 'def sneaky():\n    return 1\n' > "$tmp/run/repo/new_untracked.py"; REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect_spy pass "the CodeRabbit fake records an untracked .py as dirty" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print([e for e in wlog.load(sys.argv[2]) if e["wrapper"]=="model"][-1]["meta"]["dirty"])' "$here" "$EVLOG")" = 1
 orderfake "$EVLOG"
-expect_spy fail "an untracked .py present at review time is rejected by the checker (r39)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+expectm_spy fail "an untracked .py present at review time is rejected by the checker (r39)" 'REJECT: the repo has untracked or modified pytho' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 # r41: a --version call is not a review, and a CRLF committed diff is still accepted
 mkrun; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp/plan.md"; line fake 1 unknown "$LIMIT"; bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
 python3 - "$EVLOG" "$tmp/evV.jsonl" <<'PYV'
@@ -1081,7 +1106,7 @@ for l in open(sys.argv[1]):
     if e["wrapper"] == "model": e["argv"].insert(0, "--version")
     out.write(json.dumps(e) + "\n")
 PYV
-expect_spy fail "a claude call carrying --version is not accepted as a review (r41)" python3 "$here/check-reviewer-after-limit.py" "$tmp/evV.jsonl" --plan-file "$tmp/plan.md"
+expectm_spy fail "a claude call carrying --version is not accepted as a review (r41)" 'REJECT: the model call was not a review' python3 "$here/check-reviewer-after-limit.py" "$tmp/evV.jsonl" --plan-file "$tmp/plan.md"
 expect_spy pass "the unmodified claude review is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 mkrun; cd "$tmp/run/repo"; out="$(PATH="$here/fake-models:$PATH" claude --version "x" 2>&1)"; rc=$?
 expect pass "the fake claude refuses a --version call" test "$rc" != 0
@@ -1098,36 +1123,36 @@ for l in open(sys.argv[1]):
     if e["wrapper"] == "model" and "-t" in e["argv"]: e["argv"][e["argv"].index("-t") + 1] = "uncommitted"
     out.write(json.dumps(e) + "\n")
 PYU
-expect_spy fail "a CodeRabbit run of -t uncommitted does not validate committed code (r40)" python3 "$here/check-reviewer-after-limit.py" "$tmp/evU.jsonl" --repo "$tmp/run/repo"
+expectm_spy fail "a CodeRabbit run of -t uncommitted does not validate committed code (r40)" 'REJECT: the coderabbit call was not a committed ' python3 "$here/check-reviewer-after-limit.py" "$tmp/evU.jsonl" --repo "$tmp/run/repo"
 rrun; printf 'node_modules\nsecret_mod.py\n' > "$tmp/run/repo/.gitignore"; printf 'def hidden():\n    return 2\n' > "$tmp/run/repo/secret_mod.py"
 REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
-expect_spy fail "an ignored untracked .py module present at review time is rejected (r40)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+expectm_spy fail "an ignored untracked .py module present at review time is rejected (r40)" 'REJECT: the repo has untracked or modified pytho' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 rrun; bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
 expect_spy pass "production rejects tier R without REVIEW_BASE_SHA (exit 2, no clean review)" test "$rc" = 2
 orderfake "$EVLOG"
-expect_spy fail "and the checker finds no clean fallback review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG"
+expectm_spy fail "and the checker finds no clean fallback review" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG"
 mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan line one\nplan line two\n' > "$tmp/plan.md"
 bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 orderfake "$EVLOG"
 expect_spy pass "a tier S plan review with the full file in the model prompt is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
-expect_spy fail "a model prompt missing part of the plan is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG.trunc" --plan-file "$tmp/plan.md"
+expectm_spy fail "a model prompt missing part of the plan is rejected" 'REJECT: the review prompt does not carry the inp' python3 "$here/check-reviewer-after-limit.py" "$EVLOG.trunc" --plan-file "$tmp/plan.md"
 # cc11-main-r9 finding 2: with --context the reviewed input is the prescribed context file (headings first in order, the plan or diff last).
 ctxrun() { mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; bash "$here/spy-reviewer.sh" S "$1" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"; }
 printf 'the plan\n' > "$tmp/plan.md"
 printf 'AUDIT INSTRUCTIONS:\naudit it\n\nOPEN FINDINGS:\nnone\n\nPLAN:\nthe plan\n' > "$tmp/ctxplan.txt"; ctxrun "$tmp/ctxplan.txt"
 expect_spy pass "a plan context file (instructions, findings, then the plan) satisfies the plan review with --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md" --context
 ctxrun "$tmp/plan.md"
-expect_spy fail "a bare plan file no longer satisfies the plan review with --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md" --context
+expectm_spy fail "a bare plan file no longer satisfies the plan review with --context" 'REJECT: the plan context input lacks its section' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md" --context
 expect_spy pass "a bare plan file still satisfies the plan review without --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 printf 'AUDIT INSTRUCTIONS:\naudit it\n\nOPEN FINDINGS:\nnone\n\nPLAN:\nthe plan\nand then a trailing section\n' > "$tmp/ctxplan2.txt"; ctxrun "$tmp/ctxplan2.txt"
-expect_spy fail "a plan context file whose plan is not the last section is rejected with --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md" --context
+expectm_spy fail "a plan context file whose plan is not the last section is rejected with --context" 'REJECT: the plan context input lacks its section' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md" --context
 DIFFTXT='diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -1 +1,2 @@\n x=1\n+def add(a, b):\n'
 printf "TASK REQUIREMENTS:\nAdd add(a, b) returning a + b.\n\nREVIEW INSTRUCTIONS:\nReview the diff.\n\nOPEN FINDINGS:\nnone\n\nDIFF:\n$DIFFTXT" > "$tmp/ctxcode.txt"; ctxrun "$tmp/ctxcode.txt"
 expect_spy pass "a code context file with requirements, instructions, findings and the diff satisfies --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --context
 printf "DIFF:\n$DIFFTXT" > "$tmp/ctxbare.txt"; ctxrun "$tmp/ctxbare.txt"
-expect_spy fail "a code fallback input that is only a diff fails --context (the task requirements are missing)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --context
+expectm_spy fail "a code fallback input that is only a diff fails --context (the task requirements are missing)" 'REJECT: the context input lacks the required sec' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --context
 printf "TASK REQUIREMENTS:\n<the sanitized task requirements>\n\nREVIEW INSTRUCTIONS:\nReview.\n\nOPEN FINDINGS:\nnone\n\nDIFF:\n$DIFFTXT" > "$tmp/ctxtpl.txt"; ctxrun "$tmp/ctxtpl.txt"
-expect_spy fail "a code context file whose requirements are still the template placeholder fails --context" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --context
+expectm_spy fail "a code context file whose requirements are still the template placeholder fails --context" 'REJECT: the context input lacks the required sec' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --context
 # FIFO evidence (r37): the launcher opens the caller's output path once, so a one-shot reader gets the reply and nothing hangs.
 mkrun; cd "$tmp/run/repo"; rm -f "$tmp/ff"; mkfifo "$tmp/ff"; printf 'plan\n' > "$tmp/plan.md"
 ( tmo 20 cat "$tmp/ff" > "$tmp/ff.out" ) & rd=$!
@@ -1143,7 +1168,7 @@ mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp
 SPY_CONFIG_DIR="$tmp/cfg" bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1; rc=$?
 expect_spy pass "with production validation changed to reject tier S the unchanged launcher fails" test "$rc" = 1
 orderfake "$EVLOG"
-expect_spy fail "and the checker sees no clean fallback review" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
+expectm_spy fail "and the checker sees no clean fallback review" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 
 # r34: an unwritable output path delivers nothing and the event must not log the reply
 mkrun; cd "$tmp/run/repo"
@@ -1154,16 +1179,16 @@ expect_spy pass "and the event logs no reply" test "$(python3 -c 'import sys; sy
 
 # r36: a quota reply from a bare direct codex call does not anchor the after-limit ordering, and a missing clause in a command is caught
 mkrun; line direct 1 unknown "$LIMIT"; line spy 0 implementation "$CLEANR"
-expect fail "a direct (non-wrapper) quota event is not a usage limit anchor" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
-expect fail "and check-limit-hit does not count it" python3 "$here/check-limit-hit.py" "$EVLOG"
-rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
+expectm fail "a direct (non-wrapper) quota event is not a usage limit anchor" 'REJECT: no quota-limit event in the log' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation
+expectm fail "and check-limit-hit does not count it" 'REJECT: no real wrapper execution hit the usage ' python3 "$here/check-limit-hit.py" "$EVLOG"
+mirfresh "$tmp/mir"
 python3 - "$tmp/mir/commands/tdd-execute-codex.md" <<'PY2'
 import re, sys; p=sys.argv[1]; s=open(p).read()
 n = len(re.findall(r"\(a call that merely died", s))
 assert n >= 1
 open(p,"w").write(s.replace("(a call that merely died", "(a Codex usage limit is always a blocker; a call that merely died"))
 PY2
-expect fail "a command whose quota clause no longer matches is caught by the mirror test" python3 "$here/test-mirrors.py" "$tmp/mir"
+mirneg "a command whose quota clause no longer matches is caught by the mirror test" 'appears 4 times in the skill and 0 in the command' "$tmp/mir"
 
 # r37: a named FIFO destination is opened once, so the reader does not see an early EOF and the spy does not block
 mkrun; cd "$tmp/run/repo"; rm -f "$tmp/ff"; mkfifo "$tmp/ff"
@@ -1184,13 +1209,13 @@ expect_spy pass "and the reader got the reply once" test "$(grep -c '^VERDICT' "
 
 # r42 (CodeRabbit): check-impl needs proof the asserts ran, a rename counts its new path, and each wrapper has one clean form
 printf 'import os\nos._exit(0)\n' > "$tmp/exit0.py"; printf 'def add(a, b):\n    return a + b\n' > "$tmp/good.py"
-expect fail "a module that exits 0 on import is not a passing implementation" python3 "$here/check-impl.py" "$tmp/exit0.py"
+expectm fail "a module that exits 0 on import is not a passing implementation" 'REJECT: add\(\) failed its checks' python3 "$here/check-impl.py" "$tmp/exit0.py"
 expect pass "a real add passes check-impl" python3 "$here/check-impl.py" "$tmp/good.py"
 expect pass "a rename from test_app.py to app.py is the implementation phase" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import evlog; print(evlog.phase_of("diff --git a/test_app.py b/app.py\nsimilarity index 90%\nrename from test_app.py\nrename to app.py\n"))' "$here")" = implementation
 expect pass "placeholder severity lines are clean for a reviewer.sh spy reply too (one grammar)" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"spy","exit":0,"stdout":"VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n","stderr":""}) else 1)' "$here"
 
 mkdir -p "$tmp/em"; for m in mathops strops listops pkginfo; do printf 'import os\nos._exit(0)\n' > "$tmp/em/$m.py"; done
-expect fail "four modules that exit 0 on import do not pass check-modules" python3 "$here/check-modules.py" "$tmp/em"
+expectm fail "four modules that exit 0 on import do not pass check-modules" 'REJECT: the four modules failed their checks' python3 "$here/check-modules.py" "$tmp/em"
 
 # cc11-main-r6 finding 2: the real scenario must verify the requested work, not only thread mechanics. check-behavior.sh is the one acceptance step review-loop-proof.sh calls
 # from the real branch (and the scripted and usage-limit branches), so these cases drive it on work dirs a real run would leave behind, with no Codex quota spent.
@@ -1212,20 +1237,20 @@ printf 'def first(xs):\n    """>>> first([7, 8])\n    7\n    """\n    return xs[
 printf 'VERSION = "1.0"\ndef describe():\n    """>>> describe()\n    \x27v1.0\x27\n    """\n    return "v" + VERSION\n' > "$bw/mods/pkginfo.py"
 printf 'def add(a, b):\n    return a + b\n' > "$bw/impl/app.py"; printf 'def add(a, b):\n    return 0\n' > "$bw/stub/app.py"
 printf 'Plan: add an add(a, b) function to app.py.\n' > "$bw/plan/.claude/plan/p.md"; : > "$bw/noplan/.claude/plan/p.md"
-expect fail "real execute-codex run whose work dir lacks the four modules fails the acceptance step" bash "$here/check-behavior.sh" execute-codex "$bw/empty" real
+expectm fail "real execute-codex run whose work dir lacks the four modules fails the acceptance step" 'REJECT: the four modules failed their checks' bash "$here/check-behavior.sh" execute-codex "$bw/empty" real
 expect pass "real execute-codex run with the four correct modules passes the acceptance step" bash "$here/check-behavior.sh" execute-codex "$bw/mods" real
-expect fail "real claude-codex run with no app.py add fails the acceptance step" bash "$here/check-behavior.sh" claude-codex "$bw/empty" real
-expect fail "real claude-codex run whose add is a stub fails the acceptance step" bash "$here/check-behavior.sh" claude-codex "$bw/stub" real
+expectm fail "real claude-codex run with no app.py add fails the acceptance step" 'REJECT: add\(\) failed its checks' bash "$here/check-behavior.sh" claude-codex "$bw/empty" real
+expectm fail "real claude-codex run whose add is a stub fails the acceptance step" 'REJECT: add\(\) failed its checks' bash "$here/check-behavior.sh" claude-codex "$bw/stub" real
 expect pass "real claude-codex run with a working add passes the acceptance step" bash "$here/check-behavior.sh" claude-codex "$bw/impl" real
 for sk in tdd-claude-codex tdd-execute-codex codex-mcp; do
   expect fail "real $sk run with no add fails the acceptance step" bash "$here/check-behavior.sh" $sk "$bw/empty" real
   expect pass "real $sk run with a working add passes the acceptance step" bash "$here/check-behavior.sh" $sk "$bw/impl" real
 done
-expect fail "real plan-codex run with no plan file fails the acceptance step" bash "$here/check-behavior.sh" plan-codex "$bw/empty" real
-expect fail "real plan-codex run with an empty plan file fails the acceptance step" bash "$here/check-behavior.sh" plan-codex "$bw/noplan" real
+expectm fail "real plan-codex run with no plan file fails the acceptance step" 'check-behavior: no non-empty plan file about add' bash "$here/check-behavior.sh" plan-codex "$bw/empty" real
+expectm fail "real plan-codex run with an empty plan file fails the acceptance step" 'check-behavior: no non-empty plan file about add' bash "$here/check-behavior.sh" plan-codex "$bw/noplan" real
 expect pass "real plan-codex run with a plan about the request passes the acceptance step" bash "$here/check-behavior.sh" plan-codex "$bw/plan" real
-expect fail "an unknown skill never passes the acceptance step" bash "$here/check-behavior.sh" nonsense "$bw/impl" real
-expect fail "execute-codex scripted scenarios still expect the small add, so four modules alone fail" bash "$here/check-behavior.sh" execute-codex "$bw/mods" round6
+expectm fail "an unknown skill never passes the acceptance step" 'check-behavior: unknown skill: nonsense' bash "$here/check-behavior.sh" nonsense "$bw/impl" real
+expectm fail "execute-codex scripted scenarios still expect the small add, so four modules alone fail" 'REJECT: add\(\) failed its checks' bash "$here/check-behavior.sh" execute-codex "$bw/mods" round6
 # the acceptance step runs inside every branch of the proof before that branch exits (a branch that exits first is the bug this case guards)
 expect pass "every scenario branch of review-loop-proof.sh calls check-behavior.sh before its exit" python3 - "$here/review-loop-proof.sh" <<'PYB'
 import re, sys
@@ -1241,9 +1266,9 @@ PYB
 rrun; REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
 expect_spy pass "the clean tier R review is accepted before a malformed call" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 sleep 1; bash "$here/spy-reviewer.sh" Z "$tmp/rin.txt" "$tmp/out2.txt" >/dev/null 2>&1
-expect_spy fail "a malformed review call after the clean one is the final event and is rejected (r44)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+expectm_spy fail "a malformed review call after the clean one is the final event and is rejected (r44)" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 bash "$here/spy-reviewer.sh" diagnose "$tmp/rin.txt" "$tmp/out3.txt" >/dev/null 2>&1
-expect_spy fail "a diagnose call does not rescue it" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+expectm_spy fail "a diagnose call does not rescue it" 'REJECT: no valid reviewer call after the quota h' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 
 # r45: production caches a tier R verdict by input hash, so a repeat after a new commit may return the old approval with no model run
 rrun; REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1
@@ -1251,7 +1276,7 @@ printf 'x=1\ndef add(a, b):\n    return a + b\ndef sub(a, b):\n    return a - b\
 sleep 1; REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out2.txt" >/dev/null 2>&1
 expect_spy pass "the repeat review on unchanged input runs through the same private cache as production" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); sp=[e for e in es if e["wrapper"]=="spy"]; md=[e for e in es if e["wrapper"]=="model"]; print(len(sp), len(md))' "$here" "$EVLOG")" = "2 1"
 orderfake "$EVLOG"
-expect_spy fail "a cached approval with no model run behind it is rejected for the new commit (r45)" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
+expectm_spy fail "a cached approval with no model run behind it is rejected for the new commit (r45)" 'REJECT: not exactly one accepted model call for ' python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"
 
 # r46: the launcher must behave like a direct production call for stream aliases (pipes stay pipes)
 for op in /dev/stdout /dev/fd/1 /dev/stderr; do
@@ -1273,7 +1298,7 @@ for l in open(sys.argv[1]):
     if e["wrapper"] == "model": e["meta"]["tree"] = "0" * 64
     out.write(json.dumps(e) + "\n")
 PYT
-expect_spy fail "a CodeRabbit review whose model-time tree digest differs from the launcher's is rejected (r47)" python3 "$here/check-reviewer-after-limit.py" "$tmp/evT.jsonl" --repo "$tmp/run/repo"
+expectm_spy fail "a CodeRabbit review whose model-time tree digest differs from the launcher's is rejected (r47)" 'REJECT: the coderabbit tree digest does not matc' python3 "$here/check-reviewer-after-limit.py" "$tmp/evT.jsonl" --repo "$tmp/run/repo"
 expect_spy pass "a model event keeps its place after the quota event once the quota is ordered" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; es=wlog.load(sys.argv[2]); q=[e for e in es if e["wrapper"]=="fake"][0]; print(all(e["ts"]>q["ts"] for e in es if e["wrapper"]=="model"))' "$here" "$EVLOG")" = True
 expect_spy fail "the suite stops with a clear line when the installed reviewer.sh is missing" env SPY_CONFIG_DIR="$tmp/no-such-config" bash "$here/test-checkers.sh"
 
@@ -1304,31 +1329,31 @@ expect_spy pass "control: an origin-requiring reviewer.sh makes the no-remote ca
 FIND='VERDICT: WARNING\nHIGH: a finding\n'; BLOCK='VERDICT: BLOCKED\nCRITICAL: a finding\n'; TID="THREAD_ID: 01a1d2dc-5af3-7192-9860-6e8ea8ed1425\n"
 fr() { python3 "$here/check-scripted.py" "$EVLOG" final S1 --real "$@"; }
 mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$BLOCK"
-expect fail "a final BLOCKED review fails the final-result check even though the agent reports APPROVED" fr
+expectm fail "a final BLOCKED review fails the final-result check even though the agent reports APPROVED" 'REJECT: the last execution is not a clean verdic' fr
 mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S1 endstate=S1 impl=yes" line real 1 review "codex-call: UNREVIEWED"
-expect fail "a clean review followed by a later failed call fails the final-result check" fr
+expectm fail "a clean review followed by a later failed call fails the final-result check" 'REJECT: the last execution is not a clean verdic' fr
 mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$BLOCK"
-expect fail "a clean review followed by a later BLOCKED review fails the final-result check" fr
+expectm fail "a clean review followed by a later BLOCKED review fails the final-result check" 'REJECT: the last execution is not a clean verdic' fr
 mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$FIND"; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
 expect pass "findings then a clean last review on the final state passes the final-result check" fr
 mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "${TID}VERDICT: APPROVED\nCRITICAL: a real finding\n"
-expect fail "an APPROVED line that carries a real finding is not a clean final result" fr
+expectm fail "an APPROVED line that carries a real finding is not a clean final result" 'REJECT: the last execution is not a clean verdic' fr
 mkrun
-expect fail "an empty log has no final reviewer result" fr
+expectm fail "an empty log has no final reviewer result" 'REJECT: no reviewer execution in the log' fr
 mkrun; LINEMETA="state=S1 endstate=S1 impl=no" line real 0 review "$TID$CLEAN"
-expect fail "tdd: a clean TEST AUDIT with no implementation review fails the final-result check" fr --impl
+expectm fail "tdd: a clean TEST AUDIT with no implementation review fails the final-result check" 'REJECT: the last execution is not a clean verdic' fr --impl
 mkrun; LINEMETA="state=S1 endstate=S1 impl=no" line real 0 review "$TID$CLEAN"
 expect pass "non-tdd skills are not held to the implementation phase (same log passes without --impl)" fr
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no" line real 0 review "$TID$CLEAN"
-expect fail "tdd: a clean test audit followed by implementation edits (final state differs) fails the final-result check" fr --impl
+expectm fail "tdd: a clean test audit followed by implementation edits (final state differs) fails the final-result check" 'REJECT: the last execution is not a clean verdic' fr --impl
 mkrun; LINEMETA="state=S0 endstate=S0 impl=yes" line real 0 review "$TID$CLEAN"
-expect fail "a clean implementation review followed by a later file change (final state differs) fails the final-result check" fr --impl
+expectm fail "a clean implementation review followed by a later file change (final state differs) fails the final-result check" 'REJECT: the last execution is not a clean verdic' fr --impl
 mkrun; LINEMETA="state=S0 endstate=S0 impl=yes" line real 0 review "$TID$CLEAN"
-expect fail "non-tdd: a clean review followed by a later file change also fails (state binding applies to every skill)" fr
+expectm fail "non-tdd: a clean review followed by a later file change also fails (state binding applies to every skill)" 'REJECT: the last execution is not a clean verdic' fr
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no" line real 0 review "$TID$FIND"; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
 expect pass "tdd: a clean implementation review on the final state passes the final-result check" fr --impl
 mkrun; line real 0 review "$TID$CLEAN"
-expect fail "a clean real review that recorded no state at all is not bound to the final state" fr
+expectm fail "a clean real review that recorded no state at all is not bound to the final state" 'REJECT: the last execution is not a clean verdic' fr
 expect pass "the real branch runs the bound final-result check once, with --impl for tdd-claude-codex only" sh -c "test \"\$(grep -c 'check-scripted.py\" \"\$out/wrapper.jsonl\" final \"\$real_final_state\" --real \$IMPLFLAG' '$here/review-loop-proof.sh')\" = 1 && grep -q 'IMPLFLAG=; \[\[ \$skill == tdd-claude-codex \]\] && IMPLFLAG=--impl' '$here/review-loop-proof.sh'"
 # the shim records the repo state and the impl flag in the event meta, computed by the same state-hash.py and check-impl.py
 mkrun; printf 'def add(a, b):\n    return a + b\n' > "$tmp/run/repo/app.py"
@@ -1349,11 +1374,11 @@ expect pass "the shim marks a workspace-write call as no audit at call time" tes
 # r13 finding 2: the reviewer must have judged the tree the run ended with. The shim records the state at call START (state) and at the verdict (endstate); a file edited while
 # the reviewer runs makes them differ, and an approval for the earlier tree must not count for the current one.
 mkrun; LINEMETA="state=S1 endstate=S2 impl=yes" line real 0 review "$TID$CLEAN"
-expect fail "an approval whose tree changed while the reviewer ran (start state differs from the verdict state) fails" fr --impl
+expectm fail "an approval whose tree changed while the reviewer ran (start state differs from the verdict state) fails" 'REJECT: the last execution is not a clean verdic' fr --impl
 mkrun; LINEMETA="state=S0 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
-expect fail "an approval started on an older tree and ended on the final one still fails" fr --impl
+expectm fail "an approval started on an older tree and ended on the final one still fails" 'REJECT: the last execution is not a clean verdic' fr --impl
 mkrun; LINEMETA="state=S1 impl=yes" line real 0 review "$TID$CLEAN"
-expect fail "an approval that recorded no verdict-time state fails" fr --impl
+expectm fail "an approval that recorded no verdict-time state fails" 'REJECT: the last execution is not a clean verdic' fr --impl
 mkrun; LINEMETA="state=S1 endstate=S1 impl=yes" line real 0 review "$TID$CLEAN"
 expect pass "an approval on an unchanged final tree passes" fr --impl
 mkdir -p "$tmp/realbin2"; cat > "$tmp/realbin2/codex" <<'SH'
@@ -1367,42 +1392,42 @@ chmod +x "$tmp/realbin2/codex"
 mkrun; printf 'def add(a, b):\n    return a + b\n' > "$tmp/run/repo/app.py"; start0="$(python3 "$here/state-hash.py" "$tmp/run/repo")"
 PROOF_REPO="$tmp/run/repo" REAL_CODEX="$tmp/realbin2/codex" viawrap exec --json --sandbox read-only prompt >/dev/null 2>&1
 expect pass "the shim records the state at call START and a different state at the verdict when a file is edited meanwhile" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; m=wlog.load(sys.argv[2])[-1]["meta"]; print(m["state"]==sys.argv[3], m["endstate"]!=sys.argv[3])' "$here" "$EVLOG" "$start0")" = "True True"
-expect fail "the real log of a file edited while the reviewer ran does not bind to the final tree" python3 "$here/check-scripted.py" "$EVLOG" final "$(python3 "$here/state-hash.py" "$tmp/run/repo")" --real
-expect fail "the same log fails the audit binding too" python3 "$here/check-scripted.py" "$EVLOG" final X --real --audit
+expectm fail "the real log of a file edited while the reviewer ran does not bind to the final tree" 'REJECT: no reviewer execution in the log' python3 "$here/check-scripted.py" "$EVLOG" final "$(python3 "$here/state-hash.py" "$tmp/run/repo")" --real
+expectm fail "the same log fails the audit binding too" 'REJECT: the last test audit is missing' python3 "$here/check-scripted.py" "$EVLOG" final X --real --audit
 au() { python3 "$here/check-scripted.py" "$EVLOG" final X --real --audit; }
 mkrun; expect fail "audit: no Codex verdict at all fails the test-audit check" au
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "${TID}VERDICT: BLOCKED\nHIGH: weak test\n"
-expect fail "audit: a last Codex verdict of BLOCKED with a finding fails" au
+expectm fail "audit: a last Codex verdict of BLOCKED with a finding fails" 'REJECT: the last test audit is not a clean exit-' au
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "${TID}VERDICT: BLOCKED\n"
-expect fail "audit: a bare BLOCKED with no finding is not clean" au
+expectm fail "audit: a bare BLOCKED with no finding is not clean" 'REJECT: the last test audit is not a clean exit-' au
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "${TID}VERDICT: WARNING\n"
-expect fail "audit: a bare WARNING with no finding is not clean" au
+expectm fail "audit: a bare WARNING with no finding is not clean" 'REJECT: the last test audit is not a clean exit-' au
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "${TID}VERDICT: APPROVED\nCRITICAL: a real finding\n"
-expect fail "audit: APPROVED beside a finding is not clean" au
+expectm fail "audit: APPROVED beside a finding is not clean" 'REJECT: the last test audit is not a clean exit-' au
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "$TID$FIND"; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"
 expect pass "audit: findings then a clean APPROVED with zero findings passes" au
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S1 endstate=S1 impl=yes audit=no" line real 0 impl "${TID}Implemented add() in app.py.\n"
 expect pass "audit: a later Codex implementation reply (no verdict) does not displace the clean audit" au
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "$TID$BLOCK"
-expect fail "audit: a clean audit followed by a later BLOCKED verdict fails" au
+expectm fail "audit: a clean audit followed by a later BLOCKED verdict fails" 'REJECT: the last test audit is not a clean exit-' au
 mkrun; LINEMETA="audit=yes" line real 0 review "$TID$CLEAN"
-expect fail "audit: a clean verdict that recorded no state fails" au
+expectm fail "audit: a clean verdict that recorded no state fails" 'REJECT: the last test audit is not a clean exit-' au
 # r11 finding 2: an audit ATTEMPT is told apart from an implementation call by the audit= marker the shim records at call time (the sandbox the call asked for),
 # never by whether a verdict came back, so a failed or malformed re-audit cannot be filtered away before the latest one is chosen.
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 1 review "codex-call: UNREVIEWED"
-expect fail "audit: a clean audit followed by a failed re-audit fails" au
+expectm fail "audit: a clean audit followed by a failed re-audit fails" 'REJECT: the last test audit is not a clean exit-' au
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "${TID}no verdict here at all\n"
-expect fail "audit: a clean audit followed by a malformed re-audit fails" au
+expectm fail "audit: a clean audit followed by a malformed re-audit fails" 'REJECT: the last test audit is not a clean exit-' au
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"; LINEMETA="state=S1 endstate=S1 impl=yes audit=no" line real 1 impl "codex-call: UNREVIEWED"
 expect pass "audit: a clean audit followed by a failed implementation call still passes" au
 mkrun; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 1 review "codex-call: UNREVIEWED"; LINEMETA="state=S0 endstate=S0 impl=no audit=yes" line real 0 review "$TID$CLEAN"
 expect pass "audit: a failed audit followed by a clean re-audit passes" au
 mkrun; LINEMETA="state=S0 endstate=S1 impl=no audit=yes" line real 0 review "$TID$CLEAN"
-expect fail "audit: a clean audit whose tree changed while it ran fails" au
+expectm fail "audit: a clean audit whose tree changed while it ran fails" 'REJECT: the last test audit is not a clean exit-' au
 # the review record: built against a real tiny git repo, hashing the same diff command the skills prescribe
 rr() { python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"; }
 rrhash() { (cd "$tmp/rr" && git add -N app.py 2>/dev/null; git diff "$(git rev-list --max-parents=0 HEAD)" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' | shasum -a 256 | cut -d' ' -f1); }
-rrmk() { rm -rf "$tmp/rr"; mkdir -p "$tmp/rr"; (cd "$tmp/rr" && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$(printf 's\n\nVerified: fixture repo for the review-record cases')" && printf 'def add(a, b):\n    return a + b\n' > app.py); }
+rrmk() { rm -f "$tmp/rrout.txt"; rm -rf "$tmp/rr"; mkdir -p "$tmp/rr"; (cd "$tmp/rr" && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$(printf 's\n\nVerified: fixture repo for the review-record cases')" && printf 'def add(a, b):\n    return a + b\n' > app.py); }
 rrrec() { mkdir -p "$tmp/rr/.claude/review"; printf 'REVIEWED-DIFF: %s\n%b' "$1" "$2" > "$tmp/rr/.claude/review/final-review.txt"; }
 rrmk
 # r13 finding 2: run the prescribed two-step sequence itself (extracted from the skill) against the fixture repo. The base is the root commit, so the command's HEAD base is swapped for it.
@@ -1412,26 +1437,31 @@ t = open(sys.argv[1]).read(); i = t.index("**Review record (every reviewer round
 f = re.findall(r"```\n(.*?)\n```", t[i:], re.S)[:2]
 open(sys.argv[2], "w").write(f[0] + "\n"); open(sys.argv[3], "w").write(f[1] + "\n")
 PYX
-rrstep() { (cd "$tmp/rr" && git add -N app.py && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" | bash -e); }
+rrstep() { (cd "$tmp/rr" && git add -N app.py && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" | bash -e) >> "$tmp/rrout.txt" 2>&1; }
 rrmk; rrstep step1.sh; rrstep step2.sh
 expect pass "the prescribed sequence on an unchanged tree writes a record the checker accepts" rr
 rrmk; rrstep step1.sh; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"; rrstep step2.sh
 expect fail "the prescribed sequence voids the round when a file is edited while the reviewer ran (no record, nothing approved)" test -s "$tmp/rr/.claude/review/final-review.txt"
-expect fail "an edit during the review leaves nothing the checker accepts" rr
+expect pass "control: the edited-while-reviewing round is void (the block itself said so)" grep -Eq "this round is void" "$tmp/rrout.txt"
+expectm fail "an edit during the review leaves nothing the checker accepts" 'no review record at \.claude/review/final-review\.' rr
 rrmk; rrstep step1.sh; rrstep step2.sh; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
-expect fail "an earlier round's record does not approve a later edit" rr
+expectm fail "an earlier round's record does not approve a later edit" 'the record'\''s diff hash is not the hash of the fi' rr
 # r14 finding 1: a pipeline failure or an empty diff voids the round at step 1 AND at step 2, removes any old record and records nothing. rrstepx runs the extracted block with NO `set -e` (the block must handle
 # its own failures) and, when FAILSUB is given, with a stub git whose subcommand FAILSUB exits 1.
-rrstepx() { (cd "$tmp/rr" && { [ ! -e app.py ] || git add -N app.py; } && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" > "$tmp/x-$1" && if [[ -n "${2:-}" ]]; then FAILSUB="$2" PATH="$tmp/stubgit:$PATH" bash "$tmp/x-$1"; else bash "$tmp/x-$1"; fi) >/dev/null 2>&1; }
+rrstepx() { (cd "$tmp/rr" && { [ ! -e app.py ] || git add -N app.py; } && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/git diff HEAD/git diff $base/g; s/<the reviewer's reply, verbatim>/VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none/" "$tmp/$1" > "$tmp/x-$1" && if [[ -n "${2:-}" ]]; then FAILSUB="$2" PATH="$tmp/stubgit:$PATH" bash "$tmp/x-$1"; else bash "$tmp/x-$1"; fi) >> "$tmp/rrout.txt" 2>&1; }
 rrstale() { rrrec "$(rrhash)" "VERDICT: APPROVED\n"; }
 rrmk; rrstale; rrstepx step1.sh diff; rrstepx step2.sh
 expect fail "a git diff that fails at step 1 leaves no record (the old record is removed and no snapshot is kept)" test -e "$tmp/rr/.claude/review/final-review.txt" -o -s "$tmp/rr/.claude/review/reviewed.diff"
+expect pass "control: step 1 reported no snapshot (the block itself said so)" grep -Eq "no snapshot" "$tmp/rrout.txt"
 rrmk; rrstepx step1.sh; rrstale; rrstepx step2.sh diff
 expect fail "a git diff that fails at step 2 leaves no record (the old record is removed)" test -e "$tmp/rr/.claude/review/final-review.txt"
+expect pass "control: step 2 reported the void (the block itself said so)" grep -Eq "this round is void" "$tmp/rrout.txt"
 rrmk; rrstale; rrstepx step1.sh diff; rrstepx step2.sh diff
 expect fail "a git diff that fails at both steps leaves no record, whatever hash empty input has" test -e "$tmp/rr/.claude/review/final-review.txt"
+expect pass "control: both steps reported their failure (the block itself said so)" grep -Eq "no snapshot.*this round is void|this round is void.*no snapshot|no snapshot" "$tmp/rrout.txt"
 rrmk; rm -f "$tmp/rr/app.py"; rrstale 2>/dev/null; rrstepx step1.sh; rrstepx step2.sh
 expect fail "an empty diff leaves no record and no snapshot" test -e "$tmp/rr/.claude/review/final-review.txt" -o -e "$tmp/rr/.claude/review/reviewed.diff"
+expect pass "control: an empty diff was refused at step 1 (the block itself said so)" grep -Eq "no snapshot" "$tmp/rrout.txt"
 rrmk; rrstepx step1.sh; rrstepx step2.sh
 expect pass "the same block with a working git and a real diff still records" rr
 # r14 hostile read: a reviewer reply that contains the old heredoc terminator line must not end the record early and run the rest of the reply as shell commands
@@ -1446,8 +1476,9 @@ t = open(sys.argv[1]).read(); i = t.index("**Review record (every reviewer round
 f = re.findall(r"```\n(.*?)\n```", t[i:], re.S)[:2]
 open(sys.argv[2], "w").write(f[0] + "\n"); open(sys.argv[3], "w").write(f[1] + "\n")
 PYX
-rrmk; (cd "$tmp/rr" && git add -N app.py && env -u START_SHA bash "$tmp/tstep1.sh" >/dev/null 2>&1; env -u START_SHA bash "$tmp/tstep2.sh" >/dev/null 2>&1)
+rrmk; (cd "$tmp/rr" && git add -N app.py && env -u START_SHA bash "$tmp/tstep1.sh" >> "$tmp/rrout.txt" 2>&1; env -u START_SHA bash "$tmp/tstep2.sh" >> "$tmp/rrout.txt" 2>&1)
 expect fail "the tdd block with START_SHA unset leaves no snapshot and no record" test -s "$tmp/rr/.claude/review/reviewed.diff" -o -e "$tmp/rr/.claude/review/final-review.txt"
+expect pass "control: the tdd block named the unset START_SHA (the block itself said so)" grep -q "START_SHA" "$tmp/rrout.txt"
 rrmk; (cd "$tmp/rr" && git add -N app.py && START_SHA="$(git rev-list --max-parents=0 HEAD)" bash "$tmp/tstep1.sh" >/dev/null 2>&1; sed "s/<the reviewer's reply, verbatim>/VERDICT: APPROVED/" "$tmp/tstep2.sh" > "$tmp/tstep2b.sh"; START_SHA="$(git rev-list --max-parents=0 HEAD)" bash "$tmp/tstep2b.sh" >/dev/null 2>&1)
 expect pass "the tdd block with START_SHA set records" rr
 # r14 finding 3: the whole .claude/review/ directory (record, snapshot, anything added later) is outside the hashed diff, so tracking any of it never turns an unchanged round stale
@@ -1459,20 +1490,20 @@ expect pass "an intent-to-add snapshot and other file under .claude/review leave
 rrmk; H0="$(rrhash)"; rrsnap; rrrec "$H0" "VERDICT: APPROVED\n"; (cd "$tmp/rr" && git add -f .claude/review)
 expect pass "the record and the snapshot both tracked leave an unchanged round's record valid" rr
 printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
-expect fail "a real code change still makes the record stale with the review directory tracked" rr
-expect fail "review record: a missing record fails" rr
+expectm fail "a real code change still makes the record stale with the review directory tracked" 'the record'\''s diff hash is not the hash of the fi' rr
+expectm fail "review record: a missing record fails" 'the record'\''s diff hash is not the hash of the fi' rr
 rrmk; rrrec "$(rrhash)" "VERDICT: BLOCKED\nHIGH: real problem\n"
-expect fail "review record: findings in the record fail" rr
+expectm fail "review record: findings in the record fail" 'the recorded reply is not a clean verdict \(APPRO' rr
 rrmk; rrrec "$(rrhash)" "VERDICT: BLOCKED\n"
-expect fail "review record: a bare BLOCKED in the record fails" rr
+expectm fail "review record: a bare BLOCKED in the record fails" 'the recorded reply is not a clean verdict \(APPRO' rr
 rrmk; rrrec "$(rrhash)" "VERDICT: APPROVED\nMEDIUM: still a finding\n"
-expect fail "review record: APPROVED beside a finding in the record fails" rr
+expectm fail "review record: APPROVED beside a finding in the record fails" 'the recorded reply is not a clean verdict \(APPRO' rr
 rrmk; rrrec "$(rrhash)" "VERDICT: APPROVED\n"; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
-expect fail "review record: a clean record for an older diff (file changed afterwards) fails as stale" rr
+expectm fail "review record: a clean record for an older diff (file changed afterwards) fails as stale" 'the record'\''s diff hash is not the hash of the fi' rr
 rrmk; rrrec "0000000000000000000000000000000000000000000000000000000000000000" "VERDICT: APPROVED\n"
-expect fail "review record: a clean record naming some other diff hash fails" rr
+expectm fail "review record: a clean record naming some other diff hash fails" 'the record'\''s diff hash is not the hash of the fi' rr
 rrmk; printf 'VERDICT: APPROVED\n' > "$tmp/rr/x"; mkdir -p "$tmp/rr/.claude/review"; cp "$tmp/rr/x" "$tmp/rr/.claude/review/final-review.txt"
-expect fail "review record: a record with no REVIEWED-DIFF line fails" rr
+expectm fail "review record: a record with no REVIEWED-DIFF line fails" 'first line is not REVIEWED-DIFF: <sha' rr
 rrmk; rrrec "$(rrhash)" "VERDICT: APPROVED\n"
 expect pass "review record: APPROVED with zero findings on the final diff passes (new file reached the diff by intent-to-add)" rr
 rrmk; (cd "$tmp/rr" && git add -N app.py); rrrec "$(rrhash)" "VERDICT: APPROVED\n"
@@ -1486,21 +1517,21 @@ expect pass "review record: a TRACKED record file does not make the record stale
 rrmk; mkdir -p "$tmp/rr/.claude/review"; printf 'seed\n' > "$tmp/rr/.claude/review/final-review.txt"; (cd "$tmp/rr" && git add -N -f .claude/review/final-review.txt); rrrec "$(rrhash)" "VERDICT: APPROVED\n"
 expect pass "review record: an INTENT-TO-ADD record file does not make the record stale on an unchanged tree" rr
 rrmk; mkdir -p "$tmp/rr/.claude/review"; printf 'seed\n' > "$tmp/rr/.claude/review/final-review.txt"; (cd "$tmp/rr" && git add -N -f .claude/review/final-review.txt); rrrec "$(rrhash)" "VERDICT: APPROVED\n"; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
-expect fail "review record: a tracked or intent-to-add record still goes stale when real code changes" rr
+expectm fail "review record: a tracked or intent-to-add record still goes stale when real code changes" 'the record'\''s diff hash is not the hash of the fi' rr
 # r12 finding 3: a git call that fails must FAIL the check (empty output from a failed diff must not match a recorded empty-diff hash), and an empty diff never validates.
 EMPTYH=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 rrmk; rrrec "$(rrhash)" "VERDICT: APPROVED\n"
-expect fail "review record: a git diff that exits non-zero fails the check" env FAILSUB=diff PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
+expectm fail "review record: a git diff that exits non-zero fails the check" 'git diff ' env FAILSUB=diff PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
 # an untracked file the run never added makes the checker run its own intent-to-add; that git call failing must be the reported cause (not a later hash mismatch)
 printf 'x=1\n' > "$tmp/rr/extra.py"; rrrec "$(rrhash)" "VERDICT: APPROVED\n"
 expect pass "review record: a failing intent-to-add (index preparation) fails the check and says so" sh -c 'FAILSUB=add PATH="$1:$PATH" python3 "$2" "$3" "$4" 2>&1 | grep -q "git add -N failed"' _ "$tmp/stubgit" "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
 rm -f "$tmp/rr/extra.py"
-expect fail "review record: a failing untracked-file listing fails the check" env FAILSUB=ls-files PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
-expect fail "review record: a failing index path lookup fails the check" env FAILSUB=rev-parse PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
+expectm fail "review record: a failing untracked-file listing fails the check" 'git ls-files --others failed \(exit ' env FAILSUB=ls-files PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
+expectm fail "review record: a failing index path lookup fails the check" 'git rev-parse --git-path failed \(exit ' env FAILSUB=rev-parse PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
 rrmk; base0="$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"; rrrec "$(rrhash)" "VERDICT: APPROVED\n"; rm -rf "$tmp/notgit"; mkdir -p "$tmp/notgit/.claude/review"; cp "$tmp/rr/.claude/review/final-review.txt" "$tmp/notgit/.claude/review/"
-expect fail "review record: a directory that is not a git repo fails the check" env GIT_CEILING_DIRECTORIES="$tmp" python3 "$here/check-review-record.py" "$tmp/notgit" "$base0"
+expectm fail "review record: a directory that is not a git repo fails the check" 'git rev-parse --git-path failed \(exit ' env GIT_CEILING_DIRECTORIES="$tmp" python3 "$here/check-review-record.py" "$tmp/notgit" "$base0"
 rrmk; rm -f "$tmp/rr/app.py"; rrrec "$EMPTYH" "VERDICT: APPROVED\n"
-expect fail "review record: an empty diff never validates, even with the empty-input hash recorded" rr
+expectm fail "review record: an empty diff never validates, even with the empty-input hash recorded" 'the final diff is empty: nothing was reviewed' rr
 expect pass "the real branch of the proof runs the review-record check for the two skills with a Claude reviewer" sh -c "grep -q 'check-review-record.py' '$here/review-loop-proof.sh' && grep -q -- '--audit' '$here/review-loop-proof.sh'"
 
 # Self-test (round 3 finding 3): these cases need no private reviewer, so they MUST have run (and passed) in every mode, CHECKERS_NO_SPY=1 included.
