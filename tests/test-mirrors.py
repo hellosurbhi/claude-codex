@@ -183,8 +183,8 @@ def block_of(path):
 # r19 finding 1: ONE review input for every reviewer. Every diff workflow builds .claude/review/review-input.diff (the diff after redact-diff.sh) once per round, hands exactly that to the primary
 # reviewer and the tier S fallback, and the fallback block only appends that file: no second git diff, no raw snapshot in any prompt.
 # r20 finding 2: the SAME file is the Codex prompt (--prompt-file) and the tier S context, written under .claude/review, with the requirements and instructions text passed through redact-diff.sh like the diff.
-REVNEED = ['CTX="$R/.claude/review/review-context.txt"', '~/.claude/config/scripts/redact-diff.sh --text > "$CTX" <<\'EOF\'', 'then cat "$R/.claude/review/review-input.diff" >> "$CTX"', 'echo "review context ready', 'rm -f "$CTX"',
-           'the review input .claude/review/review-input.diff is missing or empty, or the redaction failed: no context is sent']
+REVNEED = ['CTX="$R/.claude/review/review-context.txt"', 'RAW="$R/.claude/review/requirements.raw.txt"', '[ -s "$RAW" ] && ~/.claude/config/scripts/redact-diff.sh --text < "$RAW" > "$CTX" && printf \'\\nDIFF:\\n\' >> "$CTX"', 'then cat "$R/.claude/review/review-input.diff" >> "$CTX" && rm -f "$RAW"', 'file-writing tool (Write, never a heredoc, echo or printf carrying the pasted text)', '.claude/review/requirements.raw.txt', 'echo "review context ready', 'rm -f "$CTX"',
+           'the review input .claude/review/review-input.diff or the requirements file .claude/review/requirements.raw.txt is missing or empty, or the redaction failed: no context is sent']
 PARANEED = ["`--prompt-file`", "never the prompt as a command argument", "operating system's argument limit", "TASK REQUIREMENTS", "same `~/.claude/config/scripts/redact-diff.sh`", "`--text` mode", "same best-effort mask", "not a guarantee",
             "`reviewer.sh S`", "`codex-call.sh`"]
 for f in CTXFILES:
@@ -202,7 +202,7 @@ for f in CTXFILES:
             continue
         # WHY the quoted ${START_SHA:?} (round 15 finding 3): an unset START_SHA made `git diff $START_SHA` read the index, not the run's changes; the :? form fails the pipeline and sends nothing.
         base = "\"${START_SHA:?}\"" if "tdd-" in rel else "HEAD"
-        need = ["OPEN FINDINGS:"] + (['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "AUDIT INSTRUCTIONS:", '[ -s .claude/plan/<feature-name>.md ] && cat .claude/plan/<feature-name>.md >> "$CTX" || { rm -f "$CTX"', "the plan file is missing, empty or unreadable: no context is sent", "PLAN:"] if plan else
+        need = ["OPEN FINDINGS:"] + (['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "AUDIT INSTRUCTIONS:", 'NOTES=.claude/plan/audit-notes.raw.txt', 'cat "$NOTES" > "$CTX" && printf \'\\nPLAN:\\n\' >> "$CTX"', "the audit notes file or the plan file is missing, empty or unreadable: no context is sent", "file-writing tool (Write, never a heredoc, echo or printf carrying the pasted text)"] if plan else
                 ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:"] + REVNEED + PARANEED + ["best-effort mask", "no context is sent"])
         for k in need:
             if k not in b:
@@ -217,6 +217,12 @@ for n in NAMES:
     sk, cm = files(n)
     if block_of(sk) != block_of(cm):
         bad.append("%s: the Fallback input paragraph and command sequence differ between skill and command" % n)
+# r22 finding 1: no shell construct in any skill, command or reference file may carry pasted free text. A heredoc (or here-string) in a documented command ends early on a text line equal to its
+# terminator and runs the rest as shell; `$(...)` and backticks in a quoted argument do the same. Free text travels as a file written with the file-writing tool, so NO heredoc is allowed anywhere.
+for f in sorted(set(CTXFILES) | set(f for n in NAMES for f in files(n))):
+    for blk in re.findall(r"```[^\n]*\n(.*?)\n```", open(f, encoding="utf-8").read(), re.S):
+        if re.search(r"<<-?\s*[\\'\"]?[A-Za-z_]", blk) or "<<<" in blk:
+            bad.append("%s: a command block uses a heredoc or here-string (free text must be written to a file with the file-writing tool, never typed into a shell construct)" % os.path.relpath(f, root))
 if "one context file" not in open(os.path.join(root, "README.md"), encoding="utf-8").read():
     bad.append("README.md: the tier S fallback statement does not name the context file")
 # Round 3 finding 1: ONE verdict grammar everywhere (it must agree with the global review contract, which omits empty severity lines and
@@ -345,7 +351,7 @@ for n in ("execute-codex", "tdd-execute-codex"):
         got.append(b)
         if cnt != 1 or not b:
             bad.append("%s: expected exactly one Review record paragraph with its command sequence (found %d)" % (rel, cnt)); continue
-        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n'", "if H=\"$(set -o pipefail; git diff %s %s ':(top,exclude).claude/review' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && (set -o pipefail; ~/.claude/config/scripts/redact-diff.sh < .claude/review/reviewed.diff > .claude/review/review-input.diff) && [ -s .claude/review/review-input.diff ]; then" % (base, EXCL), "if N=\"$(set -o pipefail; git diff %s %s ':(top,exclude).claude/review' | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && [ \"$N\" = \"$H\" ]; then" % (base, EXCL), "rm -f .claude/review/final-review.txt .claude/review/reviewed.diff .claude/review/review-input.diff", "else rm -f .claude/review/reviewed.diff .claude/review/review-input.diff; echo \"no review input", "Dispatch only after it prints \"review input ready\". Send every reviewer `.claude/review/review-input.diff`", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n' \"$H\"", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"", "else rm -f .claude/review/final-review.txt", "> .claude/review/final-review.txt", "<the reviewer's reply, verbatim>", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
+        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n'", "if H=\"$(set -o pipefail; git diff %s %s ':(top,exclude).claude/review' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && (set -o pipefail; ~/.claude/config/scripts/redact-diff.sh < .claude/review/reviewed.diff > .claude/review/review-input.diff) && [ -s .claude/review/review-input.diff ]; then" % (base, EXCL), "if N=\"$(set -o pipefail; git diff %s %s ':(top,exclude).claude/review' | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && [ \"$N\" = \"$H\" ] && [ -s .claude/review/reply.raw.txt ]; then" % (base, EXCL), "rm -f .claude/review/final-review.txt .claude/review/reviewed.diff .claude/review/review-input.diff", "else rm -f .claude/review/reviewed.diff .claude/review/review-input.diff; echo \"no review input", "Dispatch only after it prints \"review input ready\". Send every reviewer `.claude/review/review-input.diff`", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n' \"$H\"", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"", "else rm -f .claude/review/final-review.txt", "> .claude/review/final-review.txt", "cat .claude/review/reply.raw.txt; } > .claude/review/final-review.txt && rm -f .claude/review/reply.raw.txt", "file-writing tool (Write, never a heredoc, echo or printf carrying the pasted reply)", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
             if k not in b:
                 bad.append("%s: the Review record sequence lacks %r" % (rel, k[:60]))
         # r13 finding 2: ORDER is the rule. Snapshot and hash BEFORE dispatch (step 1), then after the reply compare the current tree with that hash (step 2) and only then write the record, whose hash is
