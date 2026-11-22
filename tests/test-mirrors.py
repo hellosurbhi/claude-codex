@@ -31,8 +31,8 @@ SNIPPETS = [
     (r"There is no iteration cap and no stop to ask the user after N rounds", []),
     # cc11-main-r1: a nonzero reviewer.sh exit is no verdict whatever it printed (the installed script discards the model's exit status)
     (r"a nonzero exit is no verdict whatever it printed", NAMES),
-    # cc11-main-r2 finding 1: a result counts only with exit 0 AND a complete verdict block
-    (r"A reviewer result counts only when the command exited 0 AND the output is a complete verdict block\. Anything else is no verdict\.", NAMES),
+    # cc11-main-r2 finding 1: a result counts only with exit 0 AND an output that parses under the one verdict grammar
+    (r"A reviewer result counts only when the command exited 0 AND the output parses as a verdict under the Validate the response grammar\. Anything else is no verdict\.", NAMES),
     # cc11-main-r1: only a named non-transient blocker ends the quota fallback chain; transient failures retry with no cap
     (r"a named non-transient blocker ends the chain", ["execute-codex", "tdd-execute-codex"]),
 ]
@@ -160,17 +160,22 @@ for f in sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root,
     for m in re.finditer(r"reviewer\.sh R <diff-file> <out-file>`", t):
         if not t[m.end():].startswith(GUARD):
             bad.append("%s: reviewer.sh R mention lacks the secret guard (tier S when committed secret-named files exist)" % os.path.relpath(f, root))
-# cc11-main-r1: the failed review/audit paragraph of every Codex-using workflow must say a verdict line without the four severity lines is a failed audit.
+# Round 3 finding 1: ONE verdict grammar everywhere (it must agree with the global review contract, which omits empty severity lines and
+# calls a clean review exactly `VERDICT: APPROVED`). No file may demand severity lines, a `none` placeholder or a "complete verdict block".
 # WHY a per-file check instead of a SNIPPETS row: SNIPPETS demands equal counts in skill and command, but the skills also carry a frontmatter-adjacent summary the commands lack.
+OLD_GRAMMAR = ("<list or 'none'>", "(`none` when empty", "`none` when empty", "four severity lines", "complete verdict block", "is not followed by the", "(`none` on every severity line)", "only the reviewer.sh fallback may answer", "contradicts itself and is no verdict")
+for f in sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root, "skills", "codex-mcp", x) for x in ("SKILL.md", "reference.md")) | set(os.path.join(root, "skills", n, "codex-analyzer-role.md") for n in ("plan-codex", "tdd-claude-codex"))):
+    t = open(f, encoding="utf-8").read()
+    for k in OLD_GRAMMAR:
+        if k in t:
+            bad.append("%s: still carries the pre-round-3 verdict grammar text %r" % (os.path.relpath(f, root), k))
 for n in ("claude-codex", "tdd-claude-codex", "tdd-execute-codex", "execute-codex"):
     for f in files(n):
         t = open(f, encoding="utf-8").read()
         paras = [q for q in t.split("\n\n") if q.startswith(("**Failed review**", "**Failed audit**"))]
         for q in paras:
-            if not re.search(r"severity lines|`LOW:` lines", q):
-                bad.append("%s: failed review/audit paragraph does not treat a missing severity block as failed" % os.path.relpath(f, root))
-        if not paras and not re.search(r"`LOW:` lines, is a failed review|without the four severity lines", t):
-            bad.append("%s: no failed review/audit rule for an incomplete Codex block" % os.path.relpath(f, root))
+            if "Validate the response" not in q or "second `VERDICT:` line" not in q:
+                bad.append("%s: failed review/audit paragraph does not point at the single verdict grammar" % os.path.relpath(f, root))
 # WHY (CodeRabbit thread 2): the TDD test audit received only a diff and generic questions, so a task given as direct text (not saved in the repo)
 # could never be checked for coverage. Both TDD workflows, skill and command, must put the sanitized task requirements in the audit prompt.
 for n in ("tdd-claude-codex", "tdd-execute-codex"):
@@ -196,7 +201,7 @@ for n in NAMES:
             if ln.startswith("There is no iteration cap and no stop to ask the user") and ACTIVE not in ln:
                 bad.append("%s: a no-cap paragraph does not route re-review to the active fallback reviewer" % os.path.relpath(f, root))
 # C3 (PR 10, rewritten for codex-call.sh): a verdict is validated, never substring-matched.
-VALID_KEYS = ("exactly one line `VERDICT: APPROVED`", "NOT APPROVED", "APPROVED once you fix", "two verdict lines is no verdict", "CRITICAL or HIGH finding", "never a clean round")
+VALID_KEYS = ("first non-blank line must be exactly `VERDICT: APPROVED`", "NOT APPROVED", "APPROVED once you fix", "second `VERDICT:` line is no verdict", "takes the next non-blank line", "`none` or `n/a`", "real finding at any severity means findings", "never a clean round", "mpty output")
 PARSE_ANCHOR = re.compile(r"^(Classify the verdict\.|\*\*Parse response\*\*|\*\*Parse the exact|Parse reviewer response)")
 for n in NAMES:
     for f in files(n):
@@ -216,8 +221,11 @@ for n in ("plan-codex", "tdd-claude-codex"):
         bad.append("skills/%s/codex-analyzer-role.md lacks the one-verdict-line sentence merged with the any-severity sentence" % n)
 for n in NAMES:
     ev = open(os.path.join(root, "skills/%s/evals/evals.json" % n), encoding="utf-8").read()
-    if "contradict" not in ev.lower() or "mcp__codex" in ev:
-        bad.append("skills/%s/evals/evals.json lacks the contradictory-verdict eval or still names mcp__codex__" % n)
+    if "mcp__codex" in ev or '"id": 9' not in ev:
+        bad.append("skills/%s/evals/evals.json lacks the invalid-verdict eval (id 9) or still names mcp__codex__" % n)
+    # Round 3: APPROVED beside a real CRITICAL or HIGH finding is FINDINGS (fix and re-review), never "no verdict".
+    if n in ("claude-codex", "tdd-claude-codex") and "treats the contradiction as no verdict" in ev:
+        bad.append("skills/%s/evals/evals.json still treats APPROVED beside a real finding as no verdict instead of findings" % n)
 for f in files("plan-codex"):
     if "CodeRabbit tier R reads commits, not the plan file" not in open(f, encoding="utf-8").read():
         bad.append("%s: the plan fallback does not say which other reviewers can read the actual plan" % os.path.relpath(f, root))

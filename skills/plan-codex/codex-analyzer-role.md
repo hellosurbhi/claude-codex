@@ -25,10 +25,12 @@ Return ONLY this structured verdict — no prose, no alternatives, no recommenda
 ```
 VERDICT: APPROVED | WARNING | BLOCKED
 
-CRITICAL: <list or 'none'>
-HIGH: <list or 'none'>
-MEDIUM: <list or 'none'>
-LOW: <list or 'none'>
+CRITICAL: <findings>
+HIGH: <findings>
+MEDIUM: <findings>
+LOW: <findings>
+
+Omit any severity line with no findings (never write placeholder lines such as "HIGH: none"). A clean review is exactly the one line `VERDICT: APPROVED`.
 ```
 
 Severity definitions:
@@ -44,4 +46,4 @@ Verdict rules:
 
 The verdict signals urgency only. The caller fixes and re-audits every finding you list at any severity, so list every real MEDIUM and LOW finding even under APPROVED, and list none that are not real.
 
-Emit exactly one verdict line, and make it consistent with the findings below it. Never pair `VERDICT: APPROVED` with a non-empty `CRITICAL:` or `HIGH:` list, and never qualify the verdict ("APPROVED once you fix ..."). A contradictory or doubled verdict is rejected as no verdict and sent back for a single unambiguous one.
+Emit exactly one verdict line, and make it consistent with the findings below it. Never pair `VERDICT: APPROVED` with a non-empty `CRITICAL:` or `HIGH:` list, and never qualify the verdict ("APPROVED once you fix ..."). A doubled or qualified verdict is no verdict and is sent back for a single unambiguous one; any real finding you list is fixed and re-audited whatever the verdict word.

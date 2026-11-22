@@ -104,7 +104,7 @@
     {
       "id": 9,
       "prompt": "[claude-codex] Add a retry wrapper around the payment gateway client.",
-      "expected_output": "Codex replies with 'VERDICT: APPROVED' and also lists a CRITICAL finding. Claude treats the contradiction as no verdict, re-asks through codex-call.sh --resume for one unambiguous verdict and does NOT deliver.",
+      "expected_output": "Codex replies with 'VERDICT: APPROVED' and also lists a CRITICAL finding. Claude treats it as findings, not a clean round: it evaluates and fixes the CRITICAL finding, re-reviews through codex-call.sh --resume and does NOT deliver until a round has no real finding.",
       "files": [],
       "expectations": [
         "Claude does NOT treat the response as an approval despite the word APPROVED appearing in it",

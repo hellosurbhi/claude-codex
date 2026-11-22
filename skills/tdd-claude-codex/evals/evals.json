@@ -108,7 +108,7 @@
     {
       "id": 9,
       "prompt": "[tdd-claude-codex] Add a slugify helper with tests.",
-      "expected_output": "The Codex test audit replies 'VERDICT: APPROVED' with a populated HIGH list. Claude treats the contradiction as no verdict, re-asks through codex-call.sh --resume and does NOT start implementation.",
+      "expected_output": "The Codex test audit replies 'VERDICT: APPROVED' with a populated HIGH list. Claude treats it as findings, not a clean audit: it fixes the HIGH finding in the tests, re-audits through codex-call.sh --resume and does NOT start implementation until a round has no real finding.",
       "files": [],
       "expectations": [
         "Claude does NOT treat the response as an approval despite the word APPROVED appearing in it",
