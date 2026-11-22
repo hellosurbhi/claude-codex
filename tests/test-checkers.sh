@@ -307,11 +307,14 @@ mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; printf 'plan\n' > "$tmp
 bash "$here/spy-reviewer.sh" S "$tmp/plan.md" "$tmp/out.txt" >/dev/null 2>&1
 expect_spy pass "control: the same call with a zero exit and the same approval is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --plan-file "$tmp/plan.md"
 
-# cc11-main-r2 finding 2: the guard that decides whether tier R (CodeRabbit, which reads the commits itself) may be used must really list committed secret-named files, even from a subdirectory.
-for guard_file in skills/execute-codex/SKILL.md skills/claude-codex/SKILL.md skills/tdd-execute-codex/SKILL.md skills/tdd-claude-codex/SKILL.md; do
-  expect pass "the tier R secret guard in $guard_file lists committed secret files from a subfolder" python3 "$here/check-secret-guard.py" "$here/../$guard_file"
-  expect pass "the tier R content scan in $guard_file refuses an inline key, a secret-shaped path and an unresolvable base and allows a clean diff" python3 "$here/check-content-scan.py" "$here/../$guard_file"
-done
+# cc11-main-r8: no skill, command or reference file calls an outside reviewer; a re-added call, a content scan or a fallback that skips tier S is caught by test-mirrors.py.
+rm -rf "$tmp/mir8"; mkdir -p "$tmp/mir8"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir8/"
+printf '\nRun `REVIEW_BASE_SHA=x ~/.claude/config/scripts/reviewer.sh R <diff-file> <out-file>` first.\n' >> "$tmp/mir8/commands/claude-codex.md"
+expect fail "an outside-reviewer call injected into a command is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"
+cp "$here/../commands/claude-codex.md" "$tmp/mir8/commands/claude-codex.md"; printf '\nThen ask the gemini CLI to review.\n' >> "$tmp/mir8/commands/claude-codex.md"
+expect fail "a Gemini instruction injected into a command is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"
+cp "$here/../commands/claude-codex.md" "$tmp/mir8/commands/claude-codex.md"
+expect pass "the pristine copy of the skills and commands passes the outside-reviewer rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 
 # cc11-main-r2 finding 3: the diff command each workflow prescribes is relative to the repository top, not to the shell's folder.
 for f in skills/claude-codex/SKILL.md commands/claude-codex.md skills/execute-codex/SKILL.md commands/execute-codex.md skills/tdd-claude-codex/SKILL.md commands/tdd-claude-codex.md skills/tdd-execute-codex/SKILL.md commands/tdd-execute-codex.md; do
@@ -341,11 +344,6 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "{\\"type\\":\\"thread.started\\",\
 PATH="$tmp/errbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>"$tmp/errout.txt"
 expect pass "codex-call.sh reports a message-less JSON error event whole (usage_limit visible)" grep -q "usage_limit" "$tmp/errout.txt"
 expect pass "codex-call.sh carries the v2 contract line" grep -qx '# contract: codex-call v2 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)' "$here/../scripts/codex-call.sh"
-# cc11-main-r7 finding 1: every credential shape the README says the scan refuses has a refused fixture, and every fixture is promised (mechanical, so the two cannot drift).
-expect pass "every credential shape the README promises has a refused fixture in check-content-scan.py and vice versa" python3 "$here/check-content-scan.py" --readme "$here/../README.md"
-r7tmp=$(mktemp); sed 's/Slack tokens; /Slack tokens; Stripe live keys; /' "$here/../README.md" > "$r7tmp"
-expect fail "the README parity check fails when the README promises a shape with no fixture" python3 "$here/check-content-scan.py" --readme "$r7tmp"
-rm -f "$r7tmp"
 # cc11-main-r5 finding 2: the README must name the position the contract line really has (line 1 is the shebang).
 expect pass "the README places the codex-call.sh contract line on the line it really is on" test "$(sed -n 2p "$here/../scripts/codex-call.sh" | cut -c1-22)" = "# contract: codex-call" -a -n "$(grep -F 'The second line of `scripts/codex-call.sh` is a contract line' "$here/../README.md")"
 
@@ -650,7 +648,7 @@ expect pass "a real wrapper reply satisfies the real verdict check" python3 "$he
 rm -rf "$tmp/mir"; mkdir -p "$tmp/mir"; cp -R "$here/../skills" "$here/../commands" "$tmp/mir/"
 python3 - "$tmp/mir/commands/tdd-claude-codex.md" <<'PY2'
 import sys; p=sys.argv[1]; s=open(p).read()
-a="a Codex usage limit or an unavailable CodeRabbit is never a blocker while tier S can run"; assert a in s
+a="a Codex usage limit is never a blocker while tier S can run"; assert a in s
 open(p,"w").write(s.replace(a,"a Codex usage limit is a blocker even while tier S can run",1))
 PY2
 expect fail "a folded failure paragraph that lets a usage limit stop the loop is caught" python3 "$here/test-mirrors.py" "$tmp/mir"
@@ -1000,7 +998,7 @@ expect_spy pass "control: an origin-requiring reviewer.sh makes the no-remote ca
 
 # Self-test (round 3 finding 3): these cases need no private reviewer, so they MUST have run (and passed) in every mode, CHECKERS_NO_SPY=1 included.
 for must in "ci.yml declares an explicit contents: read permissions block" "ci.yml checks out with persist-credentials: false" "ci.yml runs the checkers with CHECKERS_NO_SPY=1" \
-  "the tier R secret guard in skills/claude-codex/SKILL.md lists committed secret files from a subfolder" "the reviewer diff command in commands/execute-codex.md lists changes in sibling folders when run from a subfolder" \
+  "an outside-reviewer call injected into a command is caught" "the reviewer diff command in commands/execute-codex.md lists changes in sibling folders when run from a subfolder" \
   "codex-call.sh defaults --cd to the repository top when started from a subfolder" "codex-call.sh reports a message-less JSON error event whole (usage_limit visible)" \
   "a report ending in an APPROVED status line is accepted" "a real add passes check-impl" "tmo python fallback kills a slow command with exit 124"; do
   if grep -qxF -e "$must" <<<"$ran_names"; then ok "self-test: non-spy case ran: $must"; else bad "self-test: a non-spy case was skipped or failed: $must"; fi

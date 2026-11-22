@@ -25,7 +25,6 @@ SNIPPETS = [
     (r"any reviewer authorized for the repo, tier S included", NAMES),
     (r"no Codex thread is required", []),
     (r"reviewer\.sh S <(?:diff|plan)-file> <out-file>", NAMES),
-    (r"REVIEW_BASE_SHA=<base commit> ~/\.claude/config/scripts/reviewer\.sh R", DIFF_NAMES),
     (r"End the final report with exactly one machine-readable line, `AUDIT-STATUS: APPROVED reviewer=<name>`", NAMES),
     (r"Never conclude the reviewer is stuck, never report that no clean round was reached", []),
     (r"There is no iteration cap and no stop to ask the user after N rounds", []),
@@ -58,7 +57,7 @@ CLAUSES = [
     r"\(the active reviewer is the Codex thread or.{0,400}?no Codex thread is required\)",
     r"\(a fresh Codex thread without `--resume`.{0,2500}?on the current head\)",
     r"End the final report with exactly one machine-readable line.{0,400}?last non-blank line of the report\.",
-    # r26: the stop rule (usage limit or unavailable CodeRabbit is never a blocker while tier S can run) lives in the folded failure paragraphs too
+    # r26: the stop rule (a usage limit is never a blocker while tier S can run) lives in the folded failure paragraphs too
     r"\(a call that merely died.{0,600}?while tier S can run\)",
     r"Never conclude the reviewer is stuck, never report that no clean round was reached, and never hand the user a keep-going-or-drop-it decision; a doubt about a finding goes through",
     r"There is no iteration cap and no stop to ask the user after N rounds: round 6, 10 or 20 continues the same way until a review round has no accepted findings at any severity",
@@ -127,13 +126,12 @@ for n in NAMES:
         for m in re.finditer(r"`git diff (?:HEAD|\$START_SHA)([^`]*)`", open(f, encoding="utf-8").read()):
             if EXCL not in m.group(0):
                 bad.append("%s: reviewer diff command lacks the secret exclude pathspec: %s" % (os.path.relpath(f, root), m.group(0)))
-# WHY (P3 matrix on 134faf7): codex-mcp's no-cap paragraph offered only tier R (committed changes) as a reviewer fallback, so in 2 of 7
-# usage-limit runs the model sent an uncommitted tree to tier R, which answers "Review complete" on an empty diff and is not a review.
-# Both codex-mcp copies must also offer tier S and say an uncommitted tree is never sent to tier R.
+# WHY (P3 matrix on 134faf7): codex-mcp's no-cap paragraph once offered only a committed-diff reviewer as fallback, which answered "Review complete" on an uncommitted tree.
+# Both codex-mcp copies must offer tier S (it reviews whatever diff file it is given).
 for f in (os.path.join(root, "skills", "codex-mcp", "SKILL.md"), os.path.join(root, "skills", "codex-mcp", "reference.md")):
     t = open(f, encoding="utf-8").read()
-    if "reviewer.sh S <diff-file> <out-file>" not in t or "never an uncommitted tree" not in t:
-        bad.append("%s: no-cap paragraph lacks the tier S fallback or the uncommitted-tree-never-tier-R rule" % os.path.relpath(f, root))
+    if "reviewer.sh S <diff-file> <out-file>" not in t:
+        bad.append("%s: no-cap paragraph lacks the tier S fallback" % os.path.relpath(f, root))
 # cc11-main-r1: the pathspec must work, not just be spelled the same everywhere. Build a repo with root and nested secret files and run EXCL.
 import subprocess, tempfile, shlex
 def leaked(spec):
@@ -152,17 +150,21 @@ if leaked(EXCL):
     bad.append("EXCL pathspec still lets secret-named files through: %s" % leaked(EXCL))
 if not leaked("-- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'"):
     bad.append("the old pathspec no longer leaks, so the functional check proves nothing")
-# cc11-main-r2 finding 2: tier R reads the commits itself, so EVERY mention of it carries the secret guard that falls back to tier S.
-# WHY the exact guard text: a paraphrase in one copy is how r1 to r20 kept drifting; check-secret-guard.py then runs the command itself.
-PATH_CMD = "git diff --name-only --no-renames --ignore-submodules=none <base commit>..HEAD -- ':(top,glob,icase)**/.env*' ':(top,glob,icase)**/*secret*' ':(top,glob,icase)**/*credential*' ':(top,glob,icase)**/*.pem' ':(top,glob,icase)**/*.key'"
-# cc11-main-r7: -U2147483647 (git's context ceiling) because xdiff cannot diff a file over 1GB, so the context always spans the whole file at both revisions, and a file git cannot diff fails the command and is refused; the generic assignment names any identifier containing key, secret, token, password, passwd or pwd and takes a quoted value or any 12+ character unquoted value (.env, YAML, PHP arrow, Go define); err toward refusing. cc11-main-r6 finding 1: git can omit or rewrite contents in the diff text, so the scan forces the real bytes (--text, grep -a, LC_ALL=C so invalid UTF-8 cannot fail grep), bypasses textconv, external diff drivers, colour and submodule config, and refuses any gitlink (mode 160000) because a submodule's contents never appear. cc11-main-r5 finding 1: the scan covers the WHOLE payload, so -U2147483647 (whole changed files, base and HEAD sides, since CodeRabbit may read entire changed files and the removed lines it sees) and --no-renames (a rename shows as delete plus add with full content, and the old secret-shaped name is listed). cc11-main-r4 finding 1: filenames alone are not enough, CodeRabbit reads committed CONTENT, so tier R also needs this content scan of the added lines. Defined ONCE here; check-content-scan.py runs the text the skills carry on temp repos.
-SCAN_CMD = "d=$(git diff --text --no-textconv --no-ext-diff --no-color --no-renames --ignore-submodules=none --submodule=short -U2147483647 <base commit>..HEAD -- ':(top)') && printf '%s\\n' \"$d\" | LC_ALL=C grep -Eaiq \"(^[-+ ]Subproject commit |(mode|index [0-9a-f.]+) 160000|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-|AIza[0-9A-Za-z_-]{30,}|(key|secret|token|passw(or)?d|pwd)[\\\"']?[[:space:]]*[:=]+>?[[:space:]]*([^[:space:]]{12,}|[\\\"'][^\\\"']{12,}[\\\"']))\""
-GUARD = " (run only after BOTH checks pass: `%s` prints nothing, and `%s` exits with status 1, meaning no credential-shaped line anywhere in the changed files (added, removed and unchanged lines, binary-looking files included) and no submodule change; if the first prints anything, or the second exits with any other status (a hit, a failed scan or an unresolvable base commit), skip every outside reviewer and use tier S with the sanitized diff)" % (PATH_CMD, SCAN_CMD)
+# cc11-main-r8 (design change): skills and commands NEVER call an outside reviewer. A skill cannot prove a diff is free of credentials (a pattern scan failed five reviews in a row:
+# unscanned permission-only changes, names with the keyword not before the delimiter, and more), so the only fallback when Codex gives no verdict is tier S with the sanitized diff.
+# WHY a line-level check: the prescribed text is one explanatory sentence; every other line of every skill, command and reference file must name no outside reviewer, so a re-added call fails here.
+OUTSIDE = "Outside reviewers (Gemini, CodeRabbit) are never called from these skills, because a skill cannot prove a diff is free of credentials; they run only inside the reviewer script's own chain."
+FORBIDDEN = re.compile(r"reviewer\.sh R\b|reviewer\.sh E\b|coderabbit|gemini|content scan|SCAN_CMD|REVIEW_BASE_SHA", re.I)
+FALLBACK = re.compile(r"switch to another independent reviewer|fallback chain instead|Switch reviewers in this order")
 for f in sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root, "skills", "codex-mcp", x) for x in ("SKILL.md", "reference.md"))):
-    t = open(f, encoding="utf-8").read()
-    for m in re.finditer(r"reviewer\.sh R <diff-file> <out-file>`", t):
-        if not t[m.end():].startswith(GUARD):
-            bad.append("%s: reviewer.sh R mention lacks the secret guard (tier S when committed secret-named files exist)" % os.path.relpath(f, root))
+    for ln, line in enumerate(open(f, encoding="utf-8"), 1):
+        rest = line.replace(OUTSIDE, "")
+        if FORBIDDEN.search(rest):
+            bad.append("%s:%d: names an outside reviewer or a content scan outside the one explanatory sentence: %s" % (os.path.relpath(f, root), ln, FORBIDDEN.search(rest).group(0)))
+        if FALLBACK.search(line) and "reviewer.sh S <" not in line:
+            bad.append("%s:%d: a reviewer fallback that does not name tier S (reviewer.sh S)" % (os.path.relpath(f, root), ln))
+    if OUTSIDE not in open(f, encoding="utf-8").read() and os.path.basename(os.path.dirname(f)) != "tests" and "codex-analyzer" not in f:
+        bad.append("%s: lacks the mirrored sentence about outside reviewers" % os.path.relpath(f, root))
 # Round 3 finding 1: ONE verdict grammar everywhere (it must agree with the global review contract, which omits empty severity lines and
 # calls a clean review exactly `VERDICT: APPROVED`). No file may demand severity lines, a `none` placeholder or a "complete verdict block".
 # WHY a per-file check instead of a SNIPPETS row: SNIPPETS demands equal counts in skill and command, but the skills also carry a frontmatter-adjacent summary the commands lack.
@@ -247,8 +249,8 @@ for f in sorted(set(f for n in NAMES for f in files(n)) | set(os.path.join(root,
     if t.count("Omit any severity line with no findings") != t.count("and never a severity header with no text after it"):
         bad.append("%s: a reviewer prompt omits the 'never a severity header with no text after it' clause" % os.path.relpath(f, root))
 for f in files("plan-codex"):
-    if "CodeRabbit tier R reads commits, not the plan file" not in open(f, encoding="utf-8").read():
-        bad.append("%s: the plan fallback does not say which other reviewers can read the actual plan" % os.path.relpath(f, root))
+    if "reviewer.sh S <plan-file> <out-file>" not in open(f, encoding="utf-8").read():
+        bad.append("%s: the plan fallback does not name tier S on the actual plan file" % os.path.relpath(f, root))
 for dp, _, fs in os.walk(root):
     if "/.git" in dp or "/tests" in dp: continue
     for fn in fs:
