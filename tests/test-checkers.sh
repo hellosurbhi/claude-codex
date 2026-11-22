@@ -397,10 +397,8 @@ expect fail "a value ending in an escaped backslash leaves no secret text" sh -c
 expect pass "text after a value that ends in an escaped backslash is kept" sh -c 'printf "%s\n" "+password = \"abSECRET\\\\\", other = 1" | "$1" | grep -q "other = 1"' _ "$red"
 # r13 finding 1: attack cases, one per shape the header comment claims. Each line is "input|||secret text that must not survive".
 leaks() { printf '+%s\n' "$1" | "$red" | grep -qF -- "$2"; }
-while IFS= read -r case_; do
-  [ -n "$case_" ] || continue
-  expect fail "redact-diff masks: ${case_%%|||*}" leaks "${case_%%|||*}" "${case_##*|||}"
-done <<'ATTACKS'
+cat > "$tmp/attacks.txt" <<'ATTACKS'
+-----BEGIN RSA PRIVATE KEY-----LEAKKEYBODY-----END RSA PRIVATE KEY-----|||LEAKKEYBODY
 Authorization: Bearer abcdefghijklmnop|||abcdefghijklmnop
 Authorization: Bearer zq|||zq
 "Authorization": "Bearer aB+c/d=="|||aB+c/d==
@@ -434,6 +432,31 @@ GET /x?password=LEAKpw&user=bob|||LEAKpw
 github_pat_AbCdEfGhIjKl|||AbCdEfGhIjKl
 AKIAABCDEFGHIJKLMNOP|||ABCDEFGHIJKLMNOP
 ATTACKS
+while IFS= read -r case_; do
+  [ -n "$case_" ] || continue
+  expect fail "redact-diff masks: ${case_%%|||*}" leaks "${case_%%|||*}" "${case_##*|||}"
+done < "$tmp/attacks.txt"
+# r14 finding 2: no rule may print a line early. A single-line key block, the END line of a block and the BEGIN line of a block still pass through every other rule for the text outside the block.
+expect fail "a password after a single-line private key on the same line is masked" leaks "-----BEGIN PRIVATE KEY-----KEYBODY-----END PRIVATE KEY----- password=LEAKafter" "LEAKafter"
+expect fail "a token before a single-line private key on the same line is masked" leaks "password=LEAKbefore -----BEGIN PRIVATE KEY-----KEYBODY-----END PRIVATE KEY-----" "LEAKbefore"
+expect fail "a password before the BEGIN line text of a multi-line key is masked" leaks "password=LEAKbefore2 -----BEGIN PRIVATE KEY-----" "LEAKbefore2"
+expect fail "a password after the END line text of a multi-line key is masked" sh -c 'printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY----- password=LEAKend" | "$1" | grep -qF -- LEAKend' _ "$red"
+expect fail "the key body lines of a multi-line key are masked" sh -c 'printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY-----" | "$1" | grep -qF -- KEYBODYLINE' _ "$red"
+expect pass "text after a multi-line key block is processed normally again" sh -c 'printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY-----" "+x = 1" | "$1" | grep -qxF -- "+x = 1"' _ "$red"
+expect fail "a file header line carrying a credential is masked too" sh -c 'printf "%s\n" "diff --git a/x b/y password=LEAKhdr" | "$1" | grep -qF -- LEAKhdr' _ "$red"
+# every pair of attack shapes on one line, both orders: neither secret may survive (no rule may skip the others)
+expect pass "redact-diff masks every pair of attack shapes combined on one line, in both orders" python3 - "$red" "$tmp/attacks.txt" <<'PYX'
+import subprocess, sys
+red, f = sys.argv[1], sys.argv[2]
+shapes = [l.rstrip("\n").split("|||") for l in open(f) if l.strip()]
+pairs = [(a, b) for i, a in enumerate(shapes) for j, b in enumerate(shapes) if i != j]
+lines = ["+" + a[0] + " " + b[0] for a, b in pairs]
+out = subprocess.run([red], input="\n".join(lines) + "\n", capture_output=True, text=True).stdout.split("\n")
+bad = [(a[0], b[0]) for (a, b), o in zip(pairs, out) if a[1] in o or b[1] in o]
+for a, b in bad[:20]: print("LEAK:", a, "||", b, file=sys.stderr)
+print(len(pairs), "pairs,", len(bad), "leaks", file=sys.stderr)
+sys.exit(1 if bad else 0)
+PYX
 # placeholders and ordinary code stay byte-identical
 while IFS= read -r case_; do
   [ -n "$case_" ] || continue

@@ -11,7 +11,8 @@
 # for a non-alphanumeric character before it (otherwise "task-description-long-enough" would be mangled); bash 3.2 and BSD awk compatible (no
 # interval expressions, no gawk extensions).
 # COVERED (the value is replaced, the rest of the line is kept):
-#   - private key blocks (PEM, OpenSSH, PGP), including a block that starts and ends on one line;
+#   - private key blocks (PEM, OpenSSH, PGP), including a block that starts and ends on one line; the text outside a block on its BEGIN and END lines goes through every
+#     other rule, and so does every file header line (a path can carry a credential); no rule prints a line early;
 #   - AKIA and ASIA access keys, ghp_ gho_ ghu_ ghs_ ghr_ and github_pat_ tokens, sk- keys, xoxa xoxb xoxp xoxs xoxr xoxo tokens and JWTs
 #     (these prefixed shapes are masked from a short length up; they are matched only when not glued to a preceding letter or digit);
 #   - whatever follows "Bearer " (any length, any characters, up to a quote or whitespace), and whatever follows "Basic " or "Token " after an
@@ -109,6 +110,20 @@ function assign(s,   k, ch, ls, out, hs, hl, head, rest, c, q, e, val, tail, lea
   }
   return out s
 }
+# private key blocks: the text between BEGIN and END (a whole line while inside a block) becomes one marker, the text outside it is returned for the other rules. State is kept in inkey across lines.
+function keys(s,   out, rest) {
+  out = ""
+  while (1) {
+    if (inkey) {
+      if (match(s, KEYE)) { out = out "[REDACTED:private-key]"; s = substr(s, RSTART + RLENGTH); inkey = 0; continue }
+      return out "[REDACTED:private-key]"
+    }
+    if (!match(s, KEYB)) return out s
+    out = out substr(s, 1, RSTART - 1); s = substr(s, RSTART + RLENGTH)
+    if (match(s, KEYE)) { out = out "[REDACTED:private-key]"; s = substr(s, RSTART + RLENGTH); continue }
+    inkey = 1; return out "[REDACTED:private-key]"
+  }
+}
 BEGIN {
   KW = "(password|passwd|passphrase|secret|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)[a-z0-9_-]*[\"\047]?[[:space:]]*[:=]+>?[[:space:]]*"
   KEYB = "-----BEGIN [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----"
@@ -117,18 +132,13 @@ BEGIN {
 }
 {
   line = $0
-  if (line ~ /^diff --git /) { inhdr = 1; inkey = 0; print line; next }
-  if (line ~ /^@@/) { inhdr = 0; inkey = 0 }
-  if (inhdr) { print line; next }
-  pfx = (substr(line, 1, 1) ~ /[-+ ]/) ? substr(line, 1, 1) : ""
-  if (inkey) {
-    if (line ~ KEYE) inkey = 0
-    print pfx "[REDACTED:private-key]"; next
-  }
-  if (match(line, KEYB)) {
-    if (match(line, KEYB ".*" KEYE)) { line = substr(line, 1, RSTART - 1) "[REDACTED:private-key]" substr(line, RSTART + RLENGTH) }
-    else { match(line, KEYB); line = substr(line, 1, RSTART - 1) "[REDACTED:private-key]"; inkey = 1 }
-    print line; next
+  # WHY no rule prints early (r14 finding 2): every line runs through every rule in sequence and is printed once, at the end. An early print after the key-block rule, the header rule or the
+  # END-line rule skipped the remaining redactors, so a password or token elsewhere on the same line survived. File header lines run the credential rules too (a path can carry one) but never open a key block.
+  if (line ~ /^diff --git /) { inhdr = 1; inkey = 0 }
+  else if (line ~ /^@@/) { inhdr = 0; inkey = 0 }
+  if (!inhdr) {
+    pfx = (substr(line, 1, 1) ~ /[-+ ]/) ? substr(line, 1, 1) : ""
+    line = pfx keys(substr(line, length(pfx) + 1))
   }
   line = tok(line, "(AKIA|ASIA)[0-9A-Z]+", "", "[REDACTED:aws-key]", 16, 0)
   line = tok(line, "gh[pousr]_[A-Za-z0-9]+", "", "[REDACTED:github-token]", 12, 0)
