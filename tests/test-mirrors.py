@@ -31,6 +31,8 @@ SNIPPETS = [
     (r"There is no iteration cap and no stop to ask the user after N rounds", []),
     # cc11-main-r1: a nonzero reviewer.sh exit is no verdict whatever it printed (the installed script discards the model's exit status)
     (r"a nonzero exit is no verdict whatever it printed", NAMES),
+    # cc11-main-r2 finding 1: a result counts only with exit 0 AND a complete verdict block
+    (r"A reviewer result counts only when the command exited 0 AND the output is a complete verdict block\. Anything else is no verdict\.", NAMES),
     # cc11-main-r1: only a named non-transient blocker ends the quota fallback chain; transient failures retry with no cap
     (r"a named non-transient blocker ends the chain", ["execute-codex", "tdd-execute-codex"]),
 ]
