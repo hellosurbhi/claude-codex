@@ -341,6 +341,8 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "{\\"type\\":\\"thread.started\\",\
 PATH="$tmp/errbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>"$tmp/errout.txt"
 expect pass "codex-call.sh reports a message-less JSON error event whole (usage_limit visible)" grep -q "usage_limit" "$tmp/errout.txt"
 expect pass "codex-call.sh carries the v2 contract line" grep -qx '# contract: codex-call v2 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)' "$here/../scripts/codex-call.sh"
+# cc11-main-r5 finding 2: the README must name the position the contract line really has (line 1 is the shebang).
+expect pass "the README places the codex-call.sh contract line on the line it really is on" test "$(sed -n 2p "$here/../scripts/codex-call.sh" | cut -c1-22)" = "# contract: codex-call" -a -n "$(grep -F 'The second line of `scripts/codex-call.sh` is a contract line' "$here/../README.md")"
 
 # CodeRabbit thread 7 (evlog.py:28): a marked plan that quotes a function signature is still a plan, not the implementation.
 expect pass "a marked plan containing def add(a, b) is classified as a plan" test "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import evlog; print(evlog.phase_of("# Implementation plan\n\nAdd:\n    def add(a, b):\n        return a + b\n"))' "$here")" = "plan"
