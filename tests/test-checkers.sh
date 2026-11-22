@@ -382,7 +382,7 @@ done
 expect pass "redact-diff keeps the hunk header, context lines and the +/- prefixes" test "$(grep -c '^@@ -1,9 +1,9 @@' "$tmp/secrets.out")$(grep -c '^ tail = 1$' "$tmp/secrets.out")$(grep -c '^-' "$tmp/secrets.out")$(grep -c '^+' "$tmp/secrets.out")" = "111313"
 expect pass "redact-diff keeps the line count of the diff" test "$(wc -l < "$fx")" = "$(wc -l < "$tmp/secrets.out")"
 expect pass "redact-diff does not touch a word that merely contains sk-" sh -c 'printf "+x = task-description-for-the-user-that-is-long\n" | "$1" | grep -q "task-description-for-the-user-that-is-long"' _ "$red"
-git -C "$here/.." diff 9847101 HEAD -- tests/proof 2>/dev/null | grep -v -i 'password\|secret\|token\|api.key\|credential\|bearer' > "$tmp/clean.diff"
+printf 'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1,2 +1,2 @@\n keep one\n-old line\n+new line\n' > "$tmp/clean.diff"
 printf 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-hello world\n+hello there, a task-list and ask-me\n' >> "$tmp/clean.diff"
 "$red" < "$tmp/clean.diff" > "$tmp/clean.out"
 expect pass "a clean diff comes out byte-identical" cmp -s "$tmp/clean.diff" "$tmp/clean.out"
@@ -393,10 +393,12 @@ import re, sys
 t = open(sys.argv[1]).read()
 b = re.search(r"\*\*Fallback input \(tier S\)\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
 b = b.replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[2]).replace("~/.claude/config/scripts/reviewer.sh S", "touch " + sys.argv[4] + " #")
-b = b.replace("git diff HEAD", "git diff 9847101").replace("<out-file>", "x")
+b = b.replace("<out-file>", "x")
 open(sys.argv[3], "w").write(b + "\n")
 PY
-  rm -f "$tmp/reviewer-called"; ( cd "$here/.." && bash "$tmp/sendtry.sh" >/dev/null 2>&1 ); [ -f "$tmp/reviewer-called" ]
+  # self-contained throwaway repo (one committed file plus an uncommitted change), so the case needs no history of this repo and works in a shallow clone
+  rm -rf "$tmp/sendrepo"; mkdir -p "$tmp/sendrepo"; ( cd "$tmp/sendrepo" && git init -q && printf 'one\n' > f.txt && git add f.txt && git -c user.name=t -c user.email=t@t commit -q -m "$(printf 'base\n\nVerified: fixture repo for the fallback sequence')" && printf 'two\n' >> f.txt )
+  rm -f "$tmp/reviewer-called"; ( cd "$tmp/sendrepo" && bash "$tmp/sendtry.sh" >/dev/null 2>&1 ); [ -f "$tmp/reviewer-called" ]
 }
 expect pass "the fallback sequence reaches the reviewer when the redaction script works" sendtry "$red"
 expect fail "the fallback sequence never reaches the reviewer when the redaction script is missing" sendtry "$tmp/no-such-redactor.sh"
