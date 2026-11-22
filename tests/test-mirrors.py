@@ -187,5 +187,13 @@ for n in ("execute-codex", "tdd-execute-codex"):
         for m in re.finditer(r"3\+ task path .{0,40}dispatch a Claude subagent[^\n]*", t):
             if not ("codex-call.sh" in m.group(0) and "that task's own" in m.group(0)):
                 bad.append("%s: the 3+ task fix path does not make each fix subagent call codex-call.sh on its own task's Codex thread" % os.path.relpath(f, root))
+# WHY (CodeRabbit thread 6): the re-audit/re-review step said to resume the Codex thread unconditionally, so after a quota fallback the revised
+# plan or diff went back to a thread that cannot answer. Every no-cap paragraph must route re-review to the ACTIVE reviewer.
+ACTIVE = "send the revised plan or diff to that same fallback reviewer"
+for n in NAMES:
+    for f in files(n):
+        for ln in open(f, encoding="utf-8").read().split("\n"):
+            if ln.startswith("There is no iteration cap and no stop to ask the user") and ACTIVE not in ln:
+                bad.append("%s: a no-cap paragraph does not route re-review to the active fallback reviewer" % os.path.relpath(f, root))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)
