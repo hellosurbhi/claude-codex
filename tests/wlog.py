@@ -23,11 +23,19 @@ def is_wrapper_failure(e):
     n = os.environ.get("EVNONCE")
     return e.get("wrapper") == "wrapper-failed" and (not n or (e.get("meta") or {}).get("nonce") == n)
 
+# WHY the production fallback banner is dropped, and only from the START of a spy's stdout: reviewer.sh log_fallback prints one loud
+# "!!! REVIEWER FALLBACK: <primary> FAILED (<reason>) - this review was produced by <model> (tier <T>)" line on STDOUT whenever a later
+# reviewer in the chain answers after Codex failed. The installed script puts CodeRabbit first for tier R, so no banner appeared; the
+# consolidated script runs Codex, Gemini, CodeRabbit for E and R alike, so every tier R review after a quota hit carries it. The verdict
+# itself is still the file production wrote, and it must still be the only remaining content. What breaks if this is widened: a banner
+# in the middle of a reply, or any other prose before the verdict, would stop counting as extra text. Hence anchored, one line, once.
+FALLBACK_BANNER = re.compile(r"\A!!! REVIEWER FALLBACK: \S+ FAILED \([^()\n]*\) \u2014 this review was produced by \S+ \(tier [ERS]\)\n")
+
 def reply_text(ev):
     # WHY both streams for a successful spy: the reviewer reply goes to the caller's chosen output path, so a reply routed
     # to /dev/stderr is logged as stderr; a failed spy keeps diagnostics out of the reply (r23).
     if ev["wrapper"] == "spy" and ev["exit"] == 0:
-        return ev["stdout"] + ev.get("stderr", "")
+        return FALLBACK_BANNER.sub("", ev["stdout"], count=1) + ev.get("stderr", "")
     return ev["stdout"]
 
 def verdict_lines(ev):

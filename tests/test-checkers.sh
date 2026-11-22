@@ -2296,6 +2296,15 @@ expectm fail "review record: a directory that is not a git repo fails the check"
 rrmk; rm -f "$tmp/rr/app.py"; rrrec "$EMPTYH" "VERDICT: APPROVED\n"
 expectm fail "review record: an empty diff never validates, even with the empty-input hash recorded" 'the final diff is empty: nothing was reviewed' rr
 expect pass "the real branch of the proof runs the review-record check for the two skills with a Claude reviewer" sh -c "grep -q 'check-review-record.py' '$here/review-loop-proof.sh' && grep -q -- '--audit' '$here/review-loop-proof.sh'"
+# consolidated chain: reviewer.sh prints one loud fallback line on stdout before the verdict whenever a later reviewer answers after Codex failed (tier R included)
+bn='!!! REVIEWER FALLBACK: codex FAILED (quota-or-failure) — this review was produced by coderabbit (tier R)'
+bannerclean() { python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.is_clean({"wrapper":"spy","exit":0,"stdout":sys.argv[2].replace("\\n","\n"),"stderr":""}))' "$here" "$1"; }
+expect pass "a spy reply that starts with the production fallback line and then one clean verdict is clean" test "$(bannerclean "$bn\nVERDICT: APPROVED\n")" = True
+expect pass "the fallback line alone is not a verdict" test "$(bannerclean "$bn\n")" = False
+expect pass "two fallback lines are not accepted (the allowance is one line, once)" test "$(bannerclean "$bn\n$bn\nVERDICT: APPROVED\n")" = False
+expect pass "a fallback line after the verdict is extra text, not clean" test "$(bannerclean "VERDICT: APPROVED\n$bn\n")" = False
+expect pass "other prose before the verdict is still extra text, not clean" test "$(bannerclean "hello\nVERDICT: APPROVED\n")" = False
+expect pass "a fallback line that does not match production's shape is not skipped" test "$(bannerclean "!!! REVIEWER FALLBACK: all is well\nVERDICT: APPROVED\n")" = False
 
 # Round 23: an early exit of the REAL codex-call.sh (bad arguments, missing prompt or role file) never reaches the codex shim, so it used to leave no event and an earlier clean review stood
 # as the last word. With CODEX_CALL_EVENT_LOG set the wrapper logs a wrapper-failed event for every nonzero exit that never reached codex; the final-result checks read it as "no approval".
