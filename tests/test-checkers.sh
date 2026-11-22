@@ -886,6 +886,51 @@ expect pass "placeholder severity lines are clean for a reviewer.sh spy reply to
 mkdir -p "$tmp/em"; for m in mathops strops listops pkginfo; do printf 'import os\nos._exit(0)\n' > "$tmp/em/$m.py"; done
 expect fail "four modules that exit 0 on import do not pass check-modules" python3 "$here/check-modules.py" "$tmp/em"
 
+# cc11-main-r6 finding 2: the real scenario must verify the requested work, not only thread mechanics. check-behavior.sh is the one acceptance step review-loop-proof.sh calls
+# from the real branch (and the scripted and usage-limit branches), so these cases drive it on work dirs a real run would leave behind, with no Codex quota spent.
+bw="$tmp/bw"; mkdir -p "$bw/empty" "$bw/mods" "$bw/impl" "$bw/stub" "$bw/plan/.claude/plan" "$bw/noplan/.claude/plan"
+cat > "$bw/mods/mathops.py" <<'PYM'
+def add(a, b):
+    """>>> add(1, 2)
+    3
+    """
+    return a + b
+def sub(a, b):
+    """>>> sub(3, 1)
+    2
+    """
+    return a - b
+PYM
+printf 'def shout(s):\n    """>>> shout("hi")\n    \x27HI!\x27\n    """\n    return s.upper() + "!"\n' > "$bw/mods/strops.py"
+printf 'def first(xs):\n    """>>> first([7, 8])\n    7\n    """\n    return xs[0]\n' > "$bw/mods/listops.py"
+printf 'VERSION = "1.0"\ndef describe():\n    """>>> describe()\n    \x27v1.0\x27\n    """\n    return "v" + VERSION\n' > "$bw/mods/pkginfo.py"
+printf 'def add(a, b):\n    return a + b\n' > "$bw/impl/app.py"; printf 'def add(a, b):\n    return 0\n' > "$bw/stub/app.py"
+printf 'Plan: add an add(a, b) function to app.py.\n' > "$bw/plan/.claude/plan/p.md"; : > "$bw/noplan/.claude/plan/p.md"
+expect fail "real execute-codex run whose work dir lacks the four modules fails the acceptance step" bash "$here/check-behavior.sh" execute-codex "$bw/empty" real
+expect pass "real execute-codex run with the four correct modules passes the acceptance step" bash "$here/check-behavior.sh" execute-codex "$bw/mods" real
+expect fail "real claude-codex run with no app.py add fails the acceptance step" bash "$here/check-behavior.sh" claude-codex "$bw/empty" real
+expect fail "real claude-codex run whose add is a stub fails the acceptance step" bash "$here/check-behavior.sh" claude-codex "$bw/stub" real
+expect pass "real claude-codex run with a working add passes the acceptance step" bash "$here/check-behavior.sh" claude-codex "$bw/impl" real
+for sk in tdd-claude-codex tdd-execute-codex codex-mcp; do
+  expect fail "real $sk run with no add fails the acceptance step" bash "$here/check-behavior.sh" $sk "$bw/empty" real
+  expect pass "real $sk run with a working add passes the acceptance step" bash "$here/check-behavior.sh" $sk "$bw/impl" real
+done
+expect fail "real plan-codex run with no plan file fails the acceptance step" bash "$here/check-behavior.sh" plan-codex "$bw/empty" real
+expect fail "real plan-codex run with an empty plan file fails the acceptance step" bash "$here/check-behavior.sh" plan-codex "$bw/noplan" real
+expect pass "real plan-codex run with a plan about the request passes the acceptance step" bash "$here/check-behavior.sh" plan-codex "$bw/plan" real
+expect fail "an unknown skill never passes the acceptance step" bash "$here/check-behavior.sh" nonsense "$bw/impl" real
+expect fail "execute-codex scripted scenarios still expect the small add, so four modules alone fail" bash "$here/check-behavior.sh" execute-codex "$bw/mods" round6
+# the acceptance step runs inside every branch of the proof before that branch exits (a branch that exits first is the bug this case guards)
+expect pass "every scenario branch of review-loop-proof.sh calls check-behavior.sh before its exit" python3 - "$here/review-loop-proof.sh" <<'PYB'
+import re, sys
+t = open(sys.argv[1]).read()
+for name, start, end in (("real", 'if [[ $scenario == real ]]; then\n  NOVERDICT', "  exit $fail\nfi\nif [[ $scenario == usage-limit ]]"), ("usage-limit", "if [[ $scenario == usage-limit ]]; then\n  # Codex is over quota", "  exit $fail\nfi\ncheck \"every finding round")):
+    i = t.index(start); j = t.index(end, i)
+    if "check-behavior.sh" not in t[i:j]: sys.exit("%s branch never calls check-behavior.sh before exiting" % name)
+tail = t[t.index('check "every finding round'):]
+if "check-behavior.sh" not in tail.split("exit $fail")[0]: sys.exit("scripted branch never calls check-behavior.sh before exiting")
+PYB
+
 # r44: a clean review followed by a malformed review attempt is not approved
 rrun; REVIEW_BASE_SHA="$R0" bash "$here/spy-reviewer.sh" R "$tmp/rin.txt" "$tmp/out.txt" >/dev/null 2>&1; orderfake "$EVLOG"
 expect_spy pass "the clean tier R review is accepted before a malformed call" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --repo "$tmp/run/repo"

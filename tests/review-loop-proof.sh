@@ -187,6 +187,8 @@ if [[ $scenario == real ]]; then
   echo "LAST_VERDICT: $(python3 "$here/last-verdict.py" "$out/wrapper.jsonl")"
   echo "THREAD_IDS: $(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; print(" ".join(sorted({e["thread_id"] for e in wlog.load(sys.argv[2]) if e["thread_id"]})))' "$here" "$out/wrapper.jsonl")"
   echo "SECONDARY (transcript): resume mentions=$(grep -c -- '--resume' "$out/events.txt")"
+  # WHY the behavioral acceptance step (cc11-main-r6): thread mechanics alone let a run that built nothing pass; the requested work must exist and work.
+  check "the requested work exists and behaves (behavioral)" 'bash "$here/check-behavior.sh" "$skill" "$repo" "$scenario"'
   [[ $skill == codex-mcp ]] || check "final report ends with one AUDIT-STATUS: APPROVED line" 'python3 "$here/audit-status.py" "$out/session.txt" --expect APPROVED'
   exit $fail
 fi
@@ -211,6 +213,7 @@ if [[ $scenario == usage-limit ]]; then
     [[ $skill == codex-mcp ]] || check "final report ends with one AUDIT-STATUS: APPROVED line" 'python3 "$here/audit-status.py" "$out/session.txt" --expect APPROVED'
     exit $fail
   fi
+  check "the requested work exists and behaves (behavioral)" 'bash "$here/check-behavior.sh" "$skill" "$repo" "$scenario"'
   # WHY all of these read the wrapper log: the last spy execution after the quota hit is the final fallback review.
   if [[ $FAKE_TARGET == code ]]; then
     check "the last fallback review after the quota hit was for the implementation and exactly clean" 'python3 "$here/check-reviewer-after-limit.py" "$out/wrapper.jsonl" --phase implementation --repo "$repo"'
@@ -235,5 +238,6 @@ fi
 if [[ $scenario == failed || $scenario == malformed ]]; then
   check "the first $FAKE_FAIL_FIRST calls returned no valid verdict, the next one did, and none after" 'python3 "$here/check-scripted.py" "$out/wrapper.jsonl" failfirst "$FAKE_FAIL_FIRST"'
 fi
+check "the requested work exists and behaves (behavioral)" 'bash "$here/check-behavior.sh" "$skill" "$repo" "$scenario"'
 [[ $skill == codex-mcp ]] || check "final report ends with one AUDIT-STATUS: APPROVED line" 'python3 "$here/audit-status.py" "$out/session.txt" --expect APPROVED'
 exit $fail
