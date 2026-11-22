@@ -21,7 +21,12 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/review-snap.XXXXXX")" || exit 1
 trap 'rm -rf "$tmp"' EXIT
 src="$(git rev-parse --git-path index)" || exit 1
 case "$src" in /*) ;; *) src="$top/$src" ;; esac
-if [ -e "$src" ]; then cp "$src" "$tmp/index" || exit 1; fi
+# WHY the copy's mtime is forced into the past (r29 flake): git treats an index entry as "racy" (re-hash its content instead of trusting size and
+# mtime) when the entry's mtime is not older than the index FILE's mtime. A plain `cp` gave the copy a fresh mtime, so a same-size edit made in
+# the same second as the last index write looked unchanged and vanished from the snapshot with exit 0 (about 1 run in 40, when the clock ticked
+# over mid-script). `cp -p` alone would depend on the original's timestamp; touching the copy to the epoch makes EVERY entry racy, so the
+# snapshot always compares content and can never trust a stat match. If the touch fails the script exits non-zero (fail closed).
+if [ -e "$src" ]; then cp "$src" "$tmp/index" && touch -t 197001020000 "$tmp/index" || exit 1; fi
 export GIT_INDEX_FILE="$tmp/index"
 git ls-files --others --exclude-standard -z > "$tmp/untracked" || exit 1
 if [ -s "$tmp/untracked" ]; then

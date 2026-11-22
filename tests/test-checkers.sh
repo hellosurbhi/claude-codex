@@ -2021,6 +2021,8 @@ expect pass "control: the edited-while-reviewing round is void (the block itself
 expectm fail "an edit during the review leaves nothing the checker accepts" 'no review record at \.claude/review/final-review\.' rr
 rrmk; rrstep step1.sh; rrstep step2.sh; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
 expectm fail "an earlier round's record does not approve a later edit" 'the record'\''s diff hash is not the hash of the fi' rr
+# r29 flake: the snapshot's private index copy must keep git's racy-entry detection, or a same-second same-size edit disappears (deterministic fixture, see the script).
+expect pass "r29: a same-second, same-size edit after the index write still appears in the snapshot (other changes present)" python3 "$here/check-snapshot-racy.py" "$here/../scripts/review-snapshot.sh"
 # r28 finding 2: the reviewed state includes untracked, non-ignored files (one shipped script, scripts/review-snapshot.sh, computes it for the skills and for the checker).
 # WHY these cases run the extracted blocks: the old snapshot hashed tracked and intent-to-add changes only, so a source file created while the reviewer ran left the hash unchanged.
 rrmk; rrstep step1.sh; printf 'x = 1\n' > "$tmp/rr/late.py"; rrstep step2.sh
