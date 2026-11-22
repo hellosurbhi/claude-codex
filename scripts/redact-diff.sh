@@ -41,6 +41,8 @@ if [ "$#" -ne 0 ]; then echo "usage: redact-diff.sh [--text] < input > output" >
 # line of a diff that ends in a "\ No newline at end of file" file) came out with one more byte than it went in. A caller comparing the sanitized text byte for byte against an expectation then rejected a legitimate review.
 # The output now ends in a newline exactly when the input did, and no other byte is normalised (CRLF, non-UTF-8 text and the no-newline marker pass through; a NUL byte never occurs because git prints binary files as one "Binary files ... differ" line).
 # v2 because that output differs from v1 for input with no final newline; the masking itself is unchanged.
+# r33: a diff this script cannot parse line by line (an unknown hunk-line prefix, an unknown header line, hunk counts that do not match the @@ header) now exits 3 (reported as nonzero) with nothing on stdout. Still v2: nothing is pushed or installed
+# yet, and every caller already treats a nonzero status as "send nothing" (see the skills). Feed it git output made with the default +, - and space prefixes (review-snapshot.sh pins them).
 # WHY every stage is checked and the output is emitted last (r28): a failed copy of stdin used to leave a truncated diff that was masked and printed with exit 0, so a caller could dispatch an incomplete review.
 # Now the stdin copy, mktemp, the last-byte read, awk, the byte count, the newline strip and the final write each exit nonzero on failure, and nothing reaches stdout until every earlier stage succeeded.
 # A stdout that cannot be written (closed, /dev/full) exits nonzero too; what was already written then is a partial write the caller must discard because the status is nonzero (callers check it, see the skills).
@@ -154,7 +156,47 @@ function keys(s, canclose,   out, rest) {
     inkey = 1; return out "[REDACTED:private-key]"
   }
 }
+function bad(msg) { printf "redact-diff: malformed diff, refusing to guess (line %d): %s\n", NR, msg > "/dev/stderr"; err = 1; exit 3 }
+# WHY the diff structure is validated, not assumed (r33): the key-block state machine reads the first byte of every hunk line as the side marker. A line with another first byte (git --output-indicator-old=X, a
+# mangled copy, a pager) was treated as unprefixed context, which closes BOTH key states, so a removed END line with a custom prefix exposed the replacement key body that followed. A diff this script cannot
+# parse line by line is not masked by guessing: it exits 3 with nothing on stdout. Checked: every header line between "diff --git" and the first "@@" is a known git header; every hunk line starts with a plus,
+# minus, space or backslash (an empty line counts as context: git prints one for a blank context line under diff.suppressBlankEmpty); the +/-/space counts of a hunk match its "@@ -a,b +c,d @@" header (a combined
+# diff checks the two prefix columns only); no line follows a complete hunk except another header or a backslash line; a hunk cut short at the next header or at the end is an error.
+function hunkdone() { return (cnt < 0 || (nold == 0 && nnew == 0)) }
+function validate(   n, t, p, q, a, b) {
+  if (line ~ /^diff --(git|cc|combined) /) { if (!hunkdone()) bad("hunk shorter than its @@ header"); inhdr = 1; inbin = 0; cnt = -1; return }
+  if (line ~ /^@@/) {
+    if (!hunkdone()) bad("hunk shorter than its @@ header")
+    inhdr = 0
+    if (line ~ /^@@@/) { cnt = -1; return }
+    if (!match(line, /^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/)) bad("unparseable @@ header")
+    t = substr(line, 4, RLENGTH - 6); split(t, p, " ")
+    split(substr(p[1], 2), q, ","); nold = (q[2] == "") ? 1 : q[2] + 0
+    split(substr(p[2], 2), q, ","); nnew = (q[2] == "") ? 1 : q[2] + 0
+    cnt = 1; return
+  }
+  if (inhdr) {
+    if (inbin) return
+    if (line ~ /^GIT binary patch/) { inbin = 1; return }
+    if (line !~ /^(index |--- |[+][+][+] |old mode |new mode |mode |deleted file mode |new file mode |similarity index |dissimilarity index |rename (from|to) |copy (from|to) |Binary files )/) bad("unrecognised header line")
+    return
+  }
+  if (substr(line, 1, 1) == "\\") return
+  if (cnt < 0) {
+    if (line == "") return
+    if (substr(line, 1, 2) !~ /^[-+ ][-+ ]$/) bad("hunk line with an unknown prefix")
+    return
+  }
+  if (cnt == 0 || (nold == 0 && nnew == 0)) bad("line after the end of its hunk")
+  n = substr(line, 1, 1)
+  if (line == "" || n == " ") { nold--; nnew-- }
+  else if (n == "-") nold--
+  else if (n == "+") nnew--
+  else bad("hunk line with an unknown prefix")
+  if (nold < 0 || nnew < 0) bad("hunk longer than its @@ header")
+}
 BEGIN {
+  err = 0; cnt = -1; inhdr = 0; inbin = 0; nold = 0; nnew = 0
   KW = "(password|passwd|passphrase|secret|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)[a-z0-9_-]*[\"\047]?[[:space:]]*[:=]+>?[[:space:]]*"
   KEYB = "-----BEGIN [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----"
   KEYE = "-----END [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----"
@@ -162,6 +204,7 @@ BEGIN {
 }
 {
   line = $0
+  if (!TEXT && seen || (!TEXT && (line ~ /^diff --(git|cc|combined) / || line ~ /^@@/))) validate()
   # WHY no rule prints early (r14 finding 2): every line runs through every rule in sequence and is printed once, at the end. An early print after the key-block rule, the header rule or the
   # END-line rule skipped the remaining redactors, so a password or token elsewhere on the same line survived. File header lines run the credential rules too (a path can carry one) but never open a key block.
   if (TEXT || !seen) {
@@ -199,6 +242,7 @@ BEGIN {
   line = assign(line)
   print line
 }
+END { if (!err && !hunkdone()) { bad("hunk shorter than its @@ header at end of input") } }
 ' < "$in" > "$out" || exit 1
 if [ "$nonl" -eq 1 ]; then
   size="$(wc -c < "$out")" || exit 1

@@ -430,7 +430,7 @@ mirneg "a Review input that skips redact-diff.sh is caught" 'Review input sequen
 red="$here/../scripts/redact-diff.sh"
 fx="$tmp/secrets.diff"
 {
-  printf 'diff --git a/app.py b/app.py\nindex 111..222 100644\n--- a/app.py\n+++ b/app.py\n@@ -1,9 +1,9 @@ def main():\n'
+  printf 'diff --git a/app.py b/app.py\nindex 111..222 100644\n--- a/app.py\n+++ b/app.py\n@@ -1,14 +1,14 @@ def main():\n'
   printf ' keep = "task-description-for-the-user-that-is-long"\n'
   for sign in - +; do
     printf '%s%s\n' "$sign" 'aws = "AKIAIOSFODNN7EXAMPLE"'
@@ -456,7 +456,7 @@ masked_file() { grep -qF '[REDACTED' "$2" && ! grep -qF -- "$1" "$2"; }
 for v in AKIAIOSFODNN7EXAMPLE ghp_abcdefghij github_pat_11ABC sk-ant-api03 xoxb-1234 abc123def456ghi789 eyJhbGciOiJIUzI1NiJ9 hunter2hunter2 zzTopSecretValue99 MIIEowIBAAKCAQEAsupersecretkeybody; do
   expect pass "redact-diff leaves no trace of $v" masked_file "$v" "$tmp/secrets.out"
 done
-expect pass "redact-diff keeps the hunk header, context lines and the +/- prefixes" test "$(grep -c '^@@ -1,9 +1,9 @@' "$tmp/secrets.out")$(grep -c '^ tail = 1$' "$tmp/secrets.out")$(grep -c '^-' "$tmp/secrets.out")$(grep -c '^+' "$tmp/secrets.out")" = "111313"
+expect pass "redact-diff keeps the hunk header, context lines and the +/- prefixes" test "$(grep -c '^@@ -1,14 +1,14 @@' "$tmp/secrets.out")$(grep -c '^ tail = 1$' "$tmp/secrets.out")$(grep -c '^-' "$tmp/secrets.out")$(grep -c '^+' "$tmp/secrets.out")" = "111313"
 # r12 finding 2: escaped delimiters inside a quoted value must not end the value early.
 rq() { printf '%s\n' "$1" | "$red"; }
 expect pass "a double-quoted password with an escaped quote leaves no secret text" sh -c 'o="$(printf "%s\n" "+password = \"abSECRET\\\"cdTAIL\"" | "$1")"; printf "%s\n" "$o" | grep -qF "[REDACTED" && ! printf "%s\n" "$o" | grep -q "SECRET\|TAIL"' _ "$red"
@@ -527,7 +527,26 @@ expect pass "a file header line carrying a credential is masked too" sh -c 'o="$
 expect pass "redact-diff masks private keys with separate old-side and new-side state, resets at hunk and file headers, and masks a combined diff to the hunk end" python3 - "$red" <<'PYK'
 import itertools, subprocess, sys
 red = sys.argv[1]
+def fixh(lines):
+    # WHY the counts are computed here (r33): the redactor now refuses a hunk whose body disagrees with its @@ header, and these synthetic hunks vary their bodies. Each plain @@ header gets the true counts; a @@@ header is left alone.
+    out = []; i = 0
+    while i < len(lines):
+        ln = lines[i]
+        if ln.startswith("@@ "):
+            j = i + 1; o = n = 0
+            while j < len(lines) and not lines[j].startswith("@@") and not lines[j].startswith("diff --"):
+                c = lines[j][:1]
+                if c == "-": o += 1
+                elif c == "+": n += 1
+                elif c != "\\": o += 1; n += 1
+                j += 1
+            out.append("@@ -1,%d +1,%d @@" % (o, n))
+        else:
+            out.append(ln)
+        i += 1
+    return out
 def run(lines):
+    lines = fixh(lines)
     return subprocess.run([red], input="\n".join(lines) + "\n", capture_output=True, text=True).stdout.split("\n")[:len(lines)]
 fails = []
 # the reviewer's exact shape: BEGIN kept as context, the body replaced, the END line reformatted
@@ -575,6 +594,7 @@ for shape in shapes:
                     for s in side[p]: sides_in[s] = 1
                 elif kd == "E":
                     for s in side[p]: sides_in[s] = 0
+cases = fixh(cases)
 out = subprocess.run([red], input="\n".join(cases) + "\n", capture_output=True, text=True).stdout.split("\n")
 bad = 0
 for ln, o, w in zip(cases, out, want):
@@ -641,7 +661,7 @@ PYT
 expect pass "redact-diff in diff mode still strips the prefix after the first header (a removed -----BEGIN line is handled per side)" python3 - "$red" <<'PYT'
 import subprocess, sys
 red = sys.argv[1]
-L = ["preamble line", "diff --git a/x b/x", "@@ -1,3 +1,2 @@", "------BEGIN PRIVATE KEY-----", "-OLDBODYLEAK", "------END PRIVATE KEY-----", "+x = 1"]
+L = ["preamble line", "diff --git a/x b/x", "@@ -1,3 +1,1 @@", "------BEGIN PRIVATE KEY-----", "-OLDBODYLEAK", "------END PRIVATE KEY-----", "+x = 1"]
 o = subprocess.run([red], input="\n".join(L) + "\n", capture_output=True, text=True).stdout.split("\n")
 sys.exit(1 if any("OLDBODYLEAK" in x for x in o) or o[-2] != "+x = 1" else 0)
 PYT
@@ -649,6 +669,63 @@ while IFS= read -r case_; do
   [ -n "$case_" ] || continue
   expect pass "redact-diff --text masks: ${case_%%|||*}" tmasked "${case_%%|||*}" "${case_##*|||}"
 done < "$tmp/attacks.txt"
+# r33: the redactor does not depend on well-formed input. Hand-written EXPECTED output for key-block sequences, and fail-closed (nonzero, empty stdout) for a diff it cannot parse line by line.
+expect pass "r33: redact-diff key-block sequences match hand-written expected output, and a malformed diff fails closed with empty stdout" python3 - "$red" <<'PYR'
+import subprocess, sys
+red = sys.argv[1]
+H = ["diff --git a/k b/k", "index 1..2 100644", "--- a/k", "+++ b/k"]
+B, E, M = "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----", "[REDACTED:private-key]"
+def run(lines, nonl=False):
+    t = "\n".join(lines) + ("" if nonl else "\n")
+    r = subprocess.run([red], input=t.encode(), capture_output=True)
+    return r.returncode, r.stdout.decode()
+fails = []
+def ok(name, lines, expected):
+    rc, o = run(lines); want = "\n".join(expected) + "\n"
+    if rc != 0 or o != want: fails.append("%s: rc=%d got %r want %r" % (name, rc, o, want))
+def closed(name, lines):
+    rc, o = run(lines)
+    if rc == 0 or o != "": fails.append("%s: not closed rc=%d out=%r" % (name, rc, o))
+# 1 removed END then added body: the old side closes, the NEW side stays inside the key
+ok("removed END, added body", H + ["@@ -1,3 +1,3 @@", " " + B, "-OLD", "-" + E, "+NEWSECRET", "+" + E],
+   H + ["@@ -1,3 +1,3 @@", " " + M, "-" + M, "-" + M, "+" + M, "+" + M])
+# 2 END in context closes both sides
+ok("END in context", H + ["@@ -1,4 +1,4 @@", " " + B, "-OLD", "+NEW", " " + E, " after = 1"],
+   H + ["@@ -1,4 +1,4 @@", " " + M, "-" + M, "+" + M, " " + M, " after = 1"])
+# 3 nested BEGIN stays masked until the END
+ok("nested BEGIN", H + ["@@ -0,0 +1,5 @@", "+" + B, "+SECRET1", "+" + B, "+SECRET2", "+" + E],
+   H + ["@@ -0,0 +1,5 @@", "+" + M, "+" + M, "+" + M, "+" + M, "+" + M])
+# 4 BEGIN with no END at the end of the hunk, and at end of input: everything after stays masked, state resets at the next hunk header
+ok("BEGIN, no END, hunk end", H + ["@@ -0,0 +1,2 @@", "+" + B, "+SECRET", "@@ -9,0 +11,1 @@", "+later = 1"],
+   H + ["@@ -0,0 +1,2 @@", "+" + M, "+" + M, "@@ -9,0 +11,1 @@", "+later = 1"])
+ok("BEGIN, no END, end of input", H + ["@@ -0,0 +1,2 @@", "+" + B, "+SECRET"], H + ["@@ -0,0 +1,2 @@", "+" + M, "+" + M])
+# 5 CRLF endings: the carriage return stays, the key body is still masked
+ok("CRLF endings", H + ["@@ -0,0 +1,3 @@", "+" + B + "\r", "+SECRETCRLF\r", "+" + E + "\r"],
+   H + ["@@ -0,0 +1,3 @@", "+" + M, "+" + M, "+" + M + "\r"])
+# 6 a no-newline marker between key lines does not close or leak the block
+rc, o = run(H + ["@@ -0,0 +1,3 @@", "+" + B, "\\ No newline at end of file", "+SECRETNL", "+" + E])
+if rc != 0 or "SECRETNL" in o: fails.append("no-newline marker: rc=%d %r" % (rc, o))
+# 7 a hunk line with an unknown first byte (a custom --output-indicator-old, a pager, a mangled copy) fails closed, in any position
+closed("custom removal prefix", H + ["@@ -1,3 +1,3 @@", " " + B, "XOLD", "X" + E, "+NEWSECRET", "+" + E])
+closed("custom context prefix", H + ["@@ -1,2 +1,2 @@", "~ctx", "+new"])
+closed("tab-led line", H + ["@@ -1,1 +1,1 @@", "\tx"])
+closed("unknown header line", H[:3] + ["garbage here", "+++ b/k", "@@ -1 +1 @@", "-a", "+b"])
+closed("unparseable @@", H + ["@@ -x +y @@", "+a"])
+# 8 hunk line counts must match the header: too few lines, too many lines, a stray line after the hunk
+closed("hunk shorter than header", H + ["@@ -1,3 +1,3 @@", " a", "-b", "+c"])
+closed("hunk longer than header", H + ["@@ -1,1 +1,1 @@", "-b", "+c", "+d"])
+closed("line after the hunk", H + ["@@ -1 +1 @@", "-b", "+c", "stray"])
+closed("short hunk at the next file header", H + ["@@ -1,2 +1,2 @@", " a"] + H)
+# 9 well-formed variants still pass: blank context line, no-newline marker, default counts, binary files line, mode-only diff
+ok("well formed", ["diff --git a/m b/m", "old mode 100644", "new mode 100755", "diff --git a/b b/b", "Binary files a/b and b/b differ"] + H + ["@@ -1,3 +1,3 @@", " a", "", "-b", "+c", "\\ No newline at end of file"],
+   ["diff --git a/m b/m", "old mode 100644", "new mode 100755", "diff --git a/b b/b", "Binary files a/b and b/b differ"] + H + ["@@ -1,3 +1,3 @@", " a", "", "-b", "+c", "\\ No newline at end of file"])
+for f in fails: print(f)
+sys.exit(1 if fails else 0)
+PYR
+expect pass "r33: a diff with git's --output-indicator-old set is refused by the redactor and, through review-snapshot.sh, never prints a custom prefix" sh -c 'd="$(mktemp -d)"; cd "$d" && git init -q . && printf "x=1\n-----BEGIN PRIVATE KEY-----\nOLD\n-----END PRIVATE KEY-----\n" > k && git add -A && t=$(git write-tree) && c=$(GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git commit-tree $t -m i </dev/null) && git update-ref HEAD $c && printf "x=1\n-----BEGIN PRIVATE KEY-----\nNEWSECRET\n-----END PRIVATE KEY-----\n" > k && ! git diff --output-indicator-old=X | "$2" >/dev/null 2>&1 && "$1" HEAD | grep -q "^-OLD" && "$1" HEAD | "$2" | grep -q "^+\[REDACTED:private-key\]"; rc=$?; rm -rf "$d"; exit $rc' _ "$here/../scripts/review-snapshot.sh" "$red"
+# r33: no git config key may change the snapshot bytes. The test lists git's own keys (git help -c), sets each one to several values and compares; --self-check proves it can fail.
+expect pass "r33: no git config key (every listed key, several values each) changes the snapshot bytes" python3 "$here/check-snapshot-config-keys.py" "$here/../scripts/review-snapshot.sh"
+expect pass "r33: the enumeration test flags diff.context when its pin is removed (it can fail)" python3 "$here/check-snapshot-config-keys.py" "$here/../scripts/review-snapshot.sh" --self-check
 expect pass "redact-diff rejects an unknown argument" sh -c '! "$1" --bogus </dev/null >/dev/null 2>&1' _ "$red"
 printf 'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1,2 +1,2 @@\n keep one\n-old line\n+new line\n' > "$tmp/clean.diff"
 printf 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-hello world\n+hello there, a task-list and ask-me\n' >> "$tmp/clean.diff"
