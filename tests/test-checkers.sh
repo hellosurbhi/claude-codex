@@ -288,6 +288,13 @@ expect pass "codex-call.sh defaults --cd to the repository top when started from
 bsd_sed="sed -i ''"
 expect pass "the suite uses no BSD-only in-place sed" test -z "$(grep -n -F -e "$bsd_sed" "$here/test-checkers.sh" | grep -v 'bsd_sed=')"
 
+# C4: codex-call v2 error handling: a JSON error event with no message is reported whole instead of as an empty line, and the contract line is present.
+mkdir -p "$tmp/errbin"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "{\\"type\\":\\"thread.started\\",\\"thread_id\\":\\"t1\\"}" "{\\"type\\":\\"error\\",\\"code\\":\\"usage_limit\\"}" "{\\"type\\":\\"turn.failed\\"}"\nexit 1\n' > "$tmp/errbin/codex"; chmod +x "$tmp/errbin/codex"
+PATH="$tmp/errbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>"$tmp/errout.txt"
+expect pass "codex-call.sh reports a message-less JSON error event whole (usage_limit visible)" grep -q "usage_limit" "$tmp/errout.txt"
+expect pass "codex-call.sh carries the v2 contract line" grep -qx '# contract: codex-call v2 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)' "$here/../scripts/codex-call.sh"
+
 # CodeRabbit thread 7 (evlog.py:28): a marked plan that quotes a function signature is still a plan, not the implementation.
 expect pass "a marked plan containing def add(a, b) is classified as a plan" test "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import evlog; print(evlog.phase_of("# Implementation plan\n\nAdd:\n    def add(a, b):\n        return a + b\n"))' "$here")" = "plan"
 expect pass "a diff of an implementation file that contains def add is still the implementation" test "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import evlog; print(evlog.phase_of("diff --git a/app.py b/app.py\n+def add(a, b):\n"))' "$here")" = "implementation"

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# contract: codex-call v2 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)
 # codex-call.sh: one Codex turn via `codex exec` (the supported replacement for the removed
 # `codex mcp-server` tools mcp__codex__codex / mcp__codex__codex-reply).
 #
@@ -50,8 +51,8 @@ for line in open(sys.argv[1]):
     if e.get("type") == "turn.completed": done = True
     if e.get("type") == "turn.failed":
         done = False
-        errs.append((e.get("error") or {}).get("message", ""))
-    if e.get("type") == "error": errs.append(e.get("message", ""))
+        errs.append(str((e.get("error") or {}).get("message", e)))
+    if e.get("type") == "error": errs.append(str(e.get("message", e)))
     it = e.get("item", {})
     if e.get("type") == "item.completed" and it.get("type") == "agent_message": msg = it["text"]
 # WHY require turn.completed AND exit 0: a nonzero exit after turn.completed is still a failed call.
@@ -61,7 +62,8 @@ for line in open(sys.argv[1]):
 if not msg or not done or sys.argv[2] != "0":
     # WHY print the CLI's own non-JSON lines: auth, profile and quota errors arrive
     # there, and the scratch file is deleted on exit, so this is the only copy.
-    # Quota errors (with their reset time) arrive as JSON error events, not plain text.
+    # Quota errors (with their reset time) arrive as JSON error events, not plain text. An event with no message is printed whole (str(e)),
+    # never as an empty line, so a bare usage_limit code still reaches the caller (error-handling expressions taken from Global Config PR 306).
     diag = [m for m in errs if m] + [l.rstrip() for l in open(sys.argv[1]) if not l.lstrip().startswith("{")][-20:]
     if diag: print("codex-call: Codex CLI said:\n" + "\n".join(diag), file=sys.stderr)
     sys.exit("codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED.")
