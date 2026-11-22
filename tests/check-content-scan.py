@@ -111,6 +111,10 @@ with tempfile.TemporaryDirectory() as d:
     refused("gitlink change hidden by diff.ignoreSubmodules=all", lambda: gitlink("app/r6sub2")); uncfg("diff.ignoreSubmodules")
     cfg("diff.submodule", "log")
     refused("gitlink change shown as a log by diff.submodule=log", lambda: gitlink("app/r6sub3")); uncfg("diff.submodule")
+    # round 7 finding 2: a changed file longer than the old -U1000000 context, key far from the only change, must still be refused (the whole file at both revisions is in the payload)
+    big = keyline + "x\n" * 1000010
+    add("app/r7big.js", big + "end\n"); commit("seed big")
+    refused("changed file over 1000000 lines with the key 1000010 lines from the change", lambda: add("app/r7big.js", big + "END\n"))
     # the PATH check must also see a secret-shaped gitlink path that diff.ignoreSubmodules=all would hide
     cfg("diff.ignoreSubmodules", "all"); base = g("rev-parse", "HEAD").strip(); gitlink("app/secrets-sub"); commit("secret-shaped gitlink")
     if not allowed(d, "app", base)[1]: bad.append("path check missed a secret-shaped gitlink path under diff.ignoreSubmodules=all")
