@@ -217,6 +217,21 @@ for n in NAMES:
     sk, cm = files(n)
     if block_of(sk) != block_of(cm):
         bad.append("%s: the Fallback input paragraph and command sequence differ between skill and command" % n)
+# r22 finding 4: Step B3 gives Claude ownership of every post-RED test edit, so tdd-execute-codex must not route review fixes unconditionally through Codex. Findings are routed by what they change:
+# test findings to Claude, implementation findings to Codex, a finding touching both is split (tests first by Claude, then only the implementation part to Codex). tdd-claude-codex has Claude fix everything
+# (Codex only reviews there), so no Codex implementation call may appear in it.
+ROUTENEED = ["Route each accepted finding by what it changes", "A test finding", "An implementation finding", "touches both", "Claude applies the test part first", "Codex never modifies test files", "implementation findings only"]
+for f in files("tdd-execute-codex"):
+    tx = open(f, encoding="utf-8").read()
+    for k in ROUTENEED:
+        if k not in tx:
+            bad.append("%s: the review-fix routing lacks %r (test findings to Claude, implementation findings to Codex, split findings)" % (os.path.relpath(f, root), k))
+    if "workspace-write` with the accepted reviewer feedback verbatim" in tx and "implementation findings only" not in tx:
+        bad.append("%s: review fixes go to Codex unconditionally" % os.path.relpath(f, root))
+for f in files("tdd-claude-codex"):
+    tx = open(f, encoding="utf-8").read()
+    if "workspace-write" in tx:
+        bad.append("%s: tdd-claude-codex has Claude implement and fix everything, so no Codex workspace-write call belongs in it" % os.path.relpath(f, root))
 # r22 finding 1: no shell construct in any skill, command or reference file may carry pasted free text. A heredoc (or here-string) in a documented command ends early on a text line equal to its
 # terminator and runs the rest as shell; `$(...)` and backticks in a quoted argument do the same. Free text travels as a file written with the file-writing tool, so NO heredoc is allowed anywhere.
 for f in sorted(set(CTXFILES) | set(f for n in NAMES for f in files(n))):
