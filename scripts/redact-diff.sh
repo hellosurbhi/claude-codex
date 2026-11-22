@@ -12,7 +12,7 @@
 # interval expressions, no gawk extensions).
 # COVERED (the value is replaced, the rest of the line is kept):
 #   - private key blocks (PEM, OpenSSH, PGP), including a block that starts and ends on one line;
-#   - AKIA and ASIA access keys, ghp_ gho_ ghu_ ghs_ ghr_ and github_pat_ tokens, sk- keys, xoxa xoxb xoxp xoxs xoxr xoxo tokens, and JWTs
+#   - AKIA and ASIA access keys, ghp_ gho_ ghu_ ghs_ ghr_ and github_pat_ tokens, sk- keys, xoxa xoxb xoxp xoxs xoxr xoxo tokens and JWTs
 #     (these prefixed shapes are masked from a short length up; they are matched only when not glued to a preceding letter or digit);
 #   - whatever follows "Bearer " (any length, any characters, up to a quote or whitespace), and whatever follows "Basic " or "Token " after an
 #     Authorization header or key (this labeled form uses no shape test at all);
@@ -47,7 +47,7 @@ function tok(s, rx, headrx, tag, minlen, needdigit,   out, pre, m, head, val, pr
   }
   return out s
 }
-# a value that is a placeholder or ordinary code, never a credential: ${VAR} $VAR <name> {name}, an already-masked value, a boolean or null, and name( or name[ (a call or an index)
+# a value that is a placeholder or ordinary code, never a credential: ${VAR} $VAR <name> {name}, an already-masked value, a boolean or null and name( or name[ (a call or an index)
 function placeholder(v) {
   return (v == "" || v ~ /^[$<{]/ || v ~ /^\[REDACTED/ || tolower(v) ~ /^(true|false|null|none|nil|undefined)["\047]?$/ || v ~ /^[A-Za-z_][A-Za-z0-9_.]*[(\[]/)
 }

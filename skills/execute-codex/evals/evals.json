@@ -3,7 +3,7 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Fix the typo in the error message in user.service.ts line 42 — it says 'Uzer' instead of 'User'.",
+      "prompt": "Fix the typo in the error message in user.service.ts line 42, it says 'Uzer' instead of 'User'.",
       "expected_output": "Claude classifies as small change, implements directly with Edit, launches code-reviewer agent, delivers.",
       "files": [],
       "expectations": [
@@ -16,7 +16,7 @@
     },
     {
       "id": 2,
-      "prompt": "Add a caching layer with Redis to the user service, session service, and product service — including connection pooling, cache invalidation, and TTL configuration.",
+      "prompt": "Add a caching layer with Redis to the user service, session service and product service, including connection pooling, cache invalidation, and TTL configuration.",
       "expected_output": "Claude classifies as large change, reads codex-architect-role.md, routes to Codex via codex-call.sh, launches code-reviewer after.",
       "files": [],
       "expectations": [
@@ -37,7 +37,7 @@
         "Claude classifies this as a large change (4+ files, new logic)",
         "Claude runs the codex-call.sh availability check",
         "Claude announces fallback: 'Codex unavailable' and falls back to direct implementation",
-        "Claude does NOT stop or tell the user to add Codex — it proceeds with Route A",
+        "Claude does NOT stop or tell the user to add Codex, it proceeds with Route A",
         "Claude launches code-reviewer Task agent after implementation",
         "Claude delivers successfully despite Codex being unavailable"
       ]
