@@ -60,12 +60,12 @@ After all tasks complete (either path):
 
 **Step R1 — Run Codex Review via codex-call.sh**
 
-Before the call, run `git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- . ':(exclude,glob,icase)**/.env*' ':(exclude,glob,icase)**/*secret*' ':(exclude,glob,icase)**/*credential*' ':(exclude,glob,icase)**/*.pem' ':(exclude,glob,icase)**/*.key'`). Call Codex via `codex-call.sh` with:
+Before the call, run `git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'`). Call Codex via `codex-call.sh` with:
 - append to prompt: `"Be concise. Return only the structured verdict format. No prose."`
 - `prompt`:
 
 ```
-Run `git diff HEAD -- . ':(exclude,glob,icase)**/.env*' ':(exclude,glob,icase)**/*secret*' ':(exclude,glob,icase)**/*credential*' ':(exclude,glob,icase)**/*.pem' ':(exclude,glob,icase)**/*.key'` to see all uncommitted changes, then review them.
+Run `git diff HEAD -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'` to see all uncommitted changes, then review them.
 
 Return ONLY a structured verdict in this exact format — no explanations, no prose:
 
@@ -91,10 +91,10 @@ Address ALL accepted findings before re-reviewing:
 - Collect every accepted CRITICAL, HIGH, MEDIUM and LOW finding from the last review
 - Fix them all with Edit/Write in one batch
 - Run available tests/lint to verify
-- Before re-calling, run `git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- . ':(exclude,glob,icase)**/.env*' ':(exclude,glob,icase)**/*secret*' ':(exclude,glob,icase)**/*credential*' ':(exclude,glob,icase)**/*.pem' ':(exclude,glob,icase)**/*.key'`); then re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
+- Before re-calling, run `git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'`); then re-call Codex via `codex-call.sh --resume <THREAD_ID>` (reuse THREAD_ID) with:
 
 ```
-Run `git diff HEAD -- . ':(exclude,glob,icase)**/.env*' ':(exclude,glob,icase)**/*secret*' ':(exclude,glob,icase)**/*credential*' ':(exclude,glob,icase)**/*.pem' ':(exclude,glob,icase)**/*.key'` again to see the updated changes after fixes, then re-review.
+Run `git diff HEAD -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'` again to see the updated changes after fixes, then re-review.
 
 Return ONLY the structured verdict in the same format.
 ```

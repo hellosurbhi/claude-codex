@@ -15,7 +15,8 @@
 # Exit non-zero if Codex fails or returns no message: a dead call is NOT an approval.
 set -euo pipefail
 command -v python3 >/dev/null || { echo "codex-call: python3 is required (it parses the Codex event stream). Treat as UNREVIEWED." >&2; exit 2; }
-sandbox=read-only role="" resume="" dir="$PWD"
+# WHY the repository top and not $PWD (cc11-main-r2 finding 3): Codex reviews relative to --cd, so a review started from a subfolder saw only that folder.
+sandbox=read-only role="" resume="" dir="$(git rev-parse --show-toplevel 2>/dev/null || printf "%s" "$PWD")"
 while [[ $# -gt 1 ]]; do
   case "$1" in
     --sandbox) sandbox="$2"; shift 2 ;;

@@ -17,7 +17,7 @@ def prose(path):
         if not fence:
             out.append((i, l))
     return out
-CLAUSE = "`git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- . ':(exclude,glob,icase)**/.env*' ':(exclude,glob,icase)**/*secret*' ':(exclude,glob,icase)**/*credential*' ':(exclude,glob,icase)**/*.pem' ':(exclude,glob,icase)**/*.key'`)"
+CLAUSE = "`git add -N <each file this task created>` in your own shell first (never `.`, and never a credential, key, `.env` or other secret file even when the task created it, so those and other unrelated untracked files do not reach the reviewer; the reviewer is read-only and cannot update the index, so new files reach the diff only this way; a modified tracked secret file such as `.env.production` is also left out of the diff with an exclude pathspec like `-- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'`)"
 # a line that (re)calls a reviewer on a diff or on test files must carry the clause itself
 CALL = re.compile(r"^\s*(- )?(Run `git diff|Re-call Codex via|Call Codex via)|re-calls? `codex-call\.sh --resume|re-run (the )?`?code-reviewer`?|re-audits? via", re.I)
 # (regex, workflows that must contain it); every snippet must also appear equally often in a skill and its command
@@ -107,7 +107,7 @@ for n in NAMES:
         if x != y and (n, a) not in [(m, b) for m in ("claude-codex", "tdd-claude-codex", "tdd-execute-codex") for b in ("**Failed review**", "**Failed audit**")]:
             bad.append("%s: paragraph %r differs between skill and command" % (n, a[:40]))
 # WHY (CodeRabbit r48): the reviewer must not read tracked secret files either, so every reviewer diff command carries the exclude pathspec.
-EXCL = "-- . ':(exclude,glob,icase)**/.env*' ':(exclude,glob,icase)**/*secret*' ':(exclude,glob,icase)**/*credential*' ':(exclude,glob,icase)**/*.pem' ':(exclude,glob,icase)**/*.key'"
+EXCL = "-- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key'"
 for n in NAMES:
     for f in files(n):
         for m in re.finditer(r"`git diff (?:HEAD|\$START_SHA)([^`]*)`", open(f, encoding="utf-8").read()):

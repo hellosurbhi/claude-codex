@@ -264,6 +264,16 @@ for guard_file in skills/execute-codex/SKILL.md skills/claude-codex/SKILL.md ski
   expect pass "the tier R secret guard in $guard_file lists committed secret files from a subfolder" python3 "$here/check-secret-guard.py" "$here/../$guard_file"
 done
 
+# cc11-main-r2 finding 3: the diff command each workflow prescribes is relative to the repository top, not to the shell's folder.
+for f in skills/claude-codex/SKILL.md commands/claude-codex.md skills/execute-codex/SKILL.md commands/execute-codex.md skills/tdd-claude-codex/SKILL.md commands/tdd-claude-codex.md skills/tdd-execute-codex/SKILL.md commands/tdd-execute-codex.md; do
+  expect pass "the reviewer diff command in $f lists changes in sibling folders when run from a subfolder" python3 "$here/check-diff-toplevel.py" "$here/../$f"
+done
+# WHY a recording fake codex: it proves what --cd the wrapper really passes, instead of grepping the wrapper's source.
+mkdir -p "$tmp/cdbin" "$tmp/cdrepo/sub"; (cd "$tmp/cdrepo" && git init -q)
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/cdargs.txt"\nexit 1\n' "$tmp" > "$tmp/cdbin/codex"; chmod +x "$tmp/cdbin/codex"
+(cd "$tmp/cdrepo/sub" && PATH="$tmp/cdbin:$PATH" bash "$here/../scripts/codex-call.sh" "p" >/dev/null 2>&1)
+expect pass "codex-call.sh defaults --cd to the repository top when started from a subfolder" test "$(grep -A1 -x -e '--cd' "$tmp/cdargs.txt" | tail -1)" = "$(cd "$tmp/cdrepo" && pwd -P)"
+
 # r17: the reviewed diff must match the remaining change exactly (whitespace, operators, the file set).
 rv() { mkrun; line fake 1 unknown "$LIMIT"; cd "$tmp/run/repo"; }
 rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py
