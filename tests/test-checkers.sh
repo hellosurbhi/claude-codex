@@ -519,20 +519,20 @@ for shape in shapes:
     for n in (3, 4, 5):
         kinds = ["B"] + ["b"] * (n - 2) + ["E", "b"]
         for pf in itertools.product("-+ ", repeat=len(kinds)):
-            st = {"o": 0, "n": 0}; k = 0
+            sides_in = {"o": 0, "n": 0}; k = 0
             cases.append("@@ -1 +1 @@")
             want.append(None)
             for kd, p in zip(kinds, pf):
                 k += 1
-                inside = any(st[s] for s in side[p])
+                inside = any(sides_in[s] for s in side[p])
                 if kd == "B": text = "-----BEGIN %s-----" % shape; w = None
                 elif kd == "E": text = "-----END %s-----" % shape; w = None
                 else: text = "LEAKBODY%d" % len(cases); w = inside
                 cases.append(p + text); want.append((w, text))
                 if kd == "B":
-                    for s in side[p]: st[s] = 1
+                    for s in side[p]: sides_in[s] = 1
                 elif kd == "E":
-                    for s in side[p]: st[s] = 0
+                    for s in side[p]: sides_in[s] = 0
 out = subprocess.run([red], input="\n".join(cases) + "\n", capture_output=True, text=True).stdout.split("\n")
 bad = 0
 for ln, o, w in zip(cases, out, want):
