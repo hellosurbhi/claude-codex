@@ -143,6 +143,13 @@ if plan is not None:
         sys.exit(1)
     if context and not (heads_in_order(spy_in, ["AUDIT INSTRUCTIONS:", "OPEN FINDINGS:", "PLAN:"]) and spy_in.rstrip("\n").endswith(ptxt)):
         sys.exit(1)
+# WHY a checked git helper (r12 finding 3): an unchecked failing git call prints nothing, and that empty result (no root commit, no head, no status lines) is accepted by the comparisons below as if it were a real answer.
+# A repo with no commit yet legitimately has no root commit, so only a repo that HAS a HEAD must answer rev-list.
+def G(*a, text=True):
+    r = subprocess.run(["git", "-C", repo] + list(a), capture_output=True, text=text)
+    if r.returncode != 0:
+        sys.exit(1)
+    return r.stdout
 if repo is not None:
     # WHY an exact digest of the final .py files: the review must cover exactly the code that remains (all modules, paths,
     # indentation and deletions included), so any edit after the approval fails (r15).
@@ -153,14 +160,14 @@ if repo is not None:
     # "approved". The reviewed input must hold, for every changed .py file and for no other, exactly the added and removed
     # lines (order, indentation and operators intact, only the one-character diff prefix removed) that turn the first
     # commit's file into the file that remains (r16, r17).
-    root = subprocess.run(["git", "-C", repo, "rev-list", "--max-parents=0", "HEAD"], capture_output=True, text=True).stdout.split()
+    root = (G("rev-list", "--max-parents=0", "HEAD").split() if subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "-q", "HEAD"], capture_output=True).returncode == 0 else [])
     # WHY recursive, with the tree digest's exclusions: a nested module must be covered like a root one (r18).
     names = set()
     for dp, dn, fn in os.walk(repo):
         dn[:] = [d for d in dn if d not in (".git", ".claude", "__pycache__", ".pytest_cache", "node_modules")]
         names |= {os.path.relpath(os.path.join(dp, f), repo) for f in fn if f.endswith(".py")}
     if root:
-        names |= {f for f in subprocess.run(["git", "-C", repo, "ls-tree", "-r", "--name-only", root[0]], capture_output=True, text=True).stdout.splitlines() if f.endswith(".py")}
+        names |= {f for f in G("ls-tree", "-r", "--name-only", root[0]).splitlines() if f.endswith(".py")}
     expected = {}
     for name in sorted(names):
         base = b""
@@ -185,12 +192,12 @@ if repo is not None:
             sys.exit(1)
         # WHY committed state (r38): production tier R/E reviewed `git diff <base> HEAD`, never the input file. It must have run on a
         # clean tracked tree, at the repo's current HEAD, against a base that adds no .py change beyond the root commit's.
-        head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        head = G("rev-parse", "HEAD").strip()
         rootc = root[0] if root else ""
         # WHY re-checked here and not only in the fake: an untracked or modified .py file now is code no commit holds, so the
         # committed diff cannot have covered it (r39).
-        if [l for l in subprocess.run(["git", "-C", repo, "status", "--porcelain", "--ignored", "-uall", "--", "*.py"], capture_output=True, text=True).stdout.splitlines() if l[:2] in ("??", "!!") and not re.search(r"(^|/)(node_modules|\.claude|__pycache__|\.pytest_cache)/", l[3:])] or \
-           subprocess.run(["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True).stdout.strip():
+        if [l for l in G("status", "--porcelain", "--ignored", "-uall", "--", "*.py").splitlines() if l[:2] in ("??", "!!") and not re.search(r"(^|/)(node_modules|\.claude|__pycache__|\.pytest_cache)/", l[3:])] or \
+           G("status", "--porcelain", "--untracked-files=no").strip():
             sys.exit(1)
         # WHY the model-time digest (CodeRabbit r47): the launcher digest is taken at call start, so the code state CodeRabbit really saw must match it too.
         if mm.get("tree") in (None, "none", "") or mm.get("tree") != spies[-1].get("tree_sha256"):
@@ -200,7 +207,7 @@ if repo is not None:
         if subprocess.run(["git", "-C", repo, "diff", "--quiet", rootc, mm["base"], "--", "*.py"]).returncode != 0:
             sys.exit(1)
         # WHY bytes (r41): text=True would turn CRLF into LF while the model event keeps the carriage returns.
-        want = subprocess.run(["git", "-C", repo, "diff", "--no-color", mm["base"], head], capture_output=True).stdout.decode("utf-8", "surrogateescape")
+        want = G("diff", "--no-color", mm["base"], head, text=False).decode("utf-8", "surrogateescape")
         if want != (model.get("input_text") or ""):
             sys.exit(1)
         sys.exit(0)

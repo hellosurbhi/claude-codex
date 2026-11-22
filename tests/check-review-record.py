@@ -22,9 +22,14 @@ if wlog.verdict_state("\n".join(lines[1:])) != "clean":
 # WHY the record path is excluded from the diff (r11 finding 3): the skill writes the record AFTER hashing, so a tracked or intent-to-add record would sit inside the hashed diff and change it on every write,
 # leaving every record stale. The skill's hash command excludes the same path; both must, or they disagree.
 SECRET = re.compile(r"(^|/)\.env[^/]*$|secret|credential|\.pem$|\.key$", re.I)
+# WHY every git call is checked (r12 finding 3): a failed diff prints nothing, and the SHA-256 of nothing is a value a record can carry, so an unchecked exit status could validate an approval
+# of a diff that was never computed. Any nonzero exit fails the check with the command and git's own message.
 def git(*a, env=None):
-    return subprocess.run(["git", "-C", repo] + list(a), capture_output=True, env=env)
-idx = subprocess.run(["git", "-C", repo, "rev-parse", "--git-path", "index"], capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(["git", "-C", repo] + list(a), capture_output=True, env=env)
+    if r.returncode != 0:
+        print("git %s failed (exit %d): %s" % (" ".join(a[:2]), r.returncode, r.stderr.decode(errors="replace").strip()[:200]), file=sys.stderr); sys.exit(1)
+    return r
+idx = git("rev-parse", "--git-path", "index").stdout.decode().strip()
 idx = idx if os.path.isabs(idx) else os.path.join(repo, idx)
 with tempfile.TemporaryDirectory() as td:
     tmpidx = os.path.join(td, "index")
@@ -35,6 +40,9 @@ with tempfile.TemporaryDirectory() as td:
     for p in new:
         git("add", "-N", "--", p, env=env)
     diff = git("diff", base, "--", ":(top)", ":(top,exclude,glob,icase)**/.env*", ":(top,exclude,glob,icase)**/*secret*", ":(top,exclude,glob,icase)**/*credential*", ":(top,exclude,glob,icase)**/*.pem", ":(top,exclude,glob,icase)**/*.key", ":(top,exclude).claude/review/final-review.txt", env=env).stdout
+# WHY an empty diff never validates: nothing changed means nothing was reviewed, so no record can approve it, whatever hash it carries.
+if not diff.strip():
+    print("the final diff is empty: nothing was reviewed", file=sys.stderr); sys.exit(1)
 if hashlib.sha256(diff).hexdigest() != m.group(1):
     print("the record's diff hash is not the hash of the final diff (stale record)", file=sys.stderr); sys.exit(1)
 sys.exit(0)

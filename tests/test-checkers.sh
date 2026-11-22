@@ -73,6 +73,7 @@ with open(log, "a") as f:
 PY
 }
 CLEAN='VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n'
+realgit="$(command -v git)"; mkdir -p "$tmp/stubgit"; printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = "$FAILSUB" ] && exit 1; done\nexec "%s" "$@"\n' "$realgit" > "$tmp/stubgit/git"; chmod +x "$tmp/stubgit/git"
 CLEANR='VERDICT: APPROVED\n'
 LIMIT='codex-call: Codex turn did not complete\nERROR: You have hit your usage limit.\n'
 
@@ -248,6 +249,13 @@ gdiff app.py other.py > "$tmp/diff.txt"
 bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 cp "$tmp/run/repo/app.py" "$tmp/app.good"
 expect_spy pass "reviewed final code state is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+# r12 finding 3: a failing git call inside this checker must fail it, not leave an empty result that the rest of the checks accept
+# the fixture repo has no commit yet (no root commit is legitimate then), so give it an empty root commit: these git calls only run when a root exists
+git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$(printf 'root\n\nVerified: fixture repo for the failing-git cases')"
+expect_spy pass "reviewed final code state is still accepted once the repo has a root commit" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+for sub in rev-list ls-tree; do
+  expect_spy fail "a failing git $sub fails the reviewed-state check" env FAILSUB=$sub PATH="$tmp/stubgit:$PATH" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+done
 printf 'def evil():\n    pass\n' >> app.py
 expect_spy fail "code edited after the approval is rejected" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 cp "$tmp/app.good" app.py; printf 'def sub(a, b):\n    return a - b - 1\n' > other.py
@@ -1276,6 +1284,20 @@ rrmk; mkdir -p "$tmp/rr/.claude/review"; printf 'seed\n' > "$tmp/rr/.claude/revi
 expect pass "review record: an INTENT-TO-ADD record file does not make the record stale on an unchanged tree" rr
 rrmk; mkdir -p "$tmp/rr/.claude/review"; printf 'seed\n' > "$tmp/rr/.claude/review/final-review.txt"; (cd "$tmp/rr" && git add -N -f .claude/review/final-review.txt); rrrec "$(rrhash)" "VERDICT: APPROVED\n"; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
 expect fail "review record: a tracked or intent-to-add record still goes stale when real code changes" rr
+# r12 finding 3: a git call that fails must FAIL the check (empty output from a failed diff must not match a recorded empty-diff hash), and an empty diff never validates.
+EMPTYH=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+rrmk; rrrec "$(rrhash)" "VERDICT: APPROVED\n"
+expect fail "review record: a git diff that exits non-zero fails the check" env FAILSUB=diff PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
+# an untracked file the run never added makes the checker run its own intent-to-add; that git call failing must be the reported cause (not a later hash mismatch)
+printf 'x=1\n' > "$tmp/rr/extra.py"; rrrec "$(rrhash)" "VERDICT: APPROVED\n"
+expect pass "review record: a failing intent-to-add (index preparation) fails the check and says so" sh -c 'FAILSUB=add PATH="$1:$PATH" python3 "$2" "$3" "$4" 2>&1 | grep -q "git add -N failed"' _ "$tmp/stubgit" "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
+rm -f "$tmp/rr/extra.py"
+expect fail "review record: a failing untracked-file listing fails the check" env FAILSUB=ls-files PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
+expect fail "review record: a failing index path lookup fails the check" env FAILSUB=rev-parse PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
+rrmk; base0="$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"; rrrec "$(rrhash)" "VERDICT: APPROVED\n"; rm -rf "$tmp/notgit"; mkdir -p "$tmp/notgit/.claude/review"; cp "$tmp/rr/.claude/review/final-review.txt" "$tmp/notgit/.claude/review/"
+expect fail "review record: a directory that is not a git repo fails the check" env GIT_CEILING_DIRECTORIES="$tmp" python3 "$here/check-review-record.py" "$tmp/notgit" "$base0"
+rrmk; rm -f "$tmp/rr/app.py"; rrrec "$EMPTYH" "VERDICT: APPROVED\n"
+expect fail "review record: an empty diff never validates, even with the empty-input hash recorded" rr
 expect pass "the real branch of the proof runs the review-record check for the two skills with a Claude reviewer" sh -c "grep -q 'check-review-record.py' '$here/review-loop-proof.sh' && grep -q -- '--audit' '$here/review-loop-proof.sh'"
 
 # Self-test (round 3 finding 3): these cases need no private reviewer, so they MUST have run (and passed) in every mode, CHECKERS_NO_SPY=1 included.
