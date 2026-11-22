@@ -517,10 +517,10 @@ expect fail "a Review record hash taken over a diff without the secret excludes 
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
-    t = open(p).read(); t2 = t.replace(" ':(top,exclude).claude/review/final-review.txt'", ""); assert t2 != t
+    t = open(p).read(); t2 = t.replace(" ':(top,exclude).claude/review'", ""); assert t2 != t
     open(p, "w").write(t2)
 PYX
-expect fail "a Review record hash that does not exclude the record file itself is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
+expect fail "a Review record hash that does not exclude the .claude/review directory is caught" python3 "$here/test-mirrors.py" "$tmp/mir8"; mirc execute-codex
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
@@ -1356,7 +1356,7 @@ mkrun; LINEMETA="state=S0 endstate=S1 impl=no audit=yes" line real 0 review "$TI
 expect fail "audit: a clean audit whose tree changed while it ran fails" au
 # the review record: built against a real tiny git repo, hashing the same diff command the skills prescribe
 rr() { python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"; }
-rrhash() { (cd "$tmp/rr" && git add -N app.py 2>/dev/null; git diff "$(git rev-list --max-parents=0 HEAD)" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review/final-review.txt' | shasum -a 256 | cut -d' ' -f1); }
+rrhash() { (cd "$tmp/rr" && git add -N app.py 2>/dev/null; git diff "$(git rev-list --max-parents=0 HEAD)" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' | shasum -a 256 | cut -d' ' -f1); }
 rrmk() { rm -rf "$tmp/rr"; mkdir -p "$tmp/rr"; (cd "$tmp/rr" && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$(printf 's\n\nVerified: fixture repo for the review-record cases')" && printf 'def add(a, b):\n    return a + b\n' > app.py); }
 rrrec() { mkdir -p "$tmp/rr/.claude/review"; printf 'REVIEWED-DIFF: %s\n%b' "$1" "$2" > "$tmp/rr/.claude/review/final-review.txt"; }
 rrmk
@@ -1375,6 +1375,16 @@ expect fail "the prescribed sequence voids the round when a file is edited while
 expect fail "an edit during the review leaves nothing the checker accepts" rr
 rrmk; rrstep step1.sh; rrstep step2.sh; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
 expect fail "an earlier round's record does not approve a later edit" rr
+# r14 finding 3: the whole .claude/review/ directory (record, snapshot, anything added later) is outside the hashed diff, so tracking any of it never turns an unchanged round stale
+rrsnap() { mkdir -p "$tmp/rr/.claude/review"; printf 'snapshot\n' > "$tmp/rr/.claude/review/reviewed.diff"; printf 'other\n' > "$tmp/rr/.claude/review/notes.txt"; }
+rrmk; H0="$(rrhash)"; rrsnap; (cd "$tmp/rr" && git add -f .claude/review/reviewed.diff); rrrec "$H0" "VERDICT: APPROVED\n"
+expect pass "a tracked snapshot leaves an unchanged round's record valid" rr
+rrmk; H0="$(rrhash)"; rrsnap; (cd "$tmp/rr" && git add -f -N .claude/review/reviewed.diff .claude/review/notes.txt); rrrec "$H0" "VERDICT: APPROVED\n"
+expect pass "an intent-to-add snapshot and other file under .claude/review leave an unchanged round's record valid" rr
+rrmk; H0="$(rrhash)"; rrsnap; rrrec "$H0" "VERDICT: APPROVED\n"; (cd "$tmp/rr" && git add -f .claude/review)
+expect pass "the record and the snapshot both tracked leave an unchanged round's record valid" rr
+printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
+expect fail "a real code change still makes the record stale with the review directory tracked" rr
 expect fail "review record: a missing record fails" rr
 rrmk; rrrec "$(rrhash)" "VERDICT: BLOCKED\nHIGH: real problem\n"
 expect fail "review record: findings in the record fail" rr

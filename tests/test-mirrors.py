@@ -333,7 +333,7 @@ for n in ("execute-codex", "tdd-execute-codex"):
         got.append(b)
         if cnt != 1 or not b:
             bad.append("%s: expected exactly one Review record paragraph with its command sequence (found %d)" % (rel, cnt)); continue
-        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\n'", "H=\"$(git diff %s %s ':(top,exclude).claude/review/final-review.txt' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)\"" % (base, EXCL), "printf 'REVIEWED-DIFF: %s\\n' \"$H\"", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"", "= \"$H\" ]; then", "else rm -f .claude/review/final-review.txt", "> .claude/review/final-review.txt", "<the reviewer's reply, verbatim>", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
+        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\n'", "H=\"$(git diff %s %s ':(top,exclude).claude/review' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)\"" % (base, EXCL), "printf 'REVIEWED-DIFF: %s\\n' \"$H\"", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"", "= \"$H\" ]; then", "else rm -f .claude/review/final-review.txt", "> .claude/review/final-review.txt", "<the reviewer's reply, verbatim>", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
             if k not in b:
                 bad.append("%s: the Review record sequence lacks %r" % (rel, k[:60]))
         # r13 finding 2: ORDER is the rule. Snapshot and hash BEFORE dispatch (step 1), then after the reply compare the current tree with that hash (step 2) and only then write the record, whose hash is

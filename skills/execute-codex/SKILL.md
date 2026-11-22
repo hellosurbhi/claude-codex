@@ -68,20 +68,20 @@ Announce your routing decision before implementing (e.g. "Small change — imple
 
 ```
 mkdir -p .claude/review
-H="$(git diff HEAD -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review/final-review.txt' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)"
+H="$(git diff HEAD -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)"
 ```
 Send the reviewer `.claude/review/reviewed.diff`, never a fresh `git diff`: it must judge exactly the bytes hashed into `H`. Step 2 runs when the reply arrives, before any fix. Run it unchanged, with the reviewer's reply pasted verbatim:
 
 ```
 H="$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)"
-if [ "$(git diff HEAD -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review/final-review.txt' | shasum -a 256 | cut -d' ' -f1)" = "$H" ]; then
+if [ "$(git diff HEAD -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' | shasum -a 256 | cut -d' ' -f1)" = "$H" ]; then
 { printf 'REVIEWED-DIFF: %s\n' "$H"; cat <<'REVIEW'
 <the reviewer's reply, verbatim>
 REVIEW
 } > .claude/review/final-review.txt
 else rm -f .claude/review/final-review.txt; echo "the tree changed while the reviewer ran: this round is void, there is no verdict for the current tree, review again"; fi
 ```
-If the tree changed while the reviewer ran, the round is void: nothing is recorded, the earlier diff's approval never carries over, and the next round starts again at step 1. Each round overwrites the file, so it always holds the latest round. The record carries the pre-dispatch hash (taken from the snapshot, never from the tree after the reply), and the record path is excluded from the hashed diff: a tracked or intent-to-add record is rewritten after the hash, so a diff that included it would make every record stale. A record counts as approval only when its reply is exactly `VERDICT: APPROVED` with zero findings and its hash is that of the final diff: any edit after a round makes the record stale, which needs a new review round and a new record, and a final report whose record is missing, stale or not clean must end `AUDIT-STATUS: UNREVIEWED`.
+If the tree changed while the reviewer ran, the round is void: nothing is recorded, the earlier diff's approval never carries over, and the next round starts again at step 1. Each round overwrites the file, so it always holds the latest round. The record carries the pre-dispatch hash (taken from the snapshot, never from the tree after the reply), and the whole `.claude/review/` directory is excluded from the hashed diff (the record, the snapshot and anything added there later): a tracked or intent-to-add file in it is rewritten around the hash, so a diff that included it would make every record stale. A record counts as approval only when its reply is exactly `VERDICT: APPROVED` with zero findings and its hash is that of the final diff: any edit after a round makes the record stale, which needs a new review round and a new record, and a final report whose record is missing, stale or not clean must end `AUDIT-STATUS: UNREVIEWED`.
 
 ### Route A: Small Change — Claude Implements Directly
 
