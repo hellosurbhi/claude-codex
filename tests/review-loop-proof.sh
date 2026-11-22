@@ -108,7 +108,9 @@ esac
 seam="TEST HARNESS: for this run the Codex wrapper lives at $fake. Wherever a skill says ~/.claude/config/scripts/codex-call.sh, including its availability check, run $fake with the same arguments instead.$relay Everything else in the skill applies unchanged. You are running unattended: never wait for user input."
 # WHY a follow-up request in the real scenario: real Codex often approves a trivial change on
 # round 1, so without it nothing would exercise `codex-call.sh --resume THREAD_ID`.
-[[ $scenario == real ]] && task="$task After Codex's first reply (its verdict, or its completion report when it implements), send it one follow-up in the same thread (resume by THREAD_ID) asking it to confirm that reply, and report the thread id."
+# WHY it must not be the last call (cc11 real run at 269e440+bf4359c): the model sent the confirmation AFTER the approving re-audit, Codex answered it with a sentence
+# plus the VERDICT line, and the final-state check rightly refused prose around the verdict, so a correct run read as failed. The check stays strict; the task says where the follow-up goes.
+[[ $scenario == real ]] && task="$task After Codex's first reply (its verdict, or its completion report when it implements), send it one follow-up in the same thread (resume by THREAD_ID) asking it to confirm that reply. Send it before any later review round, so the last Codex call of the run is still the skill's own final review of the finished work; if no review round follows it, ask Codex to answer that follow-up with its VERDICT line only. Report the thread id."
 # WHY stream-json: the real scenario must show the THREAD_ID and VERDICT lines Codex actually
 # returned and whether a follow-up used --resume; those live in tool calls and results,
 # not in the final report.

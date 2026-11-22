@@ -2310,6 +2310,7 @@ expect pass "a fallback line that does not match production's shape is not skipp
 expect pass "the proof session runs with a permission mode that lets it rewrite an existing plan file" python3 "$here/check-proof-permissions.py" "$here/review-loop-proof.sh"
 sed 's/--permission-mode bypassPermissions/--permission-mode acceptEdits/' "$here/review-loop-proof.sh" > "$tmp/proof-accept.sh"
 expectm fail "acceptEdits is rejected: it denies edits to an existing plan file" 'REJECT: the proof session runs with permission mode acceptEdits' python3 "$here/check-proof-permissions.py" "$tmp/proof-accept.sh"
+expect pass "the real task puts the confirmation follow-up before the final review (or asks for the bare verdict) so the last call stays clean" grep -q "so the last Codex call of the run is still the skill's own final review" "$here/review-loop-proof.sh"
 
 # Round 23: an early exit of the REAL codex-call.sh (bad arguments, missing prompt or role file) never reaches the codex shim, so it used to leave no event and an earlier clean review stood
 # as the last word. With CODEX_CALL_EVENT_LOG set the wrapper logs a wrapper-failed event for every nonzero exit that never reached codex; the final-result checks read it as "no approval".
