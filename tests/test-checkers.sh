@@ -372,6 +372,20 @@ cp "$here/../README.md" "$tmp/mir8/README.md"
 sed 's/(`# contract: codex-call v3 /(`# contract: codex-call v4 /' "$here/../README.md" > "$tmp/mir8/README.md"
 mirneg "a README that names codex-call v4 while the script is v3 is caught" 'names contract v4 but scripts/codex-call.sh line 2 is v3' "$tmp/mir8"
 cp "$here/../README.md" "$tmp/mir8/README.md"
+# r29 findings 1 and 2: the contract line stays on line 2 of every shipped script, the README names it, and no script runs its own canonical git diff.
+mkdir -p "$tmp/mir8/scripts"; cp "$here/../scripts/"*.sh "$tmp/mir8/scripts/"
+expect pass "the pristine scripts folder passes the line-2 contract and no-inline-diff rules" python3 "$here/test-mirrors.py" "$tmp/mir8"
+python3 - "$tmp/mir8/scripts/review-snapshot.sh" <<'PY'
+import sys; p = sys.argv[1]; L = open(p).read().split("\n"); L[1], L[2] = L[2], L[1]; open(p, "w").write("\n".join(L))
+PY
+mirneg "a contract line moved off line 2 of a shipped script is caught" "scripts/review-snapshot.sh: line 2 is not a '# contract: review-snapshot v<N>' line" "$tmp/mir8"
+cp "$here/../scripts/review-snapshot.sh" "$tmp/mir8/scripts/review-snapshot.sh"
+sed 's/review-snapshot v1/review-snapshot v7/' "$here/../README.md" > "$tmp/mir8/README.md"
+mirneg "a README that names another review-snapshot version on its second-line sentence is caught" 'no line says that scripts/review-snapshot.sh carries' "$tmp/mir8"
+cp "$here/../README.md" "$tmp/mir8/README.md"
+printf '#!/usr/bin/env bash\nx="$(git diff HEAD)"\n' > "$tmp/mir8/scripts/inline.sh"
+mirneg "a shipped script that runs its own git diff is caught" 'inline.sh:2: a canonical git diff outside scripts/review-snapshot.sh' "$tmp/mir8"
+rm -f "$tmp/mir8/scripts/inline.sh"
 # cc11-main-r9 finding 2: the tier S fallback must carry the Codex context (task requirements, instructions, carried and contested findings), not a bare diff.
 mirc() { cp "$here/../commands/$1.md" "$tmp/mir8/commands/$1.md"; cp "$here/../skills/$1/SKILL.md" "$tmp/mir8/skills/$1/SKILL.md"; }
 python3 - "$tmp/mir8/skills/tdd-claude-codex/SKILL.md" <<'PY'
@@ -2029,6 +2043,10 @@ expect pass "r29: a same-second, same-size edit after the index write still appe
 hf="$tmp/hookfree"; rm -rf "$hf"; mkdir -p "$hf"; (cd "$hf" && git init -q && printf 'a\n' > f && git add f && git commit -q -m plain > "$hf.out" 2>&1; echo "rc=$?" >> "$hf.out")
 expect pass "r29: a plain git commit in a fixture repo succeeds with no Verified: line" grep -q '^rc=0$' "$hf.out"
 expect fail "r29: a fixture commit runs no global hook (no gate banner in its output)" grep -q 'Deterministic gates passed' "$hf.out"
+# r29 finding 1: no git setting (repo config, repo-local attributes, environment) may change the snapshot bytes, and an edit after must still change them.
+while IFS= read -r hv; do
+  expect pass "r29: the snapshot is hermetic against: $hv" python3 "$here/check-snapshot-hermetic.py" "$here/../scripts/review-snapshot.sh" "$hv"
+done < <(python3 "$here/check-snapshot-hermetic.py" "$here/../scripts/review-snapshot.sh" list)
 # r28 finding 2: the reviewed state includes untracked, non-ignored files (one shipped script, scripts/review-snapshot.sh, computes it for the skills and for the checker).
 # WHY these cases run the extracted blocks: the old snapshot hashed tracked and intent-to-add changes only, so a source file created while the reviewer ran left the hash unchanged.
 rrmk; rrstep step1.sh; printf 'x = 1\n' > "$tmp/rr/late.py"; rrstep step2.sh

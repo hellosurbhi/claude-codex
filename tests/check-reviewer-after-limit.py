@@ -178,6 +178,9 @@ def G(*a, text=True):
     if r.returncode != 0:
         reject('a git call failed')
     return r.stdout
+# WHY one snapshot script for every canonical diff (r29): the bytes compared here must be produced exactly as the skills produce them, so this
+# checker calls scripts/review-snapshot.sh (which pins every git setting that shapes diff output) instead of running its own `git diff`.
+SNAP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "review-snapshot.sh")
 if repo is not None:
     # WHY an exact digest of the final .py files: the review must cover exactly the code that remains (all modules, paths,
     # indentation and deletions included), so any edit after the approval fails (r15).
@@ -195,7 +198,7 @@ if repo is not None:
         dn[:] = [d for d in dn if d not in (".git", ".claude", "__pycache__", ".pytest_cache", "node_modules")]
         names |= {os.path.relpath(os.path.join(dp, f), repo) for f in fn if f.endswith(".py")}
     if root:
-        names |= {f for f in G("ls-tree", "-r", "--name-only", root[0]).splitlines() if f.endswith(".py")}
+        names |= {f for f in G("ls-tree", "-r", "-z", "--name-only", root[0]).split("\0") if f.endswith(".py")}
     expected = {}
     binary = {}
     def base_exists(name):
@@ -217,7 +220,7 @@ if repo is not None:
         with tempfile.TemporaryDirectory() as d:
             a, b = os.path.join(d, "a"), os.path.join(d, "b")
             open(a, "wb").write(base); open(b, "wb").write(cur)
-            out = subprocess.run(["git", "diff", "--no-index", "--no-color", "--no-ext-diff", "-U0", a, b], capture_output=True).stdout.decode("utf-8", "surrogateescape")
+            out = subprocess.run([SNAP, "--files", a, b], capture_output=True).stdout.decode("utf-8", "surrogateescape")
         expected[name] = changes(redact(out.encode("utf-8", "surrogateescape")).decode("utf-8", "surrogateescape").split("\n"))
     if mm["bin"] == "coderabbit":
         # WHY the logged argv (r40): the fake models whatever it is asked for, so the mode must be proven from what production passed:
@@ -240,10 +243,12 @@ if repo is not None:
             reject('the coderabbit tree digest does not match the launcher digest')
         if mm.get("dirty") != "0" or mm.get("head") != head or mm.get("base") in (None, "none", "") or not rootc:
             reject('the coderabbit call was dirty, at another head or had no base')
-        if subprocess.run(["git", "-C", repo, "diff", "--quiet", rootc, mm["base"], "--", "*.py"]).returncode != 0:
+        if subprocess.run(["git", "-C", repo, "diff", "--quiet", "--no-ext-diff", "--no-textconv", "--no-renames", rootc, mm["base"], "--", "*.py"]).returncode != 0:
             reject('the coderabbit base adds python changes beyond the root commit')
         # WHY bytes (r41): text=True would turn CRLF into LF while the model event keeps the carriage returns.
-        want = redact(G("diff", "--no-color", mm["base"], head, text=False)).decode("utf-8", "surrogateescape")
+        # WHY not the snapshot script here (r29): this compares against what the installed tier R launcher itself fed CodeRabbit (its own plain `git diff`), so the
+        # expected bytes must follow that launcher's form, not ours. Only config-dependent behaviour is switched off.
+        want = redact(G("diff", "--no-color", "--no-ext-diff", "--no-textconv", mm["base"], head, text=False)).decode("utf-8", "surrogateescape")  # canon-exempt
         if want != (model.get("input_text") or ""):
             reject('the coderabbit input is not the committed diff')
         sys.exit(0)

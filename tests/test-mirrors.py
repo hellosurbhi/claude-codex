@@ -460,6 +460,24 @@ for _s in sorted(os.path.basename(x) for x in glob.glob(os.path.join(root, "scri
 for _f in sorted(glob.glob(os.path.join(root, "skills", "*", "*.md")) + glob.glob(os.path.join(root, "commands", "*.md"))):
     if re.search(r"git diff \S+ -- ':\(top\)'", open(_f, encoding="utf-8").read()):
         bad.append("%s: re-derives the review snapshot inline (call ~/.claude/config/scripts/review-snapshot.sh)" % os.path.relpath(_f, root))
+# r29 finding 1: no canonical diff outside scripts/review-snapshot.sh. Every byte that is hashed, redacted or compared comes from that script, which pins the
+# git settings that shape diff output. Boolean `git diff --quiet` checks and human-facing prose (`git diff $TASK_SHA` to look at a subagent's work) are not canonical.
+_here = os.path.dirname(os.path.abspath(__file__))
+_cb = root if os.path.isdir(os.path.join(root, "scripts")) else os.path.join(_here, "..")  # WHY: docs-only fixtures have no scripts, so the repo's own are scanned
+_canon = [f for g in ("scripts/*.sh", "tests/spy-reviewer.sh", "tests/check-*.py", "tests/treehash.py", "tests/state-hash.py", "tests/audit-status.py", "tests/wlog.py") for f in sorted(glob.glob(os.path.join(_cb, g)))]
+for _f in _canon:
+    if os.path.basename(_f) == "review-snapshot.sh":
+        continue
+    for _n, _l in enumerate(open(_f, encoding="utf-8", errors="replace").read().splitlines(), 1):
+        if _l.lstrip().startswith("#") or "--quiet" in _l or "re.search(" in _l or "canon-exempt" in _l:  # WHY re.search: check-diff-toplevel.py holds the DETECTOR pattern for an inline diff, not a call
+            continue
+        if re.search(r"""\bgit\b[^\n]*\bdiff\b|["']diff["']""", _l) and not re.search(r"review-snapshot\.sh", _l):
+            bad.append("%s:%d: a canonical git diff outside scripts/review-snapshot.sh (call the script; it pins every output-shaping git setting)" % (os.path.basename(_f), _n))
+for _f in sorted(glob.glob(os.path.join(root, "skills", "*", "*.md")) + glob.glob(os.path.join(root, "commands", "*.md"))):
+    for _b in re.findall(r"```[a-z]*\n(.*?)\n```", open(_f, encoding="utf-8").read(), re.S):
+        for _l in _b.splitlines():
+            if re.search(r"(^|[;&|(]|\$\()\s*git (-c \S+ )*diff\b", _l) and not _l.lstrip().startswith("#"):
+                bad.append("%s: a code block runs git diff itself (%s); canonical bytes come from review-snapshot.sh" % (os.path.relpath(_f, root), _l.strip()[:60]))
 # r20 finding 3: docs and evals must describe the current flow (the Codex prompt carries the masked DIFF and the TASK REQUIREMENTS; Codex never runs git itself).
 STALE = ["Codex runs `git diff HEAD` itself", "The Codex prompt includes 'git diff HEAD' instruction", "(Phase 6) with 'git diff $START_SHA'", "`git diff $START_SHA` review prompt", "all reviews use `git diff $START_SHA`", "`git diff $START_SHA` instead of `git diff HEAD`"]
 DOCNEED = {"README.md": "TASK REQUIREMENTS", "skills/claude-codex/evals/evals.json": "review-context.txt", "skills/tdd-claude-codex/evals/evals.json": "review-context.txt"}
@@ -497,5 +515,19 @@ else:
                 for v in CV.findall(line):
                     if v != m.group(1):
                         bad.append("%s:%d: names contract v%s but scripts/codex-call.sh line 2 is v%s" % (os.path.relpath(f, root), n, v, m.group(1)))
+# r29 finding 2: all shipped scripts carry their contract on line 2, and the README says so with the real version (the README once said line 2 for a script whose contract was on line 3).
+# WHY the repo copy of scripts when the scanned root has none: same reason as above (negative-case fixtures copy only docs).
+sdir = os.path.join(root, "scripts")
+if not os.path.isdir(sdir):
+    sdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
+rd = open(os.path.join(root, "README.md"), encoding="utf-8", errors="replace").read().splitlines() if os.path.exists(os.path.join(root, "README.md")) else []
+for sp in sorted(glob.glob(os.path.join(sdir, "*.sh"))):
+    nm = os.path.basename(sp)[:-3]
+    sm = re.match(r"# contract: " + re.escape(nm) + r" v(\d+)", (open(sp).read().splitlines() + ["", ""])[1])
+    if not sm:
+        bad.append("scripts/%s.sh: line 2 is not a '# contract: %s v<N>' line" % (nm, nm))
+        continue
+    if rd and not [l for l in rd if "scripts/%s.sh" % nm in l and "second line" in l and ("%s v%s" % (nm, sm.group(1))) in l]:
+        bad.append("README.md: no line says that scripts/%s.sh carries '%s v%s' on its second line" % (nm, nm, sm.group(1)))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)
