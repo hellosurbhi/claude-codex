@@ -138,6 +138,8 @@ if [[ $scenario == real ]]; then
   EVNONCE="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"; export EVNONCE
   WRAPPER_SHA256="$(shasum -a 256 "$HOME/.claude/config/scripts/codex-call.sh" | cut -d' ' -f1)"; export WRAPPER_SHA256
   EXPECT_CODEX="$REAL_CODEX"; export EXPECT_CODEX
+  # WHY (cc11 r64): the confined plan-codex run calls the installed private-folder helper (the hook denies the inline umask/chmod/trap it replaced), so a machine without it fails here, loudly, instead of mid-run.
+  [[ -x "$HOME/.claude/config/scripts/review-private.sh" ]] || { echo "review-loop-proof: ~/.claude/config/scripts/review-private.sh is not installed (README install step 3); the real plan-codex run needs it" >&2; exit 2; }
   export PATH="$here/shim:$PATH"
   # WHY the wrapper logs its early exits into the shim's log (r23): a call that fails before it reaches codex (bad arguments, a missing prompt file) never touches the shim, so without this an earlier clean review stood as the last word.
   export CODEX_CALL_EVENT_LOG="$EVLOG"

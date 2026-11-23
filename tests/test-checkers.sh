@@ -839,11 +839,17 @@ expect pass "the tripwire check and the proof's claude call take stdin from /dev
 # r15 finding 3: every fallback block checks its input before dispatch. fbtry runs the file's real Fallback input block in a throwaway repo with a stub reviewer;
 # states: ok (real change, real plan), emptydiff (nothing to review), noplan, emptyplan. A refused input must call no reviewer AND leave no context file behind.
 fbtry() { # $1 = file, $2 = state
-  python3 - "$1" "$red" "$tmp/fb.sh" "$tmp/fb-called" "${FBRED:-$red}" "${FBHANG:-}" "$tmp/fb-hang" <<'PYFB'
-import re, sys
+  python3 - "$1" "$red" "$tmp/fb.sh" "$tmp/fb-called" "${FBRED:-$red}" "${FBHANG:-}" "$tmp/fb-hang" "$tmp/fbscripts" "$here/../scripts/review-private.sh" <<'PYFB'
+import os, re, shutil, sys
 t = open(sys.argv[1]).read()
 b = re.search(r"\*\*(?:Review context \(every reviewer call\)|Fallback input \(tier S\))\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
 b = b.replace("~/.claude/config/scripts/review-snapshot.sh", sys.argv[2].replace("redact-diff.sh", "review-snapshot.sh")).replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[5]).replace("~/.claude/config/scripts/reviewer.sh S", ("touch " + sys.argv[7] + "; sleep 30 #") if sys.argv[6] else "cp \"$CTX\" " + sys.argv[4] + " #")
+if "review-private.sh" in b:  # cc11 r64: the plan audit block is one helper call, so the helper runs for real beside a stub reviewer.sh that records the context it was handed (or hangs, for the SIGTERM cases)
+    shutil.rmtree(sys.argv[8], ignore_errors=True); os.makedirs(sys.argv[8])
+    shutil.copy(sys.argv[9], os.path.join(sys.argv[8], "review-private.sh"))
+    open(os.path.join(sys.argv[8], "reviewer.sh"), "w").write("#!/bin/bash\n" + (("touch " + sys.argv[7] + "; exec sleep 30\n") if sys.argv[6] else ("cp \"$2\" " + sys.argv[4] + "\n")))
+    os.chmod(os.path.join(sys.argv[8], "reviewer.sh"), 0o755)
+    b = b.replace("~/.claude/config/scripts/review-private.sh", os.path.join(sys.argv[8], "review-private.sh"))
 b = b.replace("<out-file>", "x").replace("<feature-name>", "feat").replace("$(mktemp)", "$(mktemp \"$TMPDIR/t.XXXXXX\")")  # BSD mktemp ignores TMPDIR without a template
 if "review-context.txt" in b:
     b += "\n[ -s .claude/review/review-context.txt ] && cp .claude/review/review-context.txt " + sys.argv[4] + "\n"  # WHY the fixed path: the block runs in a subshell (its raw-file exit trap), so $CTX is not visible after it
@@ -1162,10 +1168,10 @@ PYX
 mirneg "a Review record step 2 without its raw-reply exit trap is caught" 'EXIT and HUP/INT/TERM traps' "$tmp/mir8"; mirc execute-codex
 python3 - "$tmp/mir8/skills/plan-codex/SKILL.md" <<'PYX'
 import sys
-p = sys.argv[1]; t = open(p).read(); t2 = t.replace("trap 'rm -f \"$NOTES\" \"$CTX\"' EXIT; trap 'exit 1' HUP INT TERM\n", "", 1); assert t2 != t
+p = sys.argv[1]; t = open(p).read(); t2 = t.replace("sets an exit trap and an interrupt trap (HUP, INT and TERM) inside its own subshell before it starts", "runs", 1); assert t2 != t
 open(p, "w").write(t2)
 PYX
-mirneg "a plan-codex fallback block without its raw-notes exit trap is caught" 'EXIT and HUP/INT/TERM traps' "$tmp/mir8"; mirc plan-codex
+mirneg "r64: a plan-codex skill that no longer says the helper traps its raw notes is caught" 'lacks the exit-trap wording' "$tmp/mir8"; mirc plan-codex
 python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" <<'PYX'
 import sys
 p = sys.argv[1]; t = open(p).read(); t2 = t.replace("(trap 'rm -f .claude/review/prompt.raw.txt' EXIT; trap 'exit 1' HUP INT TERM; ", "(", 1); assert t2 != t
@@ -1190,6 +1196,18 @@ p = sys.argv[1]; t = open(p).read(); t2 = t.replace("GIT_NAMESPACE GIT_OBJECT_DI
 open(p, "w").write(t2)
 PYX
 mirneg "r64: a git-env-clean block that drifted in one script is caught" 'git-env-clean block differs' "$tmp/mir8"; cp "$here/../scripts/codex-call.sh" "$tmp/mir8/scripts/codex-call.sh"
+python3 - "$tmp/mir8/scripts/review-private.sh" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read(); t2 = t.replace("GIT_NAMESPACE GIT_OBJECT_DIRECTORY", "GIT_OBJECT_DIRECTORY", 1); assert t2 != t
+open(p, "w").write(t2)
+PYX
+mirneg "r64: a git-env-clean block that drifted in review-private.sh is caught" 'git-env-clean block differs' "$tmp/mir8"; cp "$here/../scripts/review-private.sh" "$tmp/mir8/scripts/review-private.sh"
+python3 - "$tmp/mir8/skills/plan-codex/SKILL.md" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read(); t2 = t.replace("~/.claude/config/scripts/review-private.sh plan-fallback <feature-name> <out-file>", "(umask 077; trap 'rm -f \"$NOTES\"' EXIT; ~/.claude/config/scripts/reviewer.sh S \"$CTX\" <out-file>)", 1); assert t2 != t
+open(p, "w").write(t2)
+PYX
+mirneg "r64: a plan-codex fenced block that carries an inline umask and trap again is caught" 'a fenced shell block still carries umask, chmod, mktemp, trap or mkdir' "$tmp/mir8"; mirc plan-codex
 python3 - "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 p = sys.argv[1]; t = open(p).read() + "\nAfter each subagent run `git diff $TASK_SHA` yourself.\n"
@@ -2792,6 +2810,42 @@ expect pass "hook r38: the wrapper piped to tail is denied" hdeny "$CC --sandbox
 expect pass "hook r38: the wrapper with a redirect is denied" hdeny "$CC --sandbox read-only 'x' > out.txt"
 expect pass "hook r38: codex --version after && is denied" hdeny "ls && codex --version"
 expect pass "hook r38: codex --version alone from the root is allowed" test "$(hbash 'codex --version')" = "allow "
+# cc11 r64 finding 2: plan-codex's own prescription must be runnable under the hook. The helper is allowed with exactly its fixed subcommands, alone on its line, from the root.
+RP='~/.claude/config/scripts/review-private.sh'
+for c in "$RP init" "$RP clean" "$RP plan-fallback feat .claude/review/out.txt" "$RP plan-fallback my-feature.v2 .claude/review/out.txt"; do
+  expect pass "hook r64: allowed: $c" test "$(hbash "$c")" = "allow "
+done
+for c in "$RP" "$RP init extra" "$RP clean --all" "$RP nuke" "$RP plan-fallback" "$RP plan-fallback feat" "$RP plan-fallback ../x .claude/review/out.txt" "$RP plan-fallback -x .claude/review/out.txt" "$RP plan-fallback feat /tmp/out.txt" "$RP plan-fallback feat ../out.txt" "$RP init && ls" "$RP init; ls" "$RP init | cat" "$RP init > .claude/x" "ls && $RP init" "$RP plan-fallback feat .claude/review/out.txt extra"; do
+  expect pass "hook r64: denied: $c" hdeny "$c"
+done
+expect pass "hook r64: the helper from a cwd below the root is denied" test "$(HCWD="$hr/.claude" hbash "$RP init" | cut -d' ' -f1)" = deny
+# the old inline spellings stay denied (these are exactly what the skill used to prescribe)
+expect pass "hook r64: the old inline private-folder command stays denied" hdeny 'R="$(git rev-parse --show-toplevel)" && (umask 077; mkdir -p "$R/.claude/review" && chmod 700 "$R/.claude/review")'
+expect pass "hook r64: a bare umask stays denied" hdeny 'umask 077'
+expect pass "hook r64: the old trapped fallback subshell stays denied" hdeny '(CTX="$(mktemp)"; NOTES=.claude/review/audit-notes.raw.txt
+trap "rm -f \"$NOTES\" \"$CTX\"" EXIT; trap "exit 1" HUP INT TERM
+~/.claude/config/scripts/reviewer.sh S "$CTX" .claude/review/out.txt
+)'
+# the walk: EVERY shell command plan-codex prescribes (main path and fallback), taken from the skill and the command text itself, is allowed. A fixture that still prescribes the old inline commands fails it.
+hwalk() { python3 "$here/check-plan-codex-hook-walk.py" "$1" "$hk" "$hr" "$hgb"; }
+mkdir -p "$hr/.claude/review"; printf 'x\n' > "$hr/.claude/review/ctx.txt"
+for pf in skills/plan-codex/SKILL.md commands/plan-codex.md; do
+  expect pass "$pf: every shell command it prescribes is allowed by the confinement hook" hwalk "$here/../$pf"
+done
+printf '%s\n' 'Run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`.' 'Create it with `R="$(git rev-parse --show-toplevel)" && (umask 077; mkdir -p "$R/.claude/review" && chmod 700 "$R/.claude/review")`.' '```' '(CTX="$(mktemp)"; NOTES=.claude/review/audit-notes.raw.txt' "trap 'rm -f \"\$NOTES\" \"\$CTX\"' EXIT; trap 'exit 1' HUP INT TERM" '~/.claude/config/scripts/reviewer.sh S "$CTX" <out-file>' ')' '```' > "$tmp/plan-old-prescription.md"
+expectm fail "the walk fails on a plan-codex that prescribes the old inline commands" 'DENIED' hwalk "$tmp/plan-old-prescription.md"
+sed "s#review-private.sh plan-fallback <feature-name> <out-file>#review-private.sh nuke <feature-name> <out-file>#" "$here/../skills/plan-codex/SKILL.md" > "$tmp/plan-bad-sub.md"
+expectm fail "the walk fails when a prescribed helper subcommand is not one the hook allows" 'DENIED' hwalk "$tmp/plan-bad-sub.md"
+printf 'Nothing to run here.\n' > "$tmp/plan-empty-walk.md"
+expect fail "the walk fails when it finds no commands to walk (it cannot pass by extracting nothing)" hwalk "$tmp/plan-empty-walk.md"
+# the helper itself: private folder under any umask and from a subfolder with hostile git variables, cleanup of only the fixed raw names, usage errors exit 2
+rp="$here/../scripts/review-private.sh"; rpr="$tmp/rprepo"; rm -rf "$rpr"; mkdir -p "$rpr/sub"; git -C "$rpr" init -q
+expect pass "review-private init makes .claude/review mode 700 from a subfolder under umask 022 and hostile git variables" sh -c 'cd "$1/sub" && umask 022 && GIT_DIR=/nonexistent GIT_WORK_TREE=/nonexistent GIT_LITERAL_PATHSPECS=1 bash "$2" init && [ "$(stat -f %Lp "$1/.claude/review" 2>/dev/null || stat -c %a "$1/.claude/review")" = 700 ]' _ "$rpr" "$rp"
+expect pass "review-private clean removes the fixed raw names and nothing else" sh -c 'cd "$1" && for n in requirements.raw.txt reply.raw.txt audit-notes.raw.txt prompt.raw.txt reviewed.diff keep.txt; do : > .claude/review/$n; done && bash "$2" clean && [ ! -e .claude/review/requirements.raw.txt ] && [ ! -e .claude/review/reply.raw.txt ] && [ ! -e .claude/review/audit-notes.raw.txt ] && [ ! -e .claude/review/prompt.raw.txt ] && [ ! -e .claude/review/reviewed.diff ] && [ -e .claude/review/keep.txt ]' _ "$rpr" "$rp"
+for bad in "" nuke "init x" "clean x" "plan-fallback" "plan-fallback ../x o" "plan-fallback a/b o" "plan-fallback -x o" "plan-fallback a b c"; do
+  expect pass "review-private rejects usage '$bad' with exit 2" sh -c 'cd "$1" && bash "$2" $3 >/dev/null 2>&1; [ $? -eq 2 ]' _ "$rpr" "$rp" "$bad"
+done
+expect pass "review-private outside a git repository fails closed" sh -c 'd="$(mktemp -d "$1/nogit.XXXXXX")" && cd "$d" && ! GIT_CEILING_DIRECTORIES="$1" bash "$2" init >/dev/null 2>&1' _ "$tmp" "$rp"
 expect pass "hook r38: the wrapper --cd .. from the root is denied" hdeny "$CC --sandbox read-only --cd .. 'x'"
 expect pass "hook r38: the wrapper --cd sub/../.. is denied" hdeny "$CC --sandbox read-only --cd sub/../.. 'x'"
 expect pass "hook r38: the wrapper --cd sub/.. (a .. component, still inside) is denied" hdeny "$CC --sandbox read-only --cd sub/.. 'x'"

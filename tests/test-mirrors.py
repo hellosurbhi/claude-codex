@@ -203,7 +203,7 @@ for f in CTXFILES:
             continue
         # WHY the quoted ${START_SHA:?} (round 15 finding 3): an unset START_SHA made `git diff $START_SHA` read the index, not the run's changes; the :? form fails the pipeline and sends nothing.
         base = "\"${START_SHA:?}\"" if "tdd-" in rel else "HEAD"
-        need = ["OPEN FINDINGS:"] + (['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "AUDIT INSTRUCTIONS:", 'NOTES=.claude/review/audit-notes.raw.txt', 'cat "$NOTES" > "$CTX" && printf \'\\nPLAN:\\n\' >> "$CTX"', "the audit notes file or the plan file is missing, empty or unreadable: no context is sent", "file-writing tool (Write, never a heredoc, echo or printf carrying the pasted text)"] if plan else
+        need = ["OPEN FINDINGS:"] + (['review-private.sh plan-fallback <feature-name> <out-file>', "AUDIT INSTRUCTIONS:", "audit-notes.raw.txt", "A missing or empty notes file means no context is sent", "file-writing tool (Write, never a heredoc, echo or printf carrying the pasted text)"] if plan else
                 ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:"] + REVNEED + PARANEED + ["best-effort mask", "no context is sent"])
         for k in need:
             if k not in b:
@@ -534,11 +534,12 @@ for sp in sorted(glob.glob(os.path.join(sdir, "*.sh"))):
 # file is written, every command that creates it does the same, every context builder writes under umask 077, and the Review record step 1 deletes the raw snapshot on every exit path.
 # WHY: the folder used to be created with the default umask, so under umask 022 a copy of inline credentials was world-readable and the raw snapshot outlived the review.
 PRIV = 'R="$(git rev-parse --show-toplevel)" && (umask 077; mkdir -p "$R/.claude/review" && chmod 700 "$R/.claude/review")'
+PRIVH = '~/.claude/config/scripts/review-private.sh init'  # cc11 r64: plan-codex runs under the confinement hook, which denies inline umask/chmod, so it calls the fixed helper instead
 for f in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")) + glob.glob(os.path.join(root, "skills", "*", "reference.md")) + glob.glob(os.path.join(root, "commands", "*.md"))):
     rel = os.path.relpath(f, root); t = open(f, encoding="utf-8").read()
     if ".claude/review" not in t:
         continue
-    if t.count("**Private review folder (before any file is written under `.claude/review`)**") != 1 or PRIV not in t:
+    if t.count("**Private review folder (before any file is written under `.claude/review`)**") != 1 or (PRIV not in t and not (PRIVH in t and "/plan-codex" in rel.replace("\\", "/"))):
         bad.append("%s: lacks the one Private review folder paragraph with its mode 700 command" % rel)
     elif t.find(".claude/review") != t.find("**Private review folder (before any file is written under `") + len("**Private review folder (before any file is written under `"):
         bad.append("%s: the Private review folder paragraph comes after the first use of .claude/review" % rel)
@@ -568,7 +569,7 @@ for f in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")) + glob.
         bad.append("%s: step 1 does not remove a stale reply.raw.txt from an earlier round" % rel)
     if "The raw file for a block is written with the file-writing tool just before the block runs" in t and "so write it again before a retry, and a leftover copy from an earlier attempt is never reused" not in t:
         bad.append("%s: the Private review folder paragraph lacks the no-stale-reuse wording" % rel)
-    if ".claude/review" in t and "sets an exit trap (`trap 'rm -f <raw files>' EXIT` plus `trap 'exit 1' HUP INT TERM`) inside a subshell before it starts" not in t:
+    if ".claude/review" in t and "sets an exit trap (`trap 'rm -f <raw files>' EXIT` plus `trap 'exit 1' HUP INT TERM`) inside a subshell before it starts" not in t and not ("/plan-codex" in rel.replace("\\", "/") and "sets an exit trap and an interrupt trap (HUP, INT and TERM) inside its own subshell before it starts" in t):
         bad.append("%s: the Private review folder paragraph lacks the exit-trap wording" % rel)
 # r60 (review 63): no raw file may be written outside a trapped block, in ANY skill, command or reference, and a raw file with no cleanup rule at all fails. Every `.claude/review/*raw*` name must be one this table knows,
 # and every mention of prompt.raw.txt that tells the model to WRITE it must sit within reach of a block that deletes it on success, failure and interruption: the EXIT trap plus the HUP/INT/TERM trap, set inside the same
@@ -591,11 +592,22 @@ for f in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")) + glob.
 def _envblock(path):
     m = re.search(r"# BEGIN git-env-clean.*?# END git-env-clean", open(path, encoding="utf-8").read(), re.S)
     return m.group(0) if m else None
-_a, _b = _envblock(os.path.join(root, "scripts", "review-snapshot.sh")), _envblock(os.path.join(root, "scripts", "codex-call.sh"))
-if _a is None or _b is None:
-    bad.append("scripts/review-snapshot.sh and scripts/codex-call.sh must both carry a '# BEGIN git-env-clean ... # END git-env-clean' block")
-elif _a != _b:
-    bad.append("the git-env-clean block differs between scripts/review-snapshot.sh and scripts/codex-call.sh")
+_blocks = {n: _envblock(os.path.join(root, "scripts", n)) for n in ("review-snapshot.sh", "codex-call.sh", "review-private.sh")}
+if any(v is None for v in _blocks.values()):
+    bad.append("scripts/review-snapshot.sh, scripts/codex-call.sh and scripts/review-private.sh must each carry a '# BEGIN git-env-clean ... # END git-env-clean' block")
+elif len(set(_blocks.values())) != 1:
+    bad.append("the git-env-clean block differs between scripts/review-snapshot.sh, scripts/codex-call.sh and scripts/review-private.sh")
+# cc11 r64 (finding 2): plan-codex runs under the confinement hook, which denies inline umask, chmod, mktemp and trap, so neither its skill nor its command may prescribe them in a shell command;
+# the fixed helper owns them. WHY: the earlier inline blocks were denied by the hook, so a real run that needed the fallback could not follow the skill.
+for _rel in ("skills/plan-codex/SKILL.md", "commands/plan-codex.md"):
+    _p = os.path.join(root, _rel)
+    if os.path.exists(_p):
+        _t = open(_p, encoding="utf-8").read()
+        for _fence in re.findall(r"```[a-z]*\n(.*?)\n```", _t, re.S):
+            if re.search(r"umask|chmod|mktemp|\btrap\b|mkdir", _fence):
+                bad.append("%s: a fenced shell block still carries umask, chmod, mktemp, trap or mkdir (use scripts/review-private.sh)" % _rel)
+        if 'R="$(git rev-parse --show-toplevel)" && (umask' in _t:
+            bad.append("%s: still prescribes the inline private-folder command (use scripts/review-private.sh init)" % _rel)
 for f in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")) + glob.glob(os.path.join(root, "skills", "*", "reference.md")) + glob.glob(os.path.join(root, "commands", "*.md"))):
     for ln, line in enumerate(open(f, encoding="utf-8").read().split("\n"), 1):
         for m in re.finditer(r"git diff", line):

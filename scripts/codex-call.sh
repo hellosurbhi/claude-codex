@@ -44,7 +44,7 @@ on_exit() {
 }
 trap on_exit EXIT
 command -v python3 >/dev/null || { echo "codex-call: python3 is required (it parses the Codex event stream). Treat as UNREVIEWED." >&2; exit 2; }
-# BEGIN git-env-clean (the same text sits in scripts/review-snapshot.sh and scripts/codex-call.sh; tests/test-mirrors.py fails when the two differ)
+# BEGIN git-env-clean (the same text sits in every script that calls git: review-snapshot.sh, codex-call.sh, review-private.sh; tests/test-mirrors.py fails when they differ)
 # WHY (cc11 r64): an inherited GIT_* variable can change what a path, a repository, an index, an object store or a config key MEANS (GIT_LITERAL_PATHSPECS=1
 # made the snapshot's `:(top)` and exclude pathspecs plain file names, so a changed tree printed an empty snapshot with exit 0). Clearing one variable at a
 # time was tried first and each review found another, so the whole class is cleared here. Config files are pinned to /dev/null instead of unset, so the

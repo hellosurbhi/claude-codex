@@ -120,6 +120,13 @@ cp scripts/review-snapshot.sh ~/.claude/config/scripts/review-snapshot.sh
 chmod +x ~/.claude/config/scripts/review-snapshot.sh
 ```
 
+The plan-codex skill runs under a confinement hook in its proof, which refuses inline `umask`, `chmod`, `mktemp` and `trap`, so the private review folder setup, the raw file cleanup and the tier S plan audit block are one fixed helper with three subcommands (`init`, `clean`, `plan-fallback <feature-name> <out-file>`). It needs `reviewer.sh` in the same folder for `plan-fallback`:
+
+```bash
+cp scripts/review-private.sh ~/.claude/config/scripts/review-private.sh
+chmod +x ~/.claude/config/scripts/review-private.sh
+```
+
 The usage-limit fallback also needs the shared reviewer script `~/.claude/config/scripts/reviewer.sh` (it is not shipped in this repo, and it needs its own `claude` CLI). Without it a Codex quota error leaves the review unreviewed instead of falling back.
 
 Outside reviewers (Gemini, CodeRabbit) are never called from these skills, because a skill cannot prove a diff is free of credentials; they run only inside the reviewer script's own chain. When Codex gives no verdict (a usage limit, an error or a malformed reply), the skills fall back to exactly one reviewer, tier S (`reviewer.sh S`, a Sonnet review) on one context file that carries the task requirements, the review instructions, the carried and contested findings and then the sanitized diff (a plan audit carries the audit instructions, the findings and then the current plan text), and the work stays pending until it returns a clean verdict on the current head.
@@ -130,7 +137,7 @@ A Codex stream that contains any error or turn.failed event, before or after the
 
 `scripts/redact-diff.sh` refuses a diff it cannot read line by line: an unknown hunk-line prefix (for example from `git diff --output-indicator-old=X`), an unknown header line or hunk counts that disagree with the `@@` header exit nonzero with nothing on stdout, so a caller sends nothing instead of a guessed mask. This stays `redact-diff v2` because nothing is pushed or installed yet and every caller already treats a nonzero status as "send nothing". `scripts/review-snapshot.sh` pins the three `--output-indicator-*` flags, and `tests/check-snapshot-config-keys.py` sets every key in `git help -c` (one at a time, several values each, minus sections the script never reaches) and fails if any changes the snapshot bytes; it found and pinned `core.bigFileThreshold` and `core.ignoreStat` on git 2.43.
 
-Every shipped script carries its contract on its second line, so one rule finds it: `scripts/codex-call.sh` is `codex-call v3`, `scripts/redact-diff.sh` is `redact-diff v2` and `scripts/review-snapshot.sh` is `review-snapshot v1`. The tests fail when any of them moves or this line goes stale.
+Every shipped script carries its contract on its second line, so one rule finds it: `scripts/codex-call.sh` is `codex-call v3`, `scripts/redact-diff.sh` is `redact-diff v2` and `scripts/review-snapshot.sh` is `review-snapshot v1` and `scripts/review-private.sh` is `review-private v1`. The tests fail when any of them moves or this line goes stale.
 
 The second line of `scripts/codex-call.sh` is a contract line (`# contract: codex-call v3 ...`). It names this repo as the source of truth, and a copy installed elsewhere is only compatible with the skills while that line matches. v3 made the argument parser strict: every option needs its value, an unknown option or an extra argument exits 2 with the usage line, and a prompt that starts with a dash must follow `--`; the documented invocations are unchanged, so only malformed calls that v2 ran or half-ran now stop. Setting `CODEX_CALL_EVENT_LOG` to a file path (used only by the test proof, unset in normal use) makes the wrapper append one `wrapper-failed` line for any non-zero exit that never reached codex, so a failed attempt after a clean review cannot leave that review standing. It is additive and off by default, so the contract stays v3.
 
@@ -252,6 +259,7 @@ Commands have defaults (`plan-codex` → Opus, `execute-codex` → Sonnet). Over
     └── scripts/
         ├── codex-call.sh            # codex exec wrapper every skill calls (install step 3)
         ├── redact-diff.sh           # masks credential values in the diff every reviewer receives (install step 3)
+        ├── review-private.sh        # private review folder, raw file cleanup and the tier S plan audit block for plan-codex (install step 3)
         └── review-snapshot.sh       # the reviewed state: tracked changes plus untracked files, hashed by the review record (install step 3)
 ```
 

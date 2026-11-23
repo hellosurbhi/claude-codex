@@ -7,8 +7,8 @@
 # one at a time, to several non-default values, and compares. A key a newer git adds shows up in that list and is tested the moment the installed
 # git is upgraded; a key this git does not know is ignored by git, so the test tolerates it. (Git 2.43 has NO config key for the three
 # --output-indicator flags, so this test cannot flag them; they are pinned as flags and covered by the redactor's fail-closed checks.)
-# HOW a key is set: GIT_CONFIG_COUNT/KEY/VALUE in the environment. That layer sits above repo, user and system files and below the script's own
-# `-c` pins, exactly where a value written into .git/config also loses to those pins; it needs no file writes, so keys run in parallel.
+# HOW a key is set: written into the repository's own .git/config of a fresh copy of the test repo (the script clears GIT_CONFIG_COUNT/KEY/VALUE and the global and system
+# files on purpose, so the environment channel no longer reaches it). A repo-local value loses only to the script's own `-c` pins. Each key and value gets its own copy, so keys still run in parallel.
 # FILTER: every section in `git help -c` is exercised EXCEPT the sections in DENY, whose commands this script never runs (it runs ls-files,
 # update-index, write-tree, ls-tree, diff, check-attr, rev-parse, hash-object and cat-file only). A new section on a newer git is exercised by
 # default; only an explicit entry in DENY skips one.
@@ -16,7 +16,7 @@
 # VALUES: a key's type is not known, so each key gets several: true, false, 0, 99, an odd string, always, never, three diff algorithms, /dev/null,
 # a colour. A value of the wrong type makes git refuse the key, a nonzero exit with empty stdout, the same fail-closed outcome.
 # --self-check: copies the script with the diff.context pin and -U3 removed and requires this test to FLAG diff.context, proving it can fail.
-import os, re, shutil, subprocess, sys, tempfile
+import os, re, shutil, subprocess, sys, tempfile, threading
 from concurrent.futures import ThreadPoolExecutor
 
 NONET = "no network"
@@ -100,10 +100,19 @@ def main():
             print("git help -c listed only %d keys: the enumeration is not working" % len(allk)); return 3
         test = [k for k in allk if k.split(".")[0] not in DENY]
         skipped = sorted({k.split(".")[0] for k in allk} & set(DENY))
+        # WHY the key goes into the repository's own .git/config (cc11 r64): the script now clears GIT_CONFIG_COUNT/KEY/VALUE and pins the global and system files to /dev/null on purpose, so those
+        # channels can no longer reach it and a test that used them would pass vacuously. A repository's local config is the one channel that still does. Each key and value gets its OWN fresh copy of the
+        # repo: a bad value for some keys (core.bare, core.repositoryformatversion) makes git refuse to read the repo at all, so even `git config --unset` fails and a shared copy would stay
+        # poisoned for every later key (the first run of this design lost diff.context that way).
         def one(k):
             bad = []
             for v in VALUES:
-                r = run({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": k, "GIT_CONFIG_VALUE_0": v})
+                wr = os.path.join(tempfile.mkdtemp(prefix="k", dir=tmp), "repo"); shutil.copytree(repo, wr, symlinks=True)
+                if subprocess.run(["git", "-C", wr, "config", "--local", k, v], env=env0, capture_output=True).returncode != 0:
+                    shutil.rmtree(os.path.dirname(wr), ignore_errors=True)
+                    continue  # git refuses this key or value outright, so no run can be affected by it
+                r = subprocess.run(["bash", snap, base], cwd=wr, env=env0, capture_output=True)
+                shutil.rmtree(os.path.dirname(wr), ignore_errors=True)
                 if r.returncode == 0 and r.stdout == b.stdout: continue
                 if r.returncode != 0 and not r.stdout: continue
                 bad.append((k, v, r.returncode))

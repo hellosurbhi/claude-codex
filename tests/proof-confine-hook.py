@@ -16,7 +16,7 @@ ROOT = ""
 HOME = os.path.realpath(os.path.expanduser("~"))
 SCRIPTS = os.path.join(HOME, ".claude", "config", "scripts")
 # the wrappers the skills prescribe (codex-call, reviewer, review-snapshot, redact-diff); arguments after them are the skill's own
-WRAPPERS = {os.path.join(SCRIPTS, n) for n in ("codex-call.sh", "reviewer.sh", "review-snapshot.sh", "redact-diff.sh")}
+WRAPPERS = {os.path.join(SCRIPTS, n) for n in ("codex-call.sh", "reviewer.sh", "review-snapshot.sh", "redact-diff.sh", "review-private.sh")}
 READ_ONLY_EXTRA = [os.path.join(HOME, ".claude", "skills"), os.path.join(SCRIPTS, "codex-call.sh")]
 READERS = {"cat", "head", "tail", "ls", "wc", "test", "[", "grep", "diff", "file", "stat"}
 GIT_READ = {"status", "diff", "log", "show", "rev-parse", "ls-files", "branch", "cat-file", "rev-list"}
@@ -338,6 +338,15 @@ def check_wrapper(name, args):
         if args not in ([], ["--text"]):
             raise Deny("redact-diff.sh takes no argument or --text")
         return
+    if name == "review-private.sh":
+        # WHY fixed subcommands only (cc11 r64 finding 2): plan-codex needs a private review folder, a raw-file cleanup and the tier S plan audit block, which are umask, chmod, trap and mktemp
+        # inside a subshell, none of which the hook may allow as free-form shell. The helper owns them, so the hook allows exactly its three subcommands and nothing else; plan-fallback takes
+        # the feature name (a plain file stem, no path) and an output file that must be writable inside the scratch repo, like reviewer.sh's.
+        if args in (["init"], ["clean"]):
+            return
+        if len(args) == 3 and args[0] == "plan-fallback" and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", args[1]) and writable(args[2]):
+            return
+        raise Deny("review-private.sh takes init, clean or plan-fallback <feature-name> <out-file inside the repo>")
     raise Deny("unknown wrapper: " + name)
 
 def _g(none="", **kinds):
@@ -581,6 +590,11 @@ def check_bash(cmd):
     for argv, reds in segs:
         if argv and is_exempt(argv) and (len(segs) != 1 or reds or os.path.realpath(CWD) != ROOT):
             raise Deny("a command exempt from the OS sandbox must be alone on its line, with no redirect, and run from the scratch repo root")
+    # WHY the helper is alone and rooted too (cc11 r64): its subcommands resolve every path from the repository top, and the only thing allowed to run beside nothing is the helper itself,
+    # so a `;`, `&&`, pipe or redirect cannot smuggle a second command through the same line. It is not sandbox-exempt (it runs inside the sandbox like reviewer.sh).
+    for argv, reds in segs:
+        if argv and "/" in argv[0] and os.path.basename(argv[0]) == "review-private.sh" and (len(segs) != 1 or reds or os.path.realpath(CWD) != ROOT):
+            raise Deny("review-private.sh must be alone on its line, with no redirect, and run from the scratch repo root")
     for argv, reds in segs:
         check_simple(argv, reds)
 
