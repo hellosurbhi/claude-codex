@@ -1217,7 +1217,8 @@ if len(blocks) < 2:
 fake = os.path.join(tmp, "r60-fake-codex"); open(fake, "w").write('#!/bin/bash\ncase "$R60MODE" in ok) exit 0;; fail) exit 3;; hang) echo started > "$R60MARK"; exec sleep 30;; esac\n'); os.chmod(fake, 0o755)
 for b in blocks:
     b = b.replace("~/.claude/config/scripts/codex-call.sh", fake); b = re.sub(r"\[[^\]]*\]|<[A-Z_]+>", "x", b)
-    d = tempfile.mkdtemp(prefix="r60-"); os.makedirs(d + "/.claude/review"); raw = d + "/.claude/review/prompt.raw.txt"; mark = d + "/mark"
+    d = tempfile.mkdtemp(prefix="r60-", dir=tmp);  # WHY dir=tmp (cc11 r64): the suite removes $tmp on exit, so no fixture outlives the run
+    os.makedirs(d + "/.claude/review"); raw = d + "/.claude/review/prompt.raw.txt"; mark = d + "/mark"
     open(raw, "w").write("secret prompt")
     env = dict(os.environ, R60MODE=("hang" if mode == "kill" else mode), R60MARK=mark)
     p = subprocess.Popen(["bash", "-c", b], cwd=d, env=env, start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

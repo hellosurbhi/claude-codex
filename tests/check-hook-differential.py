@@ -7,6 +7,7 @@
 import importlib.util, itertools, os, subprocess, sys, tempfile
 hookpath = os.path.abspath(sys.argv[1])
 base = os.path.realpath(tempfile.mkdtemp(prefix="hookdiff"))
+import atexit, shutil; atexit.register(shutil.rmtree, base, True)  # WHY (cc11 r64): the fixture used to outlive every run in the system temp dir; atexit also runs on sys.exit
 root = os.path.join(base, "repo"); os.makedirs(root)
 for f in ("app.py", "in.txt"):
     open(os.path.join(root, f), "w").write("x\n")

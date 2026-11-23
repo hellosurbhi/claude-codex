@@ -7,6 +7,7 @@ import json, os, subprocess, sys, tempfile
 hook = os.path.abspath(sys.argv[1])
 only = set(sys.argv[2:])
 base = os.path.realpath(tempfile.mkdtemp(prefix="hookopts"))
+import atexit, shutil; atexit.register(shutil.rmtree, base, True)  # WHY (cc11 r64): the fixture used to outlive every run in the system temp dir; atexit also runs on sys.exit
 root, outside = os.path.join(base, "repo"), os.path.join(base, "outside")
 os.makedirs(root); os.makedirs(outside)
 open(os.path.join(root, "app.py"), "w").write("x\n"); open(os.path.join(root, "in.txt"), "w").write("x\n")
