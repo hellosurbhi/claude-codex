@@ -2363,8 +2363,8 @@ git -C "$hr" init -q; hgb="$tmp/hookgitbase"; python3 "$hk" --record-baseline "$
 HCWD="$hr"
 hook() { python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"cwd":sys.argv[2],"tool_input":json.loads(sys.argv[3])}))' "$1" "${HCWD:-$hr}" "$2" | PROOF_SCRATCH_ROOT="$hr" PROOF_GIT_BASELINE="${HGB-$hgb}" python3 "$hk" | python3 -c 'import json,sys; o=json.load(sys.stdin)["hookSpecificOutput"]; print(o["permissionDecision"], o.get("permissionDecisionReason",""))'; }
 hbash() { hook Bash "$(python3 -c 'import json,sys; print(json.dumps({"command":sys.argv[1]}))' "$1")"; }
-expect pass "hook: the prescribed wrapper call is allowed" test "$(hbash '~/.claude/config/scripts/codex-call.sh --sandbox read-only --role ~/.claude/skills/plan-codex/codex-analyzer-role.md "audit the plan" 2>&1 | tail -20')" = "allow "
-expect pass "hook: the availability check is allowed" test "$(hbash 'test -x ~/.claude/config/scripts/codex-call.sh && codex --version; echo "exit $?"')" = "allow "
+expect pass "hook: the prescribed wrapper call is allowed" test "$(hbash '~/.claude/config/scripts/codex-call.sh --sandbox read-only --role ~/.claude/skills/plan-codex/codex-analyzer-role.md "audit the plan"')" = "allow "
+expect pass "hook: the skill's compound availability check is denied (r38: the exempt command must be alone), the bare check is allowed" sh -c '[ "$1" = deny ] && [ "$2" = allow ]' _ "$(hbash 'test -x ~/.claude/config/scripts/codex-call.sh && codex --version' | cut -d' ' -f1)" "$(hbash 'codex --version' | cut -d' ' -f1)"
 expect pass "hook: a plan write by quoted heredoc in the scratch repo is allowed" test "$(hbash "cat > .claude/plan/x.md <<'EOF'
 \$(not run) \`not run\`
 EOF")" = "allow "
@@ -2395,7 +2395,7 @@ for c in 'git status' 'git log --oneline -3' 'git diff HEAD' 'git branch --show-
 done
 expect pass "hook: cd outside the repo is denied" hdeny 'cd /tmp && ls'
 expect pass "hook: cd through a symlink out of the repo is denied" hdeny 'cd link && ls'
-expect pass "hook: cd inside the repo is allowed" test "$(hbash 'cd .claude/plan && ls')" = "allow "
+expect pass "hook: cd inside the repo is denied too (cd is removed, not tracked)" hdeny 'cd .claude/plan && ls'
 expect pass "hook: writing .git/config by Write is denied" test "$(hook Write "{\"file_path\":\"$hr/.git/config\"}" | cut -d' ' -f1)" = deny
 expect pass "hook: writing .git/config by redirect is denied" hdeny 'echo x > .git/config'
 expect pass "hook: a redirect into the read-only skills dir is denied" hdeny 'echo x > ~/.claude/skills/plan-codex/SKILL.md'
@@ -2437,13 +2437,38 @@ expect pass "check-proof-permissions.py requires the git-state guard in the hook
 # cc11 r37 HIGH: the prescribed review and implementation calls must be allowed, still confined
 CC='~/.claude/config/scripts/codex-call.sh'
 mkdir -p "$hr/.claude/plan"; printf 'x' > "$hr/.claude/plan/p.txt"; mkdir -p "$tmp/outside-dir"; printf 'x' > "$tmp/outside-dir/x.txt"; ln -sfn "$tmp/outside-dir" "$hr/link"
-for c in "$CC --prompt-file .claude/plan/p.txt" "$CC --prompt-file $hr/.claude/plan/p.txt" "$CC --sandbox read-only --role ~/.claude/skills/plan-codex/codex-analyzer-role.md --prompt-file .claude/plan/p.txt" "$CC --resume 01a20563-33aa-73d3-95b8-a8e2d30ab187 --prompt-file .claude/plan/p.txt" "$CC --sandbox workspace-write 'implement the plan'" "$CC --sandbox workspace-write --cd . --prompt-file .claude/plan/p.txt" "$CC --sandbox workspace-write --cd $hr 'go'" "$CC --sandbox workspace-write --prompt-file .claude/plan/p.txt 2>&1 | tail -20"; do
+for c in "$CC --prompt-file .claude/plan/p.txt" "$CC --prompt-file $hr/.claude/plan/p.txt" "$CC --sandbox read-only --role ~/.claude/skills/plan-codex/codex-analyzer-role.md --prompt-file .claude/plan/p.txt" "$CC --resume 01a20563-33aa-73d3-95b8-a8e2d30ab187 --prompt-file .claude/plan/p.txt" "$CC --sandbox read-only --cd . --prompt-file .claude/plan/p.txt" "$CC --sandbox read-only --cd $hr 'go'" "$CC --sandbox read-only --cd .claude/plan 'go'"; do
   expect pass "hook: prescribed call allowed: ${c#\~/.claude/config/scripts/}" test "$(hbash "$c")" = "allow "
 done
-HCWD="$tmp"
-expect pass "hook: workspace-write without --cd from a tool cwd outside the root is denied" hdeny "$CC --sandbox workspace-write 'implement'"
+# cc11 r38 CRITICAL: sandbox-exempt commands are alone on their line and run from the root; workspace-write is gone; cd is gone; `..` arguments from a subdir cwd
+mkdir -p "$hr/sub"
+expect pass "hook r38: workspace-write is denied (real is plan-codex, read-only)" hdeny "$CC --sandbox workspace-write 'implement'"
+expect pass "hook r38: workspace-write with --cd inside the root is denied" hdeny "$CC --sandbox workspace-write --cd . 'implement'"
 HCWD="$hr/.claude"
-expect pass "hook: workspace-write without --cd from a cwd below the root is allowed (the script's directory is the repo toplevel)" test "$(hbash "$CC --sandbox workspace-write 'implement'")" = "allow "
+expect pass "hook r38: the reviewer's example (cwd .claude, cd .. then workspace-write --cd ..) is denied" hdeny "cd .. && $CC --sandbox workspace-write --cd .. 'x'"
+expect pass "hook r38: the wrapper from a cwd below the root is denied" hdeny "$CC --sandbox read-only 'x'"
+expect pass "hook r38: codex --version from a cwd below the root is denied" hdeny "codex --version"
+HCWD="$hr"
+expect pass "hook r38: the wrapper after cd sub && is denied" hdeny "cd sub && $CC --sandbox read-only 'x'"
+expect pass "hook r38: the wrapper after a test and && is denied (sole segment only)" hdeny "test -x $CC && $CC --sandbox read-only 'x'"
+expect pass "hook r38: the wrapper piped to tail is denied" hdeny "$CC --sandbox read-only 'x' 2>&1 | tail -20"
+expect pass "hook r38: the wrapper with a redirect is denied" hdeny "$CC --sandbox read-only 'x' > out.txt"
+expect pass "hook r38: codex --version after && is denied" hdeny "ls && codex --version"
+expect pass "hook r38: codex --version alone from the root is allowed" test "$(hbash 'codex --version')" = "allow "
+expect pass "hook r38: the wrapper --cd .. from the root is denied" hdeny "$CC --sandbox read-only --cd .. 'x'"
+expect pass "hook r38: the wrapper --cd sub/../.. is denied" hdeny "$CC --sandbox read-only --cd sub/../.. 'x'"
+expect pass "hook r38: the wrapper --cd sub/.. (a .. component, still inside) is denied" hdeny "$CC --sandbox read-only --cd sub/.. 'x'"
+expect pass "hook r38: the wrapper --prompt-file sub/../.claude/plan/p.txt is allowed only without escaping (inside root)" test "$(hbash "$CC --prompt-file sub/../.claude/plan/p.txt")" = "allow "
+# every other allowed command resolves its path arguments against the tool cwd (cd is denied); from <root>/sub a .. argument is judged as the real path
+HCWD="$hr/sub"
+expect pass "hook r38: cat .. /etc from a subdir cwd is denied" hdeny "cat ../../etc/hosts"
+expect pass "hook r38: cat ../app inside the root from a subdir cwd is allowed" test "$(hbash 'cat ../.claude/plan/p.txt')" = "allow "
+expect pass "hook r38: redirect to ../../x from a subdir cwd is denied" hdeny "echo x > ../../x.txt"
+expect pass "hook r38: redirect to ../ok.txt from a subdir cwd stays inside the root and is allowed" test "$(hbash 'echo x > ../ok.txt')" = "allow "
+expect pass "hook r38: mkdir ../../d from a subdir cwd is denied" hdeny "mkdir ../../d"
+expect pass "hook r38: ls .. .. from a subdir cwd is denied" hdeny "ls ../.."
+expect pass "hook r38: reviewer.sh with .. arguments escaping the root from a subdir cwd is denied" hdeny "~/.claude/config/scripts/reviewer.sh E ../../in.txt ../out.txt"
+expect pass "hook r38: git with a .. path from a subdir cwd is denied (cwd is not the root)" hdeny "git diff -- .."
 HCWD="$hr"
 expect pass "hook: Agent is allowed (a subagent's own calls reach this hook, probed)" test "$(hook Agent '{"prompt":"x"}')" = "allow "
 # r36 CRITICAL 1: expansion in ANY quoting except single quotes, in every position and every segment

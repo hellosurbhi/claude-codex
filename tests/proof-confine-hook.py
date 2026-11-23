@@ -260,16 +260,16 @@ def check_wrapper(name, args):
                 raise Deny("codex-call.sh option without a value: " + o)
             v = a[1]
             if o == "--sandbox":
-                if v not in ("read-only", "workspace-write"):
-                    raise Deny("codex-call.sh --sandbox must be read-only or workspace-write, got " + v)
+                if v != "read-only":
+                    raise Deny("codex-call.sh --sandbox must be read-only, got " + v)
                 sandbox = v
             if o == "--role" and not readable(v):
                 raise Deny("codex-call.sh --role file outside the scratch repo and the skills dir: " + v)
             if o == "--resume" and not re.fullmatch(r"[A-Za-z0-9-]{8,64}", v):
                 raise Deny("codex-call.sh --resume is not a thread id: " + v)
             if o == "--cd":
-                if not in_root(v):
-                    raise Deny("codex-call.sh --cd outside the scratch repo: " + v)
+                if not in_root(v) or ".." in v.split("/"):
+                    raise Deny("codex-call.sh --cd must be inside the scratch repo with no .. component: " + v)
                 cd = v
             if o == "--prompt-file":
                 if not in_root(v) or not os.path.isfile(real(v)):
@@ -281,10 +281,9 @@ def check_wrapper(name, args):
                 raise Deny("codex-call.sh takes a prompt file or a prompt, not both (extra argument: " + a[0] + ")")
         elif len(a) != 1 or a[0].startswith("-") or not a[0]:
             raise Deny("codex-call.sh needs known options then exactly one prompt (an option-looking, extra or missing argument is refused)")
-        # WHY workspace-write only inside the repo (cc11 r37): the script's working directory is --cd, else the git toplevel of the tool cwd. Both must be inside the
-        # scratch repo for Codex's own sandbox to be confined to it; danger-full-access never passes the check above.
-        if sandbox == "workspace-write" and cd is None and not in_root(CWD):
-            raise Deny("codex-call.sh --sandbox workspace-write needs --cd or a tool cwd inside the scratch repo (must be read-only otherwise)")
+        # WHY workspace-write is denied again (cc11 r38 CRITICAL): codex-call.sh is exempt from the OS sandbox, so a write-capable Codex is only as confined as the directory the
+        # script picks (--cd, else the git toplevel of the cwd). The `real` proof is plan-codex only, which is read-only, so the surface is removed rather than tracked. Widening
+        # `real` to a skill that needs workspace-write requires revisiting this check, the sole-segment rule in check_bash and the sandbox exclusions together.
         return
     if name == "reviewer.sh":
         if len(args) != 3 or args[0] not in ("E", "R", "S") or not readable(args[1]) or not writable(args[2]):
@@ -328,9 +327,9 @@ def check_simple(argv, reds):
                 return
         raise Deny("program is not one of the prescribed wrapper scripts: " + prog)
     if prog == "cd":
-        if len(args) != 1 or not in_root(args[0]):
-            raise Deny("cd outside the scratch repo")
-        return
+        # WHY denied outright (cc11 r38): every path argument is checked against the tool cwd the call STARTED in; a `cd` earlier on the line would silently change what later relative
+        # paths mean. No recorded plan-codex run uses cd (hook.log and stream.jsonl of the passing runs), so the surface is removed instead of tracked.
+        raise Deny("cd is not allowed (paths are resolved against the tool cwd, which must not move mid-command)")
     if prog in ("echo", "printf", "true", "pwd", ":"):
         return
     if prog == "sleep":
@@ -379,11 +378,25 @@ def check_simple(argv, reds):
         raise Deny("only `codex --version` may be run directly")
     raise Deny("command not allowed: " + prog)
 
+def is_exempt(argv):
+    prog = argv[0]
+    if prog == "codex":
+        return True
+    if "/" in prog or prog.startswith("~"):
+        return os.path.basename(prog) == "codex-call.sh" or real(prog) == real("~/.claude/config/scripts/codex-call.sh")
+    return False
+
 def check_bash(cmd):
     segs = lex(cmd)
     # WHY: a `cd` earlier on the line moves git into another repo whose config the baseline does not cover; the tool cwd check alone sees only where the call STARTED.
     if any(a and a[0] == "cd" for a, _ in segs) and any(a and a[0] == "git" for a, _ in segs):
         raise Deny("cd and git on one command line")
+    # WHY (cc11 r38 CRITICAL): codex-call.sh and `codex --version` are exempt from the OS sandbox, so they must be the ONLY thing on their command line (no `&&`, `;`, `|`, redirect
+    # or heredoc around them) and run from the repo root, where every relative argument (--cd, --prompt-file, --role) resolves against the root. Path arguments of the other commands
+    # resolve against the tool cwd at call start (cd is denied): reads and writes through real(path), git through the root-cwd check, wrappers through readable()/writable().
+    for argv, reds in segs:
+        if argv and is_exempt(argv) and (len(segs) != 1 or reds or os.path.realpath(CWD) != ROOT):
+            raise Deny("a command exempt from the OS sandbox must be alone on its line, with no redirect, and run from the scratch repo root")
     for argv, reds in segs:
         check_simple(argv, reds)
 
