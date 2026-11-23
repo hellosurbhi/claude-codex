@@ -1186,6 +1186,23 @@ expect pass "codex-call.sh: a short positional prompt still arrives, now on stdi
 printf 'ROLE' > "$tmp/bigrole.txt"
 bigcc --role "$tmp/bigrole.txt" --prompt-file "$tmp/bigprompt.txt" || true
 expect pass "codex-call.sh: --role text is prepended to the prompt file on stdin" bigfed "$( (printf 'ROLE\n\n'; cat "$tmp/bigprompt.txt") | shasum -a 256 | cut -d' ' -f1)"
+# r52 finding 1: the prompt may hold a whole diff, so the file Codex reads on stdin must never be group or world readable, also with --role (which builds a second file) and under a permissive umask.
+mkdir -p "$tmp/modebin"
+cat > "$tmp/modebin/codex" <<'FAKE'
+#!/usr/bin/env bash
+python3 -I -c 'import os, stat; print(oct(stat.S_IMODE(os.fstat(0).st_mode))[2:])' > "$MODEOUT"
+cat > /dev/null
+printf '%s\n' '{"type":"thread.started","thread_id":"tmode"}' '{"type":"item.completed","item":{"type":"agent_message","text":"VERDICT: APPROVED"}}' '{"type":"turn.completed"}'
+FAKE
+chmod +x "$tmp/modebin/codex"
+modecc() { rm -f "$tmp/modeseen.txt"; (umask 022; PATH="$tmp/modebin:$PATH" MODEOUT="$tmp/modeseen.txt" bash "$here/../scripts/codex-call.sh" "$@" >/dev/null 2>&1); }
+modeprivate() { [ "$(cat "$tmp/modeseen.txt" 2>/dev/null)" = 600 ]; }
+modecc "a secret prompt" || true
+expect pass "codex-call.sh: the prompt file Codex reads is mode 600 under umask 022" modeprivate
+modecc --role "$tmp/bigrole.txt" "a secret prompt" || true
+expect pass "codex-call.sh: the role plus prompt file Codex reads is mode 600 under umask 022" modeprivate
+modecc --role "$tmp/bigrole.txt" --prompt-file "$tmp/bigprompt.txt" || true
+expect pass "codex-call.sh: the role plus prompt-file combination is mode 600 under umask 022" modeprivate
 expectm fail "codex-call.sh rejects a missing prompt file" 'prompt file' bigcc --prompt-file "$tmp/no-such-prompt.txt"
 expect pass "a missing prompt file calls no codex and prints no verdict" sh -c '[ ! -e "$1" ] && ! grep -q "VERDICT\|THREAD_ID" "$2"' _ "$tmp/bigcalls.txt" "$tmp/bigout.txt"
 : > "$tmp/emptyprompt.txt"

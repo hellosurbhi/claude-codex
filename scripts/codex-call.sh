@@ -24,12 +24,14 @@ set -euo pipefail
 # WHY it never changes the exit status: a log that cannot be written (missing folder, a directory) must not turn exit 2 into success or into another code; the append is best effort and the original status is re-raised.
 # WHY one trap with the cleanup inside it: `trap` replaces any earlier handler, so a second `trap ... EXIT` further down would silently drop one of the two jobs.
 # WHY python3 for the clock with a `date` fallback: the python3 check below can itself be the failing step, and the log must still get an event ordered after any earlier call (the fallback sorts late in its second).
-out=""; pin=""; codex_started=0; ev_log="${CODEX_CALL_EVENT_LOG:-}"; ev_start=""
+out=""; pin=""; pdir=""; codex_started=0; ev_log="${CODEX_CALL_EVENT_LOG:-}"; ev_start=""
 now() { python3 -I -c 'import time; print(repr(time.time()))' 2>/dev/null || echo "$(date +%s).999"; }
 [[ -z "$ev_log" ]] || ev_start="$(now)"
-# WHY cleanup names only non-empty paths (r22 finding 2): the trap is installed before the temp files exist, and an unset $pin made "$pin.role" expand to ".role", deleting a file of that name in the working directory
-# when a mktemp failed. Do not collapse this back into one `rm -f "$out" "$pin" "$pin.role"`.
-cleanup() { [[ -z "$out" ]] || rm -f -- "$out"; if [[ -n "$pin" ]]; then rm -f -- "$pin" "$pin.role"; fi; }
+# WHY cleanup names only non-empty paths (r22 finding 2): the trap is installed before the temp paths exist, and an unset variable used to expand into a path in the working directory
+# (an unset $pin made "$pin.role" the file ".role") when a mktemp failed. Do not collapse this into one unguarded `rm -f "$out" "$pin" "$pdir"`.
+# WHY the role-plus-prompt file lives in a private directory (r52 finding 1): it used to be written with a plain redirect and then moved over $pin, so under umask 022 the whole prompt (often a full diff) was
+# world-readable for the length of the call. mktemp -d is mode 700 and mktemp files are 0600; nothing here is ever created by redirection into a fresh name. Do not go back to `> "$pin.role"` plus mv.
+cleanup() { [[ -z "$out" ]] || rm -f -- "$out"; [[ -z "$pin" ]] || rm -f -- "$pin"; [[ -z "$pdir" ]] || rm -rf -- "$pdir"; }
 on_exit() {
   local rc=$?
   cleanup
@@ -94,8 +96,10 @@ else
 fi
 [[ -s "$pin" ]] || { echo "codex-call: the prompt is empty after reading it. No call was made; treat as UNREVIEWED." >&2; exit 2; }
 if [[ -n "$role" ]]; then
-  { printf '%s\n\n' "$role_text" && cat "$pin"; } > "$pin.role" || { echo "codex-call: could not build the prompt with the role text. No call was made; treat as UNREVIEWED." >&2; exit 2; }
-  mv "$pin.role" "$pin" || { echo "codex-call: could not build the prompt with the role text. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  pdir="$(mktemp -d)" || { echo "codex-call: could not create a temp directory (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  rolepin="$(mktemp "$pdir/prompt.XXXXXX")" || { echo "codex-call: could not create a temp file (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  { printf '%s\n\n' "$role_text" && cat "$pin"; } > "$rolepin" || { echo "codex-call: could not build the prompt with the role text. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  mv "$rolepin" "$pin" || { echo "codex-call: could not build the prompt with the role text. No call was made; treat as UNREVIEWED." >&2; exit 2; }
 fi
 # WHY marked only when codex can actually be started: from here on the codex shim logs the attempt itself, so the exit handler must not add a second event; a codex that is not on PATH never reaches any shim,
 # so that exit is still logged as wrapper-failed.
