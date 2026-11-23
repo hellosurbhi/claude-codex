@@ -2832,7 +2832,13 @@ mkdir -p "$hr/.claude/review"; printf 'x\n' > "$hr/.claude/review/ctx.txt"
 for pf in skills/plan-codex/SKILL.md commands/plan-codex.md; do
   expect pass "$pf: every shell command it prescribes is allowed by the confinement hook" hwalk "$here/../$pf"
 done
-printf '%s\n' 'Run `test -x ~/.claude/config/scripts/codex-call.sh && codex --version`.' 'Create it with `R="$(git rev-parse --show-toplevel)" && (umask 077; mkdir -p "$R/.claude/review" && chmod 700 "$R/.claude/review")`.' '```' '(CTX="$(mktemp)"; NOTES=.claude/review/audit-notes.raw.txt' "trap 'rm -f \"\$NOTES\" \"\$CTX\"' EXIT; trap 'exit 1' HUP INT TERM" '~/.claude/config/scripts/reviewer.sh S "$CTX" <out-file>' ')' '```' > "$tmp/plan-old-prescription.md"
+# WHY the old-prescription fixture is the REAL skill with only the helper line swapped for the old inline block (cc11 r64 review 65): a stub file has too few commands and trips the extractor floor (exit 2) before any denial can show, so it would test the floor, not the hook.
+python3 - "$here/../skills/plan-codex/SKILL.md" "$tmp/plan-old-prescription.md" <<'PYX'
+import sys
+t = open(sys.argv[1]).read(); h = "~/.claude/config/scripts/review-private.sh plan-fallback <feature-name> <out-file>"; assert t.count(h) == 1
+old = "(CTX=\"$(mktemp)\"; NOTES=.claude/review/audit-notes.raw.txt\ntrap 'rm -f \"$NOTES\" \"$CTX\"' EXIT; trap 'exit 1' HUP INT TERM\n~/.claude/config/scripts/reviewer.sh S \"$CTX\" <out-file>\n)"
+open(sys.argv[2], "w").write(t.replace(h, old))
+PYX
 expectm fail "the walk fails on a plan-codex that prescribes the old inline commands" 'DENIED' hwalk "$tmp/plan-old-prescription.md"
 sed "s#review-private.sh plan-fallback <feature-name> <out-file>#review-private.sh nuke <feature-name> <out-file>#" "$here/../skills/plan-codex/SKILL.md" > "$tmp/plan-bad-sub.md"
 expectm fail "the walk fails when a prescribed helper subcommand is not one the hook allows" 'DENIED' hwalk "$tmp/plan-bad-sub.md"
