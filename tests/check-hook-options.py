@@ -23,7 +23,7 @@ PATHS = {"inside": "in.txt", "outside": os.path.join(outside, "secret"), "escape
 # reader -> (options whose value is opened, other args every command needs, flag letters that take no value and may be bundled before the option)
 FILEOPTS = {
     "grep": ([("-f", "--file"), (None, "--exclude-from")], ["app.py"], "r"),
-    "diff": ([("-X", "--exclude-from"), ("-S", "--starting-file"), (None, "--from-file"), (None, "--to-file")], ["app.py", "app.py"], "r"),
+    "diff": ([("-X", "--exclude-from"), ("-S", "--starting-file"), (None, "--from-file"), (None, "--to-file")], ["app.py", "app.py"], "r"),  # canon-exempt: the diff reader command, not git diff
     "wc": ([(None, "--files0-from")], ["app.py"], "l"),
     "file": ([("-f", "--files-from"), ("-m", "--magic-file")], ["app.py"], "b"),
 }
@@ -50,7 +50,7 @@ for prog, (opts, extra, bundle) in FILEOPTS.items():
             for f in forms:
                 want(f, exp, "file option, path " + pk)
 # options never seen before, in any glued form, are refused
-for prog in ("grep", "diff", "wc", "cat", "head", "tail", "ls", "file", "stat"):
+for prog in ("grep", "diff", "wc", "cat", "head", "tail", "ls", "file", "stat"):  # canon-exempt: the diff reader command, not git diff
     if only and prog not in only:
         continue
     for opt in ("--no-such-option", "--no-such=/etc/hosts", "-Q/etc/hosts", "-Q", "--fil=/etc/hosts", "--exclude-fro=/etc/hosts"):
@@ -71,7 +71,7 @@ if not only or "grep" in only:
     want("grep -r x .", "allow", "legit"); want("grep -rn x app.py", "allow", "legit"); want("grep -e x -e y app.py", "allow", "legit"); want("grep -- x app.py", "allow", "legit")
     want("grep --include='*.py' -rn x .", "allow", "legit"); want("grep -A 2 -B2 x app.py", "allow", "legit"); want("grep -f in.txt app.py", "allow", "legit")
     want("grep -c x", "allow", "legit"); want("grep -R x .", "deny", "-R follows symlinks")
-if not only or "diff" in only:
+if not only or "diff" in only:  # canon-exempt: the diff reader command, not git diff
     want("diff -u app.py in.txt", "allow", "legit"); want("diff -r app.py in.txt", "allow", "legit"); want("diff -q app.py in.txt", "allow", "legit"); want("diff -o /tmp/x app.py in.txt", "deny", "diff output")
 if not only or "head" in only:
     for c in ("head -n 5 app.py", "head -5 app.py", "head -n5 app.py", "head -c 10 app.py", "tail -n +2 app.py", "tail -3 app.py", "tail -f app.py"):
