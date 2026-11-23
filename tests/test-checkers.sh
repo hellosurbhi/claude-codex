@@ -625,18 +625,28 @@ print(len(cases), "lines,", bad, "bad,", len(fails), "named failures", file=sys.
 sys.exit(1 if bad or fails else 0)
 PYK
 # every pair of attack shapes on one line, both orders: neither secret may survive (no rule may skip the others)
-expect pass "redact-diff masks every pair of attack shapes combined on one line, in both orders" python3 - "$red" "$tmp/attacks.txt" <<'PYX'
+# WHY the checker is a file (r50): the same script must run against a failing redactor stub and have to FAIL, so a redactor that dies with empty stdout cannot read as "zero leaks".
+cat > "$tmp/pairs-check.py" <<'PYX'
 import subprocess, sys
 red, f = sys.argv[1], sys.argv[2]
 shapes = [l.rstrip("\n").split("|||") for l in open(f) if l.strip()]
 pairs = [(a, b) for i, a in enumerate(shapes) for j, b in enumerate(shapes) if i != j]
 lines = ["+" + a[0] + " " + b[0] for a, b in pairs]
-out = subprocess.run([red], input="\n".join(lines) + "\n", capture_output=True, text=True).stdout.split("\n")
+r = subprocess.run([red], input="\n".join(lines) + "\n", capture_output=True, text=True)
+# WHY exit status and line count first (r50): a redactor that failed with empty stdout made zip stop at one empty line and report zero leaks.
+if r.returncode != 0 or len(r.stdout.split("\n")) - 1 != len(lines):
+    print("REDACTOR FAILED: exit %d, %d output lines for %d input lines" % (r.returncode, len(r.stdout.split("\n")) - 1, len(lines)), file=sys.stderr); sys.exit(1)
+out = r.stdout.split("\n")
 bad = [(a[0], b[0]) for (a, b), o in zip(pairs, out) if a[1] in o or b[1] in o]
 for a, b in bad[:20]: print("LEAK:", a, "||", b, file=sys.stderr)
 print(len(pairs), "pairs,", len(bad), "leaks", file=sys.stderr)
 sys.exit(1 if bad else 0)
 PYX
+expect pass "redact-diff masks every pair of attack shapes combined on one line, in both orders" python3 "$tmp/pairs-check.py" "$red" "$tmp/attacks.txt"
+printf '#!/bin/sh\nexit 3\n' > "$tmp/failing-redactor.sh"; chmod +x "$tmp/failing-redactor.sh"
+expect fail "the pair check fails when the redactor exits non-zero with empty output" python3 "$tmp/pairs-check.py" "$tmp/failing-redactor.sh" "$tmp/attacks.txt"
+printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$tmp/short-redactor.sh"; chmod +x "$tmp/short-redactor.sh"
+expect fail "the pair check fails when the redactor exits 0 but returns fewer lines than it was given" python3 "$tmp/pairs-check.py" "$tmp/short-redactor.sh" "$tmp/attacks.txt"
 # placeholders and ordinary code stay byte-identical
 while IFS= read -r case_; do
   [ -n "$case_" ] || continue
