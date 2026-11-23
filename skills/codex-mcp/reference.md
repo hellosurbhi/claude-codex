@@ -17,12 +17,13 @@ Save the `THREAD_ID:` value from the first output line.
 
 ## Starting an Implementation Session
 
-**Private review folder (before any file is written under `.claude/review`)**: that folder holds unredacted task text, prompts, replies and diffs, so create it private first, from the repository top, with `R="$(git rev-parse --show-toplevel)" && (umask 077; mkdir -p "$R/.claude/review" && chmod 700 "$R/.claude/review")`. A mode-700 folder keeps every file in it private whatever mode your file-writing tool gives the file, and every command below writes under `umask 077`, so the files it creates are mode 600. A raw, unredacted copy is never left behind: a command that writes one deletes it before it ends.
+**Private review folder (before any file is written under `.claude/review`)**: that folder holds unredacted task text, prompts, replies and diffs, so create it private first, from the repository top, with `R="$(git rev-parse --show-toplevel)" && (umask 077; mkdir -p "$R/.claude/review" && chmod 700 "$R/.claude/review")`. A mode-700 folder keeps every file in it private whatever mode your file-writing tool gives the file, and every command below writes under `umask 077`, so the files it creates are mode 600. A raw, unredacted copy is never left behind: every block below that reads or writes one sets an exit trap (`trap 'rm -f <raw files>' EXIT` plus `trap 'exit 1' HUP INT TERM`) inside a subshell before it starts, so the raw file is deleted on success, on any failure and on an interrupt. The raw file for a block is written with the file-writing tool just before the block runs and is consumed by that one run: after any failed or interrupted run it is gone, so write it again before a retry, and a leftover copy from an earlier attempt is never reused.
 
 ```bash
+(trap 'rm -f .claude/review/prompt.raw.txt' EXIT; trap 'exit 1' HUP INT TERM
 ~/.claude/config/scripts/codex-call.sh --sandbox workspace-write --cd "$PWD" \
   --role ~/.claude/skills/execute-codex/codex-architect-role.md \
-  --prompt-file .claude/review/prompt.raw.txt
+  --prompt-file .claude/review/prompt.raw.txt)
 ```
 
 Write `.claude/review/prompt.raw.txt` first with your file-writing tool (never a heredoc, echo or printf): "Implement the following task. Write production-quality code. Follow existing project conventions. Do not modify unrelated files. Be concise. Output result only, no reasoning process." then a blank line and the task description or plan content. Pasted free text never goes inside a quoted shell argument.
@@ -30,8 +31,9 @@ Write `.claude/review/prompt.raw.txt` first with your file-writing tool (never a
 ## Continuing with Feedback
 
 ```bash
+(trap 'rm -f .claude/review/prompt.raw.txt' EXIT; trap 'exit 1' HUP INT TERM
 ~/.claude/config/scripts/codex-call.sh --resume "$THREAD_ID" --sandbox workspace-write --cd "$PWD" \
-  --prompt-file .claude/review/prompt.raw.txt
+  --prompt-file .claude/review/prompt.raw.txt)
 ```
 
 The prompt file (written with your file-writing tool) reads, for example: "Fix these issues from code review:", the findings (`auth.ts:42: missing null check on user.email`, `api.ts:15: no rate limiting on /login endpoint`) and "Reimplement with these fixes."
@@ -59,14 +61,17 @@ umask 077; mkdir -p .claude/review && chmod 700 .claude/review; rm -f .claude/re
 **Review context (every reviewer call)**: every reviewer, the Codex call and the tier S fallback alike, is handed ONE file, `.claude/review/review-context.txt` at the repository top, built exactly as below and never a bare diff. The Codex call (`codex-call.sh`) sends it as the prompt with `--prompt-file` (a new call and every `--resume` call alike; never the prompt as a command argument, because a large diff exceeds the operating system's argument limit and Codex would never start), and `reviewer.sh S` takes the same file as its context, so the primary and the fallback reviewer judge the same requirements and the same bytes. It holds, in order: the task requirements you write into it (the task or plan text, every task of a multi-task run, so the reviewer can judge whether the change satisfies what was asked and not only whether it is correct), the review or audit instructions (for a test audit, its Evaluate list), every carried finding (raised in an earlier round and still open) and every contested finding with your reasoning, then the review input: the contents of `.claude/review/review-input.diff` (the Review input paragraph), the same masked bytes every reviewer receives, never a second `git diff` and never the raw diff. The text you write (requirements, instructions, findings) goes through the same `~/.claude/config/scripts/redact-diff.sh` as the diff (in its `--text` mode, which treats the input as plain text, so a private key block in the requirements is masked too), so the same best-effort mask of inline credential values applies to it, with the same limits: it masks private key blocks, cloud and API tokens, Bearer tokens, JWTs and password and secret assignments on any line, it is not a guarantee, and a secret in a shape it does not know passes through, so still write the requirements without any secret, credential or `.env` value. The text part is never typed into a shell command (r22 finding 1: a pasted line such as `EOF`, a command substitution or a backtick would otherwise end the heredoc early or run as shell): write it with your file-writing tool (Write, never a heredoc, echo or printf carrying the pasted text) to `.claude/review/requirements.raw.txt` at the repository top, as three sections in this order, each starting with its title on its own line: `TASK REQUIREMENTS:` (the task requirements, written without any secret, credential or `.env` value), `REVIEW INSTRUCTIONS:` (the review or audit instructions: the prompt text of this round, with its appended line) and `OPEN FINDINGS:` (every carried and contested finding with your reasoning, or the word none). The shell block below contains none of that text: it masks the raw file with `--text`, adds the `DIFF:` title and appends the review input, then deletes the raw file, so a stale one is never reused. A missing or empty raw file means no context is sent and no reviewer is called. Rebuild the file for every round so it holds the CURRENT diff and the current findings, and dispatch only after it prints "review context ready". If the review input is missing or empty, or the redaction fails, the context file is deleted and no context is sent, so no reviewer is called, there is no verdict and the work stays unreviewed.
 
 ```
-umask 077
+(umask 077
 R="$(git rev-parse --show-toplevel)" || R=""
 CTX="$R/.claude/review/review-context.txt"
 [ -n "$R" ] && rm -f "$CTX"
 RAW="$R/.claude/review/requirements.raw.txt"
+ok=0
+trap '[ -n "$R" ] && rm -f "$RAW"; [ "$ok" = 1 ] || { [ -n "$R" ] && rm -f "$CTX"; }' EXIT; trap 'exit 1' HUP INT TERM
 if [ -n "$R" ] && [ -s "$R/.claude/review/review-input.diff" ] && [ -s "$RAW" ] && ~/.claude/config/scripts/redact-diff.sh --text < "$RAW" > "$CTX" && printf '\nDIFF:\n' >> "$CTX"
-then cat "$R/.claude/review/review-input.diff" >> "$CTX" && rm -f "$RAW" && echo "review context ready: $CTX" || { rm -f "$CTX"; echo "the review context could not be built: no context is sent"; }
+then cat "$R/.claude/review/review-input.diff" >> "$CTX" && ok=1 && echo "review context ready: $CTX" || { echo "the review context could not be built: no context is sent"; }
 else [ -n "$R" ] && rm -f "$CTX"; echo "the review input .claude/review/review-input.diff or the requirements file .claude/review/requirements.raw.txt is missing or empty, or the redaction failed: no context is sent"; fi
+)
 ```
 
 

@@ -777,7 +777,7 @@ b = ri + "\n" + b
 b = b.replace("~/.claude/config/scripts/review-snapshot.sh", sys.argv[2].replace("redact-diff.sh", "review-snapshot.sh")).replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[2]).replace("~/.claude/config/scripts/reviewer.sh S", "cp \"$CTX\" " + sys.argv[4] + " #")
 b = b.replace("<out-file>", "x")
 # WHY the dispatch is simulated here: the diff families' block only BUILDS the one context file (the dispatch lines live in the paragraph); the stub reviewer receives exactly that file.
-b += "\n[ -s \"$CTX\" ] && cp \"$CTX\" " + sys.argv[4] + "\n"
+b += "\n[ -s .claude/review/review-context.txt ] && cp .claude/review/review-context.txt " + sys.argv[4] + "\n"  # WHY the fixed path: the block runs in a subshell (its raw-file exit trap), so $CTX is not visible after it
 open(sys.argv[3], "w").write(b + "\n")
 PY
   # self-contained throwaway repo (one committed file plus an uncommitted change), so the case needs no history of this repo and works in a shallow clone
@@ -824,14 +824,14 @@ expect pass "the tripwire check and the proof's claude call take stdin from /dev
 # r15 finding 3: every fallback block checks its input before dispatch. fbtry runs the file's real Fallback input block in a throwaway repo with a stub reviewer;
 # states: ok (real change, real plan), emptydiff (nothing to review), noplan, emptyplan. A refused input must call no reviewer AND leave no context file behind.
 fbtry() { # $1 = file, $2 = state
-  python3 - "$1" "$red" "$tmp/fb.sh" "$tmp/fb-called" <<'PYFB'
+  python3 - "$1" "$red" "$tmp/fb.sh" "$tmp/fb-called" "${FBRED:-$red}" "${FBHANG:-}" "$tmp/fb-hang" <<'PYFB'
 import re, sys
 t = open(sys.argv[1]).read()
 b = re.search(r"\*\*(?:Review context \(every reviewer call\)|Fallback input \(tier S\))\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
-b = b.replace("~/.claude/config/scripts/review-snapshot.sh", sys.argv[2].replace("redact-diff.sh", "review-snapshot.sh")).replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[2]).replace("~/.claude/config/scripts/reviewer.sh S", "cp \"$CTX\" " + sys.argv[4] + " #")
+b = b.replace("~/.claude/config/scripts/review-snapshot.sh", sys.argv[2].replace("redact-diff.sh", "review-snapshot.sh")).replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[5]).replace("~/.claude/config/scripts/reviewer.sh S", ("touch " + sys.argv[7] + "; sleep 30 #") if sys.argv[6] else "cp \"$CTX\" " + sys.argv[4] + " #")
 b = b.replace("<out-file>", "x").replace("<feature-name>", "feat").replace("$(mktemp)", "$(mktemp \"$TMPDIR/t.XXXXXX\")")  # BSD mktemp ignores TMPDIR without a template
 if "review-context.txt" in b:
-    b += "\n[ -s \"$CTX\" ] && cp \"$CTX\" " + sys.argv[4] + "\n"  # the diff families' block only builds the file: the stub reviewer receives exactly it
+    b += "\n[ -s .claude/review/review-context.txt ] && cp .claude/review/review-context.txt " + sys.argv[4] + "\n"  # WHY the fixed path: the block runs in a subshell (its raw-file exit trap), so $CTX is not visible after it
 open(sys.argv[3], "w").write(b + "\n")
 PYFB
   rm -rf "$tmp/fbrepo" "$tmp/fbtmp"; mkdir -p "$tmp/fbrepo" "$tmp/fbtmp"
@@ -853,7 +853,23 @@ PYFB
     emptyraw) : > "$tmp/fbrepo/.claude/review/requirements.raw.txt"; : > "$tmp/fbrepo/.claude/review/audit-notes.raw.txt" ;;
     *) printf 'TASK REQUIREMENTS:\nr\n\nREVIEW INSTRUCTIONS:\ni\n\nOPEN FINDINGS:\nnone\n' > "$tmp/fbrepo/.claude/review/requirements.raw.txt"; printf 'AUDIT INSTRUCTIONS:\ni\n\nOPEN FINDINGS:\nnone\n' > "$tmp/fbrepo/.claude/review/audit-notes.raw.txt" ;;
   esac
-  rm -f "$tmp/fb-called"; ( cd "$tmp/fbrepo" && TMPDIR="$tmp/fbtmp" START_SHA="$(git rev-parse HEAD)" bash "$tmp/fb.sh" >/dev/null 2>&1 )
+  [ -z "${FBPRE:-}" ] || ( cd "$tmp/fbrepo" && eval "$FBPRE" )  # r55: the caller sets up a failure (an unreadable input, an unwritable target) before the block runs
+  rm -f "$tmp/fb-called" "$tmp/fb-hang"
+  if [ -n "${FBTERM:-}" ]; then  # r55: SIGTERM to the whole process group once the block is mid-way (the stand-in redactor or reviewer has touched fb-hang)
+    ( cd "$tmp/fbrepo" && TMPDIR="$tmp/fbtmp" START_SHA="$(git rev-parse HEAD)" python3 -I - "$tmp/fb.sh" "$tmp/fb-hang" <<'PYT'
+import os, signal, subprocess, sys, time
+p = subprocess.Popen(["bash", sys.argv[1]], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+end = time.time() + 30
+while time.time() < end and not os.path.exists(sys.argv[2]) and p.poll() is None:
+    time.sleep(0.1)
+if p.poll() is None:
+    os.killpg(p.pid, signal.SIGTERM)
+p.wait(timeout=30)
+PYT
+    )
+  else
+    ( cd "$tmp/fbrepo" && TMPDIR="$tmp/fbtmp" START_SHA="$(git rev-parse HEAD)" bash "$tmp/fb.sh" >/dev/null 2>&1 )
+  fi
   FBLEFT="$(ls -A "$tmp/fbtmp" | wc -l | tr -d ' ')"; [ -f "$tmp/fb-called" ]
 }
 fbsnap() { mkdir -p "$tmp/fbrepo/.claude/review"; git -C "$tmp/fbrepo" diff HEAD > "$tmp/fbrepo/.claude/review/review-input.diff"; }  # what the Review input block (or step 1 of the review record) leaves behind: the one masked input every reviewer gets
@@ -884,6 +900,45 @@ for fbf in skills/plan-codex/SKILL.md commands/plan-codex.md; do
   expect fail "$fbf: a missing audit notes file means no dispatch" fbtry "$here/../$fbf" noraw
   expect fail "$fbf: an empty audit notes file means no dispatch" fbtry "$here/../$fbf" emptyraw
   expect pass "$fbf: a missing audit notes file leaves no context file behind" fbclean "$here/../$fbf" noraw
+done
+# r55: every block that creates or consumes a raw (pre-redaction) file removes it on success, failure AND interruption, and a leftover copy from an earlier attempt is never reused.
+# WHY: the raw file used to be deleted only after a successful build, so a missing input, a failing redactor, an unwritable target or a SIGTERM left unredacted text behind for a retry to pick up.
+fbgone() { fbtry "$1" "$2" || true; [ ! -e "$tmp/fbrepo/.claude/review/$3" ]; }  # true when the raw file named by $3 is gone after the block ran in state $2
+fbfailred="$tmp/fail-redact.sh"; printf '#!/bin/bash\ncat > /dev/null\nexit 3\n' > "$fbfailred"; chmod +x "$fbfailred"
+fbhangred="$tmp/hang-redact.sh"; printf '#!/bin/bash\ntouch "%s"\nexec sleep 30\n' "$tmp/fb-hang" > "$fbhangred"; chmod +x "$fbhangred"
+fbflakyred="$tmp/flaky-redact.sh"; printf '#!/bin/bash\nif [ -e "%s" ]; then cat > /dev/null; exit 3; fi\nexec "%s" "$@"\n' "$tmp/fb-flaky" "$red" > "$fbflakyred"; chmod +x "$fbflakyred"
+fbleft0TERM() { FBTERM=1 FBHANG=1 fbtry "$1" "$2" || true; [ "$FBLEFT" -eq 0 ]; }  # the scratch folder the block's mktemp used is empty again
+fbgoneRED() { FBRED="$fbfailred" fbgone "$@"; }
+fbgoneUNREAD() { FBPRE='chmod 000 .claude/review/review-input.diff' fbgone "$@"; }
+fbgoneNOAPPEND() { FBPRE='mkdir .claude/review/review-context.txt' fbgone "$@"; }
+fbgoneTERM() { FBTERM=1 FBRED="$fbhangred" fbgone "$@"; }
+fbgoneTERMP() { FBTERM=1 FBHANG=1 fbgone "$@"; }
+fbstale() {  # a failed attempt deletes the raw file, so a second run that does not rewrite it builds nothing from the old text
+  touch "$tmp/fb-flaky"; FBRED="$fbflakyred" fbtry "$1" ok || true
+  [ ! -e "$tmp/fbrepo/.claude/review/requirements.raw.txt" ] || return 1
+  rm -f "$tmp/fb-flaky" "$tmp/fb-called"; ( cd "$tmp/fbrepo" && TMPDIR="$tmp/fbtmp" START_SHA="$(git rev-parse HEAD)" bash "$tmp/fb.sh" >/dev/null 2>&1 )
+  [ ! -f "$tmp/fb-called" ] && [ ! -e "$tmp/fbrepo/.claude/review/review-context.txt" ]
+}
+for fbf in $FBDIFF; do
+  rawn="requirements.raw.txt"
+  expect pass "$fbf: the raw requirements file is gone after a successful build" fbgone "$here/../$fbf" ok $rawn
+  expect pass "$fbf: the raw requirements file is gone when the review input is missing" fbgone "$here/../$fbf" nosnap $rawn
+  expect pass "$fbf: the raw requirements file is gone when the review input is empty" fbgone "$here/../$fbf" emptysnap $rawn
+  expect pass "$fbf: the raw requirements file is gone when the redactor exits 3" fbgoneRED "$here/../$fbf" ok $rawn
+  expect pass "$fbf: the raw requirements file is gone when the review input cannot be appended" fbgoneUNREAD "$here/../$fbf" ok $rawn
+  expect pass "$fbf: the raw requirements file is gone when the context file cannot be written" fbgoneNOAPPEND "$here/../$fbf" ok $rawn
+  expect pass "$fbf: the raw requirements file is gone after a SIGTERM mid-block" fbgoneTERM "$here/../$fbf" ok $rawn
+  expect pass "$fbf: a SIGTERM mid-block leaves no partial context file" test ! -e "$tmp/fbrepo/.claude/review/review-context.txt"
+  expect pass "$fbf: a second run after a failed one does not reuse the old requirements" fbstale "$here/../$fbf"
+done
+for fbf in skills/plan-codex/SKILL.md commands/plan-codex.md; do
+  rawn="audit-notes.raw.txt"
+  expect pass "$fbf: the raw audit notes are gone after a successful audit" fbgone "$here/../$fbf" ok $rawn
+  expect pass "$fbf: the raw audit notes are gone when the plan is missing" fbgone "$here/../$fbf" noplan $rawn
+  expect pass "$fbf: the raw audit notes are gone when the plan is empty" fbgone "$here/../$fbf" emptyplan $rawn
+  expect pass "$fbf: the raw audit notes are gone after a SIGTERM mid-block" fbgoneTERMP "$here/../$fbf" ok $rawn
+  expect pass "$fbf: no scratch context file is left after a SIGTERM mid-block" fbleft0TERM "$here/../$fbf" ok
+  expect pass "$fbf: no scratch context file is left after a successful audit" fbclean "$here/../$fbf" ok
 done
 expect pass "the pristine copies pass the fallback-context rule" python3 "$here/test-mirrors.py" "$tmp/mir8"
 # r10 finding 1: a delivery exit needs `VERDICT: APPROVED` AND zero findings; a bare BLOCKED or WARNING (no finding listed) is neither clean nor actionable.
@@ -1077,6 +1132,25 @@ for p in sys.argv[1:]:
     open(p, "w").write(t2)
 PYX
 mirneg "an execute-codex code-reviewer sent the raw snapshot is caught" 'the raw snapshot is sent to a reviewer|Review record sequence lacks' "$tmp/mir8"; mirc execute-codex
+# r55: a block that stops deleting its raw file on every exit, or a folder paragraph without the private-folder command, is caught by the mirror test.
+python3 - "$tmp/mir8/skills/claude-codex/SKILL.md" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read(); t2 = t.replace("trap '[ -n \"$R\" ] && rm -f \"$RAW\"; [ \"$ok\" = 1 ] || { [ -n \"$R\" ] && rm -f \"$CTX\"; }' EXIT; trap 'exit 1' HUP INT TERM\n", "", 1); assert t2 != t
+open(p, "w").write(t2)
+PYX
+mirneg "a Review context block without its raw-file exit trap is caught" 'EXIT and HUP/INT/TERM traps|Review context sequence lacks' "$tmp/mir8"; mirc claude-codex
+python3 - "$tmp/mir8/commands/execute-codex.md" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read(); t2 = t.replace("trap 'rm -f .claude/review/reply.raw.txt' EXIT; trap 'exit 1' HUP INT TERM\n", "", 1); assert t2 != t
+open(p, "w").write(t2)
+PYX
+mirneg "a Review record step 2 without its raw-reply exit trap is caught" 'EXIT and HUP/INT/TERM traps' "$tmp/mir8"; mirc execute-codex
+python3 - "$tmp/mir8/skills/plan-codex/SKILL.md" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read(); t2 = t.replace("trap 'rm -f \"$NOTES\" \"$CTX\"' EXIT; trap 'exit 1' HUP INT TERM\n", "", 1); assert t2 != t
+open(p, "w").write(t2)
+PYX
+mirneg "a plan-codex fallback block without its raw-notes exit trap is caught" 'EXIT and HUP/INT/TERM traps' "$tmp/mir8"; mirc plan-codex
 python3 - "$tmp/mir8/skills/claude-codex/SKILL.md" "$tmp/mir8/commands/claude-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
@@ -1260,6 +1334,7 @@ for f in files:
                 cmd = lines[i]; i += 1
                 while i < len(lines) and (cmd.rstrip().endswith("\\") or cmd.count('"') % 2):
                     cmd += "\n" + lines[i]; i += 1
+                if cmd.rstrip().endswith(")") and "(" not in cmd: cmd = cmd.rstrip()[:-1]  # the documented call sits in a subshell with an exit trap: its closing parenthesis is not an argument
                 n += 1
                 open(os.path.join(out, "%03d.cmd" % n), "w").write(cmd.lstrip() + "\n")
             else:
@@ -2207,6 +2282,14 @@ rrreply() { [ -z "${RRNOREPLY:-}" ] || return 0; mkdir -p "$tmp/rr/.claude/revie
 rrstep() { rrreply; (cd "$tmp/rr" && git add -N app.py && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/review-snapshot.sh HEAD/review-snapshot.sh $base/g; s/XXNOPLACEHOLDER//" "$tmp/$1" | bash -e) >> "$tmp/rrout.txt" 2>&1; }
 rrmk; rrstep step1.sh; rrstep step2.sh
 expect pass "the prescribed sequence on an unchanged tree writes a record the checker accepts" rr
+# r55: the raw reviewer reply is removed on every step 2 exit (a void round included) and a stale one from an earlier round never reaches a new round.
+rrmk; rrstep step1.sh; printf 'x\n' >> "$tmp/rr/app.py"; rrstep step2.sh
+expect fail "a step 2 whose tree changed (a void round) leaves no raw reply behind" test -e "$tmp/rr/.claude/review/reply.raw.txt"
+expect fail "that void round records nothing" test -e "$tmp/rr/.claude/review/final-review.txt"
+rrmk; mkdir -p "$tmp/rr/.claude/review"; printf 'STALE reply\n' > "$tmp/rr/.claude/review/reply.raw.txt"; RRNOREPLY=1 rrstep step1.sh
+expect fail "step 1 removes a stale raw reply from an earlier round" test -e "$tmp/rr/.claude/review/reply.raw.txt"
+rrmk; rrstep step1.sh; rrstep step2.sh
+expect fail "a recorded round leaves no raw reply behind" test -e "$tmp/rr/.claude/review/reply.raw.txt"
 # r54 finding 1: the review folder holds unredacted snapshots, prompts and replies, so the prescribed commands must leave it mode 700 and every file they write mode 600 even under umask 022, and the raw
 # snapshot must be gone once its hash is recorded (and on a failed step). The probe stands in for the redactor, records the modes at the moment the raw snapshot exists, then runs the real redactor.
 modeof() { python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$1"; }
