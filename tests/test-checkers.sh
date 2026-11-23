@@ -2494,6 +2494,7 @@ done
 expect pass "check-proof-permissions.py requires the expansion and wrapper-grammar guards" sh -c 'grep -q "def check_wrapper" "$1" && grep -q "expansion inside double quotes" "$1" && grep -q "expansion in a double-quoted redirect target" "$1"' _ "$hk"
 # cc11 r39 CRITICAL: nothing that runs outside the OS sandbox may execute, import or interpret a file the agent can write. A planted app.py (direct write, and a subprocess write) must never run through the
 # exempt chain (wrapper -> shim -> codex) nor through the post-run behavioral checkers, and the checkers must still report a result.
+cd "$tmp" || exit 1  # WHY: the earlier mkrun cases removed the run dir the shell was standing in, and sh -c cases need a live cwd
 r39mk="$tmp/r39-marker"; rm -f "$r39mk" "$r39mk.sub"
 r39app() { printf 'import subprocess\nopen("%s", "w").write("ran")\nsubprocess.run(["touch", "%s.sub"])\ndef add(a, b):\n    return a + b\n' "$r39mk" "$r39mk" > "$1/app.py"; }
 r39tests() { printf 'import unittest\nopen("%s", "w").write("ran")\nfrom app import add\nclass T(unittest.TestCase):\n    def test_a(self):\n        self.assertEqual(add(1, 2), 3)\nif __name__ == "__main__":\n    unittest.main()\n' "$r39mk" > "$1/test_app.py"; }

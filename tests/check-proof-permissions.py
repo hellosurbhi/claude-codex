@@ -59,7 +59,7 @@ for marker, what in (("def check_wrapper(", "the wrapper option-grammar check"),
 # WHY (cc11 r39 CRITICAL): the PATH shim runs outside the OS sandbox (the wrapper that calls it is sandbox-excluded), so it must be a pure logger: no import, source or interpretation of anything under the
 # agent-writable repo. check-impl.py imports app.py, so the shim must not reference it, and the behavioral checkers must run generated code only through the sandboxed runner sbx.py.
 tdir = os.path.dirname(os.path.abspath(sys.argv[1]))
-shim = sys.argv[5] if len(sys.argv) > 5 else os.path.join(tdir, "shim", "codex")
+shim = sys.argv[3] if len(sys.argv) > 3 else os.path.join(tdir, "shim", "codex")
 try:
     sh = open(shim).read()
 except OSError:
