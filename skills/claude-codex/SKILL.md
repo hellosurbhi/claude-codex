@@ -57,7 +57,7 @@ For each task (sequentially — next task starts only after current task is veri
    - The specific task description and acceptance criteria
    - Sanitized key file contents it needs to read/modify
    - Instruction: "Implement only this task. Run available lint/tests scoped to changed files after implementing. Report: files changed, verification result, any blockers."
-3. After the subagent completes: run `git diff $TASK_SHA` (scoped to this task only) to verify what changed, run scoped lint/tests to confirm no regressions
+3. After the subagent completes: run `~/.claude/config/scripts/review-snapshot.sh $TASK_SHA` (scoped to this task only) to verify what changed, run scoped lint/tests to confirm no regressions
 4. If the subagent reports a blocker or verification fails: fix directly with Edit/Write or re-dispatch with the failure output
 
 **If the plan has fewer than 3 tasks**, implement directly with Edit/Write.

@@ -1182,6 +1182,23 @@ p = sys.argv[1]; t = open(p).read(); t2 = re.sub(r"Run the call only inside this
 open(p, "w").write(t2)
 PYX
 mirneg "r60: a write instruction for prompt.raw.txt with no trap-and-delete block beside it is caught" 'prompt\.raw\.txt' "$tmp/mir8"; mirc tdd-execute-codex
+python3 - "$tmp/mir8/scripts/codex-call.sh" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read(); t2 = t.replace("GIT_NAMESPACE GIT_OBJECT_DIRECTORY", "GIT_OBJECT_DIRECTORY", 1); assert t2 != t
+open(p, "w").write(t2)
+PYX
+mirneg "r64: a git-env-clean block that drifted in one script is caught" 'git-env-clean block differs' "$tmp/mir8"; cp "$here/../scripts/codex-call.sh" "$tmp/mir8/scripts/codex-call.sh"
+python3 - "$tmp/mir8/commands/execute-codex.md" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read() + "\nAfter each subagent run `git diff $TASK_SHA` yourself.\n"
+open(p, "w").write(t)
+PYX
+mirneg "r64: a bare git diff prescribed in a command is caught" 'a bare `git diff` is prescribed' "$tmp/mir8"; mirc execute-codex
+# r64 (review 64 finding 1): an empty snapshot while the tree differs from the base must fail, never print nothing and exit 0. The mutation drops every change through the pathspec, exactly what GIT_LITERAL_PATHSPECS=1 did on 089dc0a.
+r64empty() { local d="$tmp/r64e"; mkdir -p "$d/r" && sed "s#-- ':(top)' #-- ':(top)nonexistent-zzz' #" "$here/../scripts/review-snapshot.sh" > "$d/mut.sh" || return 1
+  ( cd "$d/r" && git init -q && echo a > f && git add f && c="$(git commit-tree "$(git write-tree)" -m x)" && git update-ref HEAD "$c" && echo b > f && bash "$d/mut.sh" HEAD > "$d/out" 2> "$d/err"; echo $? > "$d/rc" )
+  [[ "$(cat "$d/rc")" != 0 && ! -s "$d/out" ]] && grep -q 'the snapshot is empty but f differs' "$d/err"; }
+expect pass "r64: an empty snapshot while the tree differs exits nonzero with a message and no stdout" r64empty
 # r60 (review 63): the two cited sites, run for real. The prescribed block is cut out of the shipped text, the codex-call.sh path is pointed at a stand-in, and each way a call can end must leave no raw prompt behind.
 r60run() { python3 - "$1" "$2" "$tmp" <<'PYX'
 import os, re, signal, subprocess, sys, tempfile, time

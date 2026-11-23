@@ -59,8 +59,22 @@
 # `diff.<driver>.binary` (they flip a file to "Binary files differ"; --full-index keeps the blob ids in the output, so an edit still changes the
 # bytes). Filters are not in this list: they fail closed, see above.
 set -o pipefail
-export LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1
-unset GIT_EXTERNAL_DIFF GIT_DIFF_OPTS GIT_PAGER GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+export LC_ALL=C
+# BEGIN git-env-clean (the same text sits in scripts/review-snapshot.sh and scripts/codex-call.sh; tests/test-mirrors.py fails when the two differ)
+# WHY (cc11 r64): an inherited GIT_* variable can change what a path, a repository, an index, an object store or a config key MEANS (GIT_LITERAL_PATHSPECS=1
+# made the snapshot's `:(top)` and exclude pathspecs plain file names, so a changed tree printed an empty snapshot with exit 0). Clearing one variable at a
+# time was tried first and each review found another, so the whole class is cleared here. Config files are pinned to /dev/null instead of unset, so the
+# user's own ~/.gitconfig cannot change the bytes either. Removing a name reopens that hole; tests/check-snapshot-hermetic.py sets each one in turn.
+clean_git_env() {
+  local v
+  unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_PREFIX GIT_INDEX_FILE \
+        GIT_EXTERNAL_DIFF GIT_DIFF_OPTS GIT_PAGER GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_NAMESPACE GIT_OBJECT_DIRECTORY \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_ATTR_SOURCE GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS
+  for v in $(compgen -e); do case "$v" in GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) unset "$v" ;; esac; done
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1
+}
+# END git-env-clean
+clean_git_env
 CFG=(-c core.quotePath=true -c core.fileMode=true -c core.symlinks=true -c core.ignoreCase=false -c core.fsmonitor=false
      -c core.untrackedCache=false -c core.splitIndex=false -c core.sparseCheckout=false -c core.excludesFile=/dev/null -c index.sparse=false -c index.maxPathLen=1073740799 -c core.autocrlf=false -c core.safecrlf=false -c core.attributesFile=/dev/null -c core.abbrev=auto -c core.bigFileThreshold=512m -c core.ignoreStat=false
      -c diff.external= -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.renames=false -c diff.algorithm=myers
@@ -160,6 +174,23 @@ case "$mode" in
     [ ! -s "$tmp/upd" ] || canon update-index --add --replace -z --stdin < "$tmp/upd" || exit 1
     [ ! -s "$tmp/info" ] || canon update-index --add --replace -z --index-info < "$tmp/info" || exit 1
     new_tree="$(canon write-tree)" || exit 1
-    canon diff "${DOPT[@]}" "$base_tree" "$new_tree" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' ':(top,exclude).claude/plan' > "$tmp/out" || exit 1 ;;
+    canon diff "${DOPT[@]}" "$base_tree" "$new_tree" -- ':(top)' ':(top,exclude,glob,icase)**/.env*' ':(top,exclude,glob,icase)**/*secret*' ':(top,exclude,glob,icase)**/*credential*' ':(top,exclude,glob,icase)**/*.pem' ':(top,exclude,glob,icase)**/*.key' ':(top,exclude).claude/review' ':(top,exclude).claude/plan' > "$tmp/out" || exit 1
+    # WHY an empty snapshot is cross-checked (cc11 r64): the pathspec above is the only thing standing between "nothing changed" and "everything was filtered out", and
+    # an empty result looks exactly like a clean tree. The same two trees are listed WITHOUT any pathspec and every name is run through the exclusion rules again in
+    # plain bash; a name that survives them while the snapshot is empty means the filtering lied, so fail closed instead of printing nothing with exit 0.
+    if [ ! -s "$tmp/out" ]; then
+      canon diff --name-only -z "$base_tree" "$new_tree" > "$tmp/names" || exit 1
+      while IFS= read -r -d '' p; do
+        keep=1; oldifs="$IFS"; IFS=/
+        # shellcheck disable=SC2086
+        set -- $p; IFS="$oldifs"
+        case "$p" in .claude/review|.claude/review/*|.claude/plan|.claude/plan/*) keep=0 ;; esac
+        for part in "$@"; do
+          lc="$(printf '%s' "$part" | tr 'A-Z' 'a-z')"
+          case "$lc" in .env*|*secret*|*credential*|*.pem|*.key) keep=0 ;; esac
+        done
+        [ "$keep" = 1 ] && die "the snapshot is empty but $p differs from the base: the path filtering dropped a real change"
+      done < "$tmp/names"
+    fi ;;
 esac
 cat "$tmp/out" || exit 1

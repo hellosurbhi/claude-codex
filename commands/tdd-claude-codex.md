@@ -152,7 +152,7 @@ For each task (sequentially — next task starts only after current task passes 
    - Relevant test file contents (the tests it must pass)
    - Sanitized key file contents it needs to read/modify
    - Instruction: "Implement only this task. Make the provided tests pass. Do not modify test files. Run the tests and confirm GREEN before finishing. Report: files changed, test result, any blockers."
-3. After the subagent completes: run `git diff $TASK_SHA` (scoped to this task only) to verify what changed, run the task's tests to confirm GREEN
+3. After the subagent completes: run `~/.claude/config/scripts/review-snapshot.sh $TASK_SHA` (scoped to this task only) to verify what changed, run the task's tests to confirm GREEN
 4. If the subagent reports a blocker or tests are still failing: fix directly with Edit/Write or re-dispatch with the failure output
 
 **If the plan has fewer than 3 tasks**, implement directly:

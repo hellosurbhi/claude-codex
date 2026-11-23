@@ -99,6 +99,18 @@ def orderfile(repo):
     open(os.path.join(repo, ".git", "order.txt"), "w").write("sub/mod.py\nother.py\n")
     run(repo, "config", "diff.orderFile", os.path.join(repo, ".git", "order.txt"))
 
+def decoy(repo):
+    # a second, unrelated repository next to the fixture (the fixture lives in the harness's own temp dir, which is removed afterwards)
+    d = os.path.join(os.path.dirname(repo), "decoy")
+    if not os.path.isdir(d):
+        os.mkdir(d); run(d, "init", "-q"); w(d, "other.txt", "decoy\n"); commit_all(d, "decoy\n")
+    return d
+
+def decoy_cfg(repo):
+    f = os.path.join(os.path.dirname(repo), "decoy.cfg")
+    open(f, "w").write("[core]\n\tworktree = %s\n" % decoy(repo))
+    return f
+
 def envvar(**kv):
     return lambda repo: dict(BASE_ENV, **kv)
 
@@ -113,6 +125,20 @@ VARIANTS = {
     "diff.interHunkContext=20": cfg("diff.interHunkContext", "20"),
     "GIT_EXTERNAL_DIFF in the environment": envvar(GIT_EXTERNAL_DIFF="true"),
     "GIT_DIFF_OPTS=--unified=0 in the environment": envvar(GIT_DIFF_OPTS="--unified=0"),
+    # cc11 r64: every inherited variable that changes what a path, repository, index, object store or config MEANS must be cleared by the script.
+    "GIT_LITERAL_PATHSPECS=1 in the environment": envvar(GIT_LITERAL_PATHSPECS="1"),
+    "GIT_GLOB_PATHSPECS=1 in the environment": envvar(GIT_GLOB_PATHSPECS="1"),
+    "GIT_NOGLOB_PATHSPECS=1 in the environment": envvar(GIT_NOGLOB_PATHSPECS="1"),
+    "GIT_ICASE_PATHSPECS=1 in the environment": envvar(GIT_ICASE_PATHSPECS="1"),
+    "GIT_DIR pointing at another repository": lambda repo: dict(BASE_ENV, GIT_DIR=decoy(repo) + "/.git"),
+    "GIT_WORK_TREE pointing at another directory": lambda repo: dict(BASE_ENV, GIT_WORK_TREE=decoy(repo)),
+    "GIT_INDEX_FILE pointing at another index": lambda repo: dict(BASE_ENV, GIT_INDEX_FILE=decoy(repo) + "/.git/index"),
+    "GIT_OBJECT_DIRECTORY pointing at an empty store": lambda repo: dict(BASE_ENV, GIT_OBJECT_DIRECTORY=decoy(repo) + "/.git/objects"),
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES pointing at another store": lambda repo: dict(BASE_ENV, GIT_ALTERNATE_OBJECT_DIRECTORIES=decoy(repo) + "/.git/objects"),
+    "GIT_NAMESPACE set": envvar(GIT_NAMESPACE="other"),
+    "GIT_CONFIG_COUNT with core.worktree": lambda repo: dict(BASE_ENV, GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.worktree", GIT_CONFIG_VALUE_0=decoy(repo)),
+    "GIT_CONFIG_GLOBAL file with core.worktree": lambda repo: dict(BASE_ENV, GIT_CONFIG_GLOBAL=decoy_cfg(repo)),
+    "GIT_CONFIG_SYSTEM file with core.worktree": lambda repo: dict(BASE_ENV, GIT_CONFIG_SYSTEM=decoy_cfg(repo), GIT_CONFIG_NOSYSTEM="0"),
     "core.quotePath=false with a non-ASCII filename": cfg("core.quotePath", "false"),
     "diff.renames=copies": cfg("diff.renames", "copies"),
     "diff.algorithm=patience": cfg("diff.algorithm", "patience"),

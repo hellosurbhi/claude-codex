@@ -44,8 +44,23 @@ on_exit() {
 }
 trap on_exit EXIT
 command -v python3 >/dev/null || { echo "codex-call: python3 is required (it parses the Codex event stream). Treat as UNREVIEWED." >&2; exit 2; }
+# BEGIN git-env-clean (the same text sits in scripts/review-snapshot.sh and scripts/codex-call.sh; tests/test-mirrors.py fails when the two differ)
+# WHY (cc11 r64): an inherited GIT_* variable can change what a path, a repository, an index, an object store or a config key MEANS (GIT_LITERAL_PATHSPECS=1
+# made the snapshot's `:(top)` and exclude pathspecs plain file names, so a changed tree printed an empty snapshot with exit 0). Clearing one variable at a
+# time was tried first and each review found another, so the whole class is cleared here. Config files are pinned to /dev/null instead of unset, so the
+# user's own ~/.gitconfig cannot change the bytes either. Removing a name reopens that hole; tests/check-snapshot-hermetic.py sets each one in turn.
+clean_git_env() {
+  local v
+  unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_PREFIX GIT_INDEX_FILE \
+        GIT_EXTERNAL_DIFF GIT_DIFF_OPTS GIT_PAGER GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_NAMESPACE GIT_OBJECT_DIRECTORY \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_ATTR_SOURCE GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS
+  for v in $(compgen -e); do case "$v" in GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) unset "$v" ;; esac; done
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1
+}
+# END git-env-clean
+# WHY the call runs in a subshell: the codex child must keep the caller's own GIT_* variables, only this one lookup is cleaned.
 # WHY the repository top and not $PWD (cc11-main-r2 finding 3): Codex reviews relative to --cd, so a review started from a subfolder saw only that folder.
-sandbox=read-only role="" resume="" resume_set=0 pfile="" pfile_set=0 dir="$(git rev-parse --show-toplevel 2>/dev/null || printf "%s" "$PWD")"
+sandbox=read-only role="" resume="" resume_set=0 pfile="" pfile_set=0 dir="$(clean_git_env; git rev-parse --show-toplevel 2>/dev/null || printf "%s" "$PWD")"
 # WHY the parser is strict (r22 finding 3): the old loop only ran while two arguments remained, so a lone `--resume` skipped parsing and became the PROMPT, an unknown option was sent to Codex as prompt text
 # and extra positional arguments were silently dropped. Every option needs a value that is not itself option-like, an unknown option or an extra argument exits 2 with the usage line, and `--` ends the options so
 # a prompt that starts with a dash is still possible. Do not relax this back to "anything unrecognised is the prompt".

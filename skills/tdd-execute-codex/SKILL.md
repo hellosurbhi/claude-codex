@@ -206,7 +206,7 @@ The reply travels only as the file `.claude/review/reply.raw.txt` (r22 finding 1
 **If the plan has 3+ implementation tasks**, dispatch each task to a subagent (sequentially):
 - Before each task: record `$TASK_SHA` via `git rev-parse HEAD`
 - For each task: launch a general-purpose Task agent with the task description, relevant test files it must pass, sanitized context files, and instruction: "Implement only this task. Make the provided tests pass. Do not modify test files. Run tests and confirm GREEN before finishing. Report: files changed, test result, any blockers."
-- After each subagent: run `git diff $TASK_SHA` (scoped to this task only) to verify changes, run the task's tests to confirm GREEN
+- After each subagent: run `~/.claude/config/scripts/review-snapshot.sh $TASK_SHA` (scoped to this task only) to verify changes, run the task's tests to confirm GREEN
 - If the subagent reports a blocker: fix directly with Edit/Write or re-dispatch with failure output
 
 **If fewer than 3 tasks**: implement directly with Edit/Write.
@@ -293,7 +293,7 @@ You are implementing one task using Codex via codex-call.sh. Follow these steps:
 5. Report back: files changed, final test result, any unresolved failures.
 ```
 
-3. After each subagent: run `git diff $TASK_SHA` (scoped to this task only) to verify what changed, run the task's tests to confirm GREEN
+3. After each subagent: run `~/.claude/config/scripts/review-snapshot.sh $TASK_SHA` (scoped to this task only) to verify what changed, run the task's tests to confirm GREEN
 
 **Important**: Each subagent owns its own Codex `THREAD_ID`. There is no shared THREAD_ID across tasks. Step B4 (code review) therefore uses the `code-reviewer` Task agent, not `codex-call.sh --resume <THREAD_ID>`, since there is no single session to reply to.
 

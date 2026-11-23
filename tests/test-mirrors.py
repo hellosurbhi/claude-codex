@@ -586,5 +586,20 @@ for f in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")) + glob.
     for m in re.finditer(r"(?:[Ww]rite|written)[^\n]{0,400}?`\.claude/review/prompt\.raw\.txt`", t):
         if not any(s - 1500 <= m.end() <= e + 1500 for s, e in spans):
             bad.append("%s: text tells the model to write .claude/review/prompt.raw.txt with no trap-and-delete block next to it" % rel)
+# r64 (git env): the two shipped scripts that call git carry the SAME environment-clearing block, and no skill or command prescribes a bare `git diff` (every diff goes through scripts/review-snapshot.sh, whose block clears the inherited GIT_* variables).
+# WHY: a copy that drifts re-opens the hole in one script only, and a bare `git diff` in a skill inherits GIT_EXTERNAL_DIFF, GIT_DIR and the pathspec variables untouched.
+def _envblock(path):
+    m = re.search(r"# BEGIN git-env-clean.*?# END git-env-clean", open(path, encoding="utf-8").read(), re.S)
+    return m.group(0) if m else None
+_a, _b = _envblock(os.path.join(root, "scripts", "review-snapshot.sh")), _envblock(os.path.join(root, "scripts", "codex-call.sh"))
+if _a is None or _b is None:
+    bad.append("scripts/review-snapshot.sh and scripts/codex-call.sh must both carry a '# BEGIN git-env-clean ... # END git-env-clean' block")
+elif _a != _b:
+    bad.append("the git-env-clean block differs between scripts/review-snapshot.sh and scripts/codex-call.sh")
+for f in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")) + glob.glob(os.path.join(root, "skills", "*", "reference.md")) + glob.glob(os.path.join(root, "commands", "*.md"))):
+    for ln, line in enumerate(open(f, encoding="utf-8").read().split("\n"), 1):
+        for m in re.finditer(r"git diff", line):
+            if not re.search(r"(fresh|second|Do not run) `$", line[max(0, m.start() - 40):m.start()]):
+                bad.append("%s:%d: a bare `git diff` is prescribed; use ~/.claude/config/scripts/review-snapshot.sh so the inherited GIT_* variables are cleared" % (os.path.relpath(f, root), ln))
 print("\n".join(bad))
 sys.exit(1 if bad else 0)

@@ -84,7 +84,7 @@ The reply travels only as the file `.claude/review/reply.raw.txt` (r22 finding 1
 **If the plan has 3+ implementation tasks**, dispatch each task to a subagent (sequentially):
 - Before each task: record `$TASK_SHA` via `git rev-parse HEAD`
 - For each task: launch a general-purpose Task agent with the task description, sanitized context files, and instruction: "Implement only this task. Run available lint/tests scoped to changed files. Report: files changed, verification result, any blockers."
-- After each subagent: run `git diff $TASK_SHA` (scoped to this task only) to verify changes, run scoped lint/tests to confirm no regressions
+- After each subagent: run `~/.claude/config/scripts/review-snapshot.sh $TASK_SHA` (scoped to this task only) to verify changes, run scoped lint/tests to confirm no regressions
 - If the subagent reports a blocker: fix directly with Edit/Write or re-dispatch with failure output
 
 **If fewer than 3 tasks**: apply changes directly with Edit/Write.
@@ -146,7 +146,7 @@ Call codex-call.sh with:
 Save the THREAD_ID. Run lint/tests scoped to changed files to verify. If failures, call codex-call.sh --resume <THREAD_ID> --sandbox workspace-write with the THREAD_ID and failure output (pasted free text, so write it with your file-writing tool to `.claude/review/prompt.raw.txt` and pass `--prompt-file`, never inside a quoted argument). Run the call only inside this block, which deletes the raw prompt on success, failure and interruption (the wrapper deletes none of its inputs): `(trap 'rm -f .claude/review/prompt.raw.txt' EXIT; trap 'exit 1' HUP INT TERM; ~/.claude/config/scripts/codex-call.sh --resume <THREAD_ID> --sandbox workspace-write --prompt-file .claude/review/prompt.raw.txt)`. Write the file again before every retry; a leftover copy is never reused. Repeat until the scoped lint/tests pass. Report: files changed, verification result, any unresolved failures.
 ```
 
-3. After each subagent: run `git diff $TASK_SHA` (scoped to this task only) to verify changes, run scoped lint/tests to confirm no regressions
+3. After each subagent: run `~/.claude/config/scripts/review-snapshot.sh $TASK_SHA` (scoped to this task only) to verify changes, run scoped lint/tests to confirm no regressions
 
 **Important**: Each subagent owns its own Codex `THREAD_ID`. There is no shared THREAD_ID across tasks. The outer review loop (Step B3) therefore uses the `code-reviewer` Task agent, not `codex-call.sh --resume <THREAD_ID>`, since there is no single session to reply to.
 
