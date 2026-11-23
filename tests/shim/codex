@@ -152,7 +152,11 @@ PY3
 python3 -c 'import json,os,sys; p=json.loads(os.environ["EV_PROV"]); sys.exit(0 if p["wrapper_sha256"] and p["argv_ok"] and p["wrapper_sha256"]==os.environ.get("WRAPPER_SHA256") and p["nonce"] and p["nonce"]==os.environ.get("EVNONCE") else 1)' && kind=real
 # WHY the shim records the add() flag and the end state here (r9 finding 1): check-scripted.py `final --real` binds the last clean verdict to the state the run ended in and, for the tdd skills,
 # to the implementation phase, exactly as the fake does. The start state was captured above, before codex ran.
-impl=no; python3 "$here/check-impl.py" "$prepo/app.py" 2>/dev/null && impl=yes
+# WHY impl=no and no check-impl.py (cc11 r39 CRITICAL): this shim runs OUTSIDE the OS sandbox (codex-call.sh is sandbox-excluded), and check-impl.py imports the agent-written
+# app.py, so a file the agent could write became unsandboxed code execution. The shim is a pure logger: it hashes bytes (state-hash.py reads rb only) and execs the real codex.
+# Only plan-codex is proven in the real scenario (review-loop-proof.sh exits 2 for other skills), and --impl binds only tdd-claude-codex, so no accepted run needs impl=yes here.
+# What breaks if this runs generated code again: the exempt chain executes agent-written files with the owner's full permissions.
+impl=no
 # WHY audit= is recorded here, from the sandbox the call asked for (r11 finding 2): a Codex test audit runs read-only and an implementation call needs workspace-write, so check-scripted.py
 # --audit can pick the latest audit ATTEMPT, including one that failed or returned no verdict, without reading its reply.
 audit=yes; for a in "${argv[@]+"${argv[@]}"}"; do [[ $a == workspace-write ]] && audit=no; done

@@ -2,7 +2,9 @@
 # mathops.add/sub, strops.shout, listops.first, pkginfo.VERSION and describe(), and each module's
 # own doctests pass and exist. Behavioral on purpose, so stubs and comment-only markers fail.
 # WHY a subprocess: the files are model-written code and must not run inside the harness.
-import subprocess, sys
+import os, subprocess, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sbx
 repo = sys.argv[1]
 code = r'''
 import importlib, sys, doctest
@@ -21,7 +23,7 @@ print('CHECKS-DONE')
 '''
 try:
     # WHY the sentinel (CodeRabbit r43): exit 0 alone is not proof the checks ran (a module may exit 0 on import).
-    r = subprocess.run([sys.executable, "-I", "-c", code, repo], timeout=30, capture_output=True)
+    r = sbx.run([sys.executable, "-I", "-c", code, repo], timeout=30)
     if not (r.returncode == 0 and r.stdout.rstrip().endswith(b"CHECKS-DONE")):
         print("REJECT: the four modules failed their checks (exit %d, sentinel %s)" % (r.returncode, "present" if b"CHECKS-DONE" in r.stdout else "missing"), file=sys.stderr); sys.exit(1)
     sys.exit(0)

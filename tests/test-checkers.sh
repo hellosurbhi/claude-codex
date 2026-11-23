@@ -2492,6 +2492,28 @@ for c in "$CC --sandbox read-only --role ~/.claude/skills/plan-codex/codex-analy
   expect pass "hook: wrapper grammar allows: ${c#\~/.claude/config/scripts/}" test "$(hbash "$c")" = "allow "
 done
 expect pass "check-proof-permissions.py requires the expansion and wrapper-grammar guards" sh -c 'grep -q "def check_wrapper" "$1" && grep -q "expansion inside double quotes" "$1" && grep -q "expansion in a double-quoted redirect target" "$1"' _ "$hk"
+# cc11 r39 CRITICAL: nothing that runs outside the OS sandbox may execute, import or interpret a file the agent can write. A planted app.py (direct write, and a subprocess write) must never run through the
+# exempt chain (wrapper -> shim -> codex) nor through the post-run behavioral checkers, and the checkers must still report a result.
+r39mk="$tmp/r39-marker"; rm -f "$r39mk" "$r39mk.sub"
+r39app() { printf 'import subprocess\nopen("%s", "w").write("ran")\nsubprocess.run(["touch", "%s.sub"])\ndef add(a, b):\n    return a + b\n' "$r39mk" "$r39mk" > "$1/app.py"; }
+r39tests() { printf 'import unittest\nopen("%s", "w").write("ran")\nfrom app import add\nclass T(unittest.TestCase):\n    def test_a(self):\n        self.assertEqual(add(1, 2), 3)\nif __name__ == "__main__":\n    unittest.main()\n' "$r39mk" > "$1/test_app.py"; }
+r39chain() { ( mkrun; r39app "$tmp/run/repo"; PROOF_REPO="$tmp/run/repo" REAL_CODEX="$tmp/realbin/codex" viawrap exec --json "prompt" >/dev/null 2>&1; [[ ! -e "$r39mk" && ! -e "$r39mk.sub" ]] && python3 "$here/check-real-basic.py" "$EVLOG" verdict >/dev/null 2>&1 ); }
+expect pass "r39: a planted app.py is not executed by the exempt chain (wrapper, shim, codex), and the real call is still logged" r39chain
+rm -f "$r39mk" "$r39mk.sub"; r39d="$tmp/r39dir"; rm -rf "$r39d"; mkdir -p "$r39d"; r39app "$r39d"
+expectm fail "r39: the add() check on a planted app.py that writes outside the scratch dir reports a rejection" 'REJECT: add\(\) failed its checks' python3 "$here/check-impl.py" "$r39d/app.py"
+expect pass "r39: that planted app.py wrote neither the direct marker nor the subprocess marker" test ! -e "$r39mk" -a ! -e "$r39mk.sub"
+r39tests "$r39d"
+expectm fail "r39: the unit-test check on a planted test_app.py is rejected, with a reported result" 'REJECT' python3 "$here/check-tests.py" "$r39d"
+expect pass "r39: the planted test_app.py wrote no marker" test ! -e "$r39mk" -a ! -e "$r39mk.sub"
+printf 'import subprocess\nopen("%s", "w").write("ran")\n' "$r39mk" > "$r39d/mathops.py"
+expectm fail "r39: the modules check on a planted module is rejected, with a reported result" 'REJECT' python3 "$here/check-modules.py" "$r39d"
+expect pass "r39: the planted module wrote no marker" test ! -e "$r39mk"
+expect pass "r39: the behavioral acceptance step (check-behavior.sh) runs a planted app.py sandboxed" sh -c 'bash "$1/check-behavior.sh" claude-codex "$2" real >/dev/null 2>&1; test ! -e "$3"' _ "$here" "$r39d" "$r39mk"
+r39g="$tmp/r39good"; rm -rf "$r39g"; mkdir -p "$r39g"; printf 'def add(a, b):\n    return a + b\n' > "$r39g/app.py"
+expect pass "r39: a genuine add() still passes the sandboxed check" python3 "$here/check-impl.py" "$r39g/app.py"
+expect pass "r39: check-proof-permissions.py accepts the pure-logger shim" python3 "$pp" "$ps" "$here/proof-confine-hook.py" "$here/shim/codex"
+expect pass "r39: check-proof-permissions.py rejects a shim that runs check-impl.py outside the sandbox" sh -c 'sed "s/^impl=no\$/impl=no; python3 \"\$here\/check-impl.py\" \"\$prepo\/app.py\"/" "$1" > "$2"; grep -q check-impl "$2" && ! python3 "$3" "$4" "$5" "$2" >/dev/null 2>&1' _ "$here/shim/codex" "$tmp/shim-bad" "$pp" "$ps" "$here/proof-confine-hook.py"
+expect pass "r39: check-proof-permissions.py rejects a checker that runs generated code unsandboxed" sh -c 'mkdir -p "$2/shim"; cp "$1"/check-proof-permissions.py "$1"/proof-confine-hook.py "$1"/review-loop-proof.sh "$2/"; cp "$1/shim/codex" "$2/shim/"; for f in check-impl check-tests check-modules; do cp "$1/$f.py" "$2/"; done; sed "s/sbx.run(/subprocess.run(/" "$1/check-impl.py" > "$2/check-impl.py"; ! python3 "$2/check-proof-permissions.py" "$2/review-loop-proof.sh" >/dev/null 2>&1' _ "$here" "$tmp/r39-copy"
 expect pass "the real task puts the confirmation follow-up before the final review (or asks for the bare verdict) so the last call stays clean" grep -q "so the last Codex call of the run is still the skill's own final review" "$here/review-loop-proof.sh"
 
 # Round 23: an early exit of the REAL codex-call.sh (bad arguments, missing prompt or role file) never reaches the codex shim, so it used to leave no event and an earlier clean review stood

@@ -195,7 +195,8 @@ else
 fi
 claude -p "$task" --model sonnet --setting-sources "$sources" "${perm[@]}" \
   --append-system-prompt "$seam" --no-session-persistence --output-format stream-json --verbose > "$out/stream.jsonl" 2> "$out/session.err" < /dev/null && claude_rc=0 || claude_rc=$?
-[[ $scenario != real ]] || unset PROOF_GIT_BASELINE GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_KEY_1 GIT_CONFIG_VALUE_1 GIT_CONFIG_KEY_2 GIT_CONFIG_VALUE_2 GIT_CONFIG_KEY_3 GIT_CONFIG_VALUE_3
+# WHY the git pins stay exported for the post-run checks (cc11 r39): they run git on the agent-writable repo, whose .git/config the agent may have changed from inside the sandbox; the pins outrank every config file.
+unset PROOF_GIT_BASELINE
 python3 - "$out" <<'PY'
 import json, sys
 o = sys.argv[1]; res = ""; ev = []; jl = []
