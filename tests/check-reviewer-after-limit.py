@@ -41,6 +41,30 @@ def changes(lines):
             rem.append(l[1:])
     return add, rem
 
+# WHY git quoting is decoded (r50): the snapshot pins core.quotePath=true, so a name with non-ASCII bytes, a tab, a quote or a backslash is written as a double-quoted C string with octal escapes
+# ("caf\303\251.py"). Comparing that text with the filesystem name rejected every valid review that covered such a file; what was tried first was only the unquoted `a/(.+) b/(.+)` form.
+QSTR = r'"(?:[^"\\]|\\.)*"'
+SIMPLE = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+def unquote(tok):
+    if not (len(tok) >= 2 and tok[0] == '"' and tok[-1] == '"'):
+        return tok
+    raw, out, i = tok[1:-1], bytearray(), 0
+    while i < len(raw):
+        c = raw[i]
+        if c != "\\":
+            out += c.encode("utf-8", "surrogateescape"); i += 1
+        elif raw[i + 1:i + 2] in SIMPLE:
+            out.append(SIMPLE[raw[i + 1]]); i += 2
+        elif re.fullmatch(r"[0-3][0-7]{2}", raw[i + 1:i + 4]):
+            out.append(int(raw[i + 1:i + 4], 8)); i += 4
+        else:
+            out += c.encode(); i += 1
+    return out.decode("utf-8", "surrogateescape")
+def hdr_path(rest):
+    # path of a "--- " or "+++ " header (text after the marker): decode quoting, drop a trailing tab and git's a/ or b/ prefix.
+    rest = rest.split("\t")[0] if not rest.startswith('"') else re.match(QSTR, rest).group(0) if re.match(QSTR, rest) else rest
+    return unquote(rest)[2:]
+
 def reviewed_changes(lines):
     # {path: (added, removed)} for every .py file section of a git diff; sections start at a "diff --git" or "--- " header.
     secs, cur, name = {}, None, None
@@ -52,11 +76,11 @@ def reviewed_changes(lines):
             if cur is None:
                 cur = []; secs[id(cur)] = (None, cur)
             if l[4:] != "/dev/null":
-                secs[id(cur)] = (l[4:].split("\t")[0][2:], cur)
+                secs[id(cur)] = (hdr_path(l[4:]), cur)
             cur.append(l)
         elif l.startswith("+++ ") and cur is not None and not any(x.startswith("@@") for x in cur):
             if l[4:].strip() != "/dev/null":
-                secs[id(cur)] = (l[4:].split("\t")[0][2:], cur)
+                secs[id(cur)] = (hdr_path(l[4:]), cur)
             cur.append(l)
         elif cur is not None:
             cur.append(l)
@@ -81,10 +105,13 @@ def patch_sections(lines, names, binary=()):
             cur.append(l)
     out = []
     for sc in secs:
-        m = re.fullmatch(r"diff --git a/(.+) b/(.+)", sc[0])
+        m = re.fullmatch(r"diff --git (" + QSTR + r"|a/.+) (" + QSTR + r"|b/.+)", sc[0])
         if not m:
             return None
-        a_, b_ = m.groups()
+        a_, b_ = unquote(m.group(1)), unquote(m.group(2))
+        if not (a_.startswith("a/") and b_.startswith("b/")):
+            return None
+        a_, b_ = a_[2:], b_[2:]
         if not (a_.endswith(".py") or b_.endswith(".py")):
             continue
         if a_ != b_ or b_ not in names or os.path.isabs(b_) or ".." in b_.split("/"):

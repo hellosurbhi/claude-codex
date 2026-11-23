@@ -1272,6 +1272,11 @@ rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):
 gdiff app.py other.py > "$tmp/diff.txt"
 spy_only bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect_spy pass "an exact git diff of every changed module is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
+# r50: a non-ASCII module name appears in git headers as a quoted octal-escaped path (core.quotePath=true), and a clean review of it must still be accepted.
+rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > "caf\303\251.py"
+gdiff app.py "caf\303\251.py" > "$tmp/diff.txt"
+spy_only bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
+expect_spy pass "an exact git diff that includes a non-ASCII module name (quoted header) is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py
 gdiff app.py > "$tmp/diff.txt"
 spy_only bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
