@@ -2057,7 +2057,7 @@ expect pass "the real branch runs the bound final-result check once, with --impl
 # the shim records the repo state and the impl flag in the event meta, computed by the same state-hash.py and check-impl.py
 mkrun; printf 'def add(a, b):\n    return a + b\n' > "$tmp/run/repo/app.py"
 PROOF_REPO="$tmp/run/repo" REAL_CODEX="$tmp/realbin/codex" viawrap exec --json prompt >/dev/null 2>&1
-expect pass "the shim records the final-state hash and impl=yes in the real event" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; m=wlog.load(sys.argv[2])[-1]["meta"]; print(m.get("state")+" "+m.get("impl"))' "$here" "$EVLOG")" = "$(python3 "$here/state-hash.py" "$tmp/run/repo") yes"
+expect pass "the shim records the final-state hash and impl=no (pure logger, it never runs generated code) in the real event" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; m=wlog.load(sys.argv[2])[-1]["meta"]; print(m.get("state")+" "+m.get("impl"))' "$here" "$EVLOG")" = "$(python3 "$here/state-hash.py" "$tmp/run/repo") no"
 printf 'x=1\n' > "$tmp/run/repo/app.py"
 PROOF_REPO="$tmp/run/repo" REAL_CODEX="$tmp/realbin/codex" viawrap exec --json prompt >/dev/null 2>&1
 expect pass "the shim records impl=no when add() does not exist" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import wlog; print(wlog.load(sys.argv[2])[-1]["meta"].get("impl"))' "$here" "$EVLOG")" = no
@@ -2512,7 +2512,7 @@ expect pass "r39: the behavioral acceptance step (check-behavior.sh) runs a plan
 r39g="$tmp/r39good"; rm -rf "$r39g"; mkdir -p "$r39g"; printf 'def add(a, b):\n    return a + b\n' > "$r39g/app.py"
 expect pass "r39: a genuine add() still passes the sandboxed check" python3 "$here/check-impl.py" "$r39g/app.py"
 expect pass "r39: check-proof-permissions.py accepts the pure-logger shim" python3 "$pp" "$ps" "$here/proof-confine-hook.py" "$here/shim/codex"
-expect pass "r39: check-proof-permissions.py rejects a shim that runs check-impl.py outside the sandbox" sh -c 'sed "s/^impl=no\$/impl=no; python3 \"\$here\/check-impl.py\" \"\$prepo\/app.py\"/" "$1" > "$2"; grep -q check-impl "$2" && ! python3 "$3" "$4" "$5" "$2" >/dev/null 2>&1' _ "$here/shim/codex" "$tmp/shim-bad" "$pp" "$ps" "$here/proof-confine-hook.py"
+expect pass "r39: check-proof-permissions.py rejects a shim that runs check-impl.py outside the sandbox" sh -c 'cd "$6" && sed "s/^impl=no\$/impl=no; python3 \"\$here\/check-impl.py\" \"\$prepo\/app.py\"/" "$1" > "$2"; grep -q check-impl "$2" && ! python3 "$3" "$4" "$5" "$2" >/dev/null 2>&1' _ "$here/shim/codex" "$tmp/shim-bad" "$pp" "$ps" "$here/proof-confine-hook.py" "$tmp"
 expect pass "r39: check-proof-permissions.py rejects a checker that runs generated code unsandboxed" sh -c 'mkdir -p "$2/shim"; cp "$1"/check-proof-permissions.py "$1"/proof-confine-hook.py "$1"/review-loop-proof.sh "$2/"; cp "$1/shim/codex" "$2/shim/"; for f in check-impl check-tests check-modules; do cp "$1/$f.py" "$2/"; done; sed "s/sbx.run(/subprocess.run(/" "$1/check-impl.py" > "$2/check-impl.py"; ! python3 "$2/check-proof-permissions.py" "$2/review-loop-proof.sh" >/dev/null 2>&1' _ "$here" "$tmp/r39-copy"
 expect pass "the real task puts the confirmation follow-up before the final review (or asks for the bare verdict) so the last call stays clean" grep -q "so the last Codex call of the run is still the skill's own final review" "$here/review-loop-proof.sh"
 
