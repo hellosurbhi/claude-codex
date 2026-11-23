@@ -1111,6 +1111,7 @@ expect pass "ci.yml runs the NO_SPY tripwire check" grep -q 'bash tests/check-no
 expect pass "the tripwire check puts tripwires in HOME and first on PATH and asserts an empty marker" sh -c 'grep -q "exit 99" "$1" && grep -q "CHECKERS_NO_SPY=1" "$1" && grep -q "PATH=\"\$work/bin" "$1" && grep -q "marker" "$1"' _ "$here/check-no-spy-tripwire.sh"
 expect pass "ci.yml cancels superseded pull request runs per ref" grep -q 'cancel-in-progress: ${{ github.event_name == '"'"'pull_request'"'"' }}' "$ci"
 expect pass "ci.yml runs on pull_request and pushes to main only" grep -qE '^  push:$' "$ci"
+expect pass "ci.yml runs the checkers and the tripwire as two parallel jobs, each with timeout-minutes of at least 30 and persist-credentials: false" python3 -I -c 'import re,sys; s=open(sys.argv[1]).read(); jobs=re.split(r"^  (?=[a-z]+:\n)", s.split("\njobs:\n",1)[1], flags=re.M); jobs=[j for j in jobs if j.strip()]; assert len(jobs)==2, len(jobs); assert "check-no-spy-tripwire" in jobs[1] and "check-no-spy-tripwire" not in jobs[0] and "CHECKERS_NO_SPY=1 bash tests/test-checkers.sh" in jobs[0]; assert all(int(re.search(r"timeout-minutes: (\d+)", j).group(1))>=30 and "persist-credentials: false" in j and "needs:" not in j for j in jobs)' "$ci"
 
 # C4: codex-call v3 error handling: a JSON error event with no message is reported whole instead of as an empty line, and the contract line is present.
 mkdir -p "$tmp/errbin"
