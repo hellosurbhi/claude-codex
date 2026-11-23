@@ -768,14 +768,21 @@ printf 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-hell
 expect pass "a clean diff comes out byte-identical" cmp -s "$tmp/clean.diff" "$tmp/clean.out"
 # a fallback sequence run for real: with the script missing no context file survives and the reviewer is never called.
 sendtry() { # $1 = redactor path; runs the claude-codex Review input block, then its fallback lines, with a stub reviewer that records its call
-  python3 - "$here/../skills/claude-codex/SKILL.md" "$1" "$tmp/sendtry.sh" "$tmp/reviewer-called" <<'PY'
+  python3 - "$here/../skills/claude-codex/SKILL.md" "$1" "$tmp/sendtry.sh" "$tmp/reviewer-called" "$red" "${SENDMUT:-}" <<'PY'
 import re, sys
 t = open(sys.argv[1]).read()
 ri = re.search(r"\*\*Review input \(every reviewer call\)\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
 b = re.search(r"\*\*(?:Review context \(every reviewer call\)|Fallback input \(tier S\))\*\*:.*?\n```\n(.*?)\n```\n", t, re.S).group(1)
 b = ri + "\n" + b
-b = b.replace("~/.claude/config/scripts/review-snapshot.sh", sys.argv[2].replace("redact-diff.sh", "review-snapshot.sh")).replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[2]).replace("~/.claude/config/scripts/reviewer.sh S", "cp \"$CTX\" " + sys.argv[4] + " #")
+# WHY the snapshot path comes from the real redactor (argv 5), never from argv 2 (cc11 r58): deriving it from the stub's name left it unchanged for bad-redactor.sh and no-such-redactor.sh, so the
+# snapshot step itself failed and the two negative cases passed without ever exercising redactor-failure handling. Only the redactor path is swapped for the stub now.
+b = b.replace("~/.claude/config/scripts/review-snapshot.sh", sys.argv[5].replace("redact-diff.sh", "review-snapshot.sh")).replace("~/.claude/config/scripts/redact-diff.sh", sys.argv[2]).replace("~/.claude/config/scripts/reviewer.sh S", "cp \"$CTX\" " + sys.argv[4] + " #")
 b = b.replace("<out-file>", "x")
+if sys.argv[6]:  # mutation: every guard on a failed redaction removed (pipefail, the redactor's exit status in both blocks, the non-empty checks), so a failing redactor must now reach the reviewer
+    n = b
+    b = b.replace("set -o pipefail; ", "").replace(" && [ -s .claude/review/review-input.diff ] && echo", " && echo").replace('[ -s "$R/.claude/review/review-input.diff" ] && ', "")
+    b = b.replace("| " + sys.argv[2] + " > .claude", "| { " + sys.argv[2] + " || true; } > .claude").replace(sys.argv[2] + ' --text < "$RAW" > "$CTX" &&', '{ ' + sys.argv[2] + ' --text < "$RAW" > "$CTX" || true; } &&')
+    assert b != n and "pipefail" not in b and b.count("|| true") == 2
 # WHY the dispatch is simulated here: the diff families' block only BUILDS the one context file (the dispatch lines live in the paragraph); the stub reviewer receives exactly that file.
 b += "\n[ -s .claude/review/review-context.txt ] && cp .claude/review/review-context.txt " + sys.argv[4] + "\n"  # WHY the fixed path: the block runs in a subshell (its raw-file exit trap), so $CTX is not visible after it
 open(sys.argv[3], "w").write(b + "\n")
@@ -791,7 +798,7 @@ OPEN FINDINGS:
 none}" > .claude/review/requirements.raw.txt )
   # WHY explicit stdin and a bound (cc11 r36): a redactor fake that runs `cat` read the SUITE's stdin, so with a terminal or an open pipe attached the case hung forever.
   # The block gets /dev/null, and tmo turns any future stdin reader into a named FAIL instead of a hang (a timeout is also not a pass for the `expect fail` callers).
-  rm -f "$tmp/reviewer-called"; ( cd "$tmp/sendrepo" && tmo "${SENDTRY_TMO:-30}" bash "$tmp/sendtry.sh" >/dev/null 2>&1 < /dev/null ) || { [ $? -eq 124 ] && bad "sendtry timed out after ${SENDTRY_TMO:-30}s: the fallback block or a fake in it is waiting on stdin"; }; [ -f "$tmp/reviewer-called" ]
+  rm -f "$tmp/reviewer-called"; ( cd "$tmp/sendrepo" && tmo "${SENDTRY_TMO:-30}" bash "$tmp/sendtry.sh" > "$tmp/sendtry.out" 2>&1 < /dev/null ) || { [ $? -eq 124 ] && bad "sendtry timed out after ${SENDTRY_TMO:-30}s: the fallback block or a fake in it is waiting on stdin"; }; [ -f "$tmp/reviewer-called" ]
 }
 expect pass "the fallback sequence reaches the reviewer when the redaction script works" sendtry "$red"
 # r22 finding 1: the requirements text is hostile (a line EOF, a command substitution, backticks, a REVIEW_RECORD_END line). It reaches the block only as a file, so nothing runs and every byte arrives.
@@ -811,11 +818,17 @@ SENDRAW="$HOSTILE" sendtry "$red" || true
 expect fail "a hostile requirements text (EOF line, command substitution, backticks) executes nothing" test -e "$tmp/pwned"
 expect pass "every byte of the hostile requirements text arrives in the context the reviewer gets" bash -c 'grep -qxF "EOF" "$1" && grep -qxF "\$(touch $2/pwned)" "$1" && grep -qxF "\`touch $2/pwned\`" "$1" && grep -qxF "REVIEW_RECORD_END" "$1" && grep -qxF "DIFF:" "$1"' _ "$tmp/reviewer-called" "$tmp"
 expect fail "the fallback sequence never reaches the reviewer when the redaction script is missing" sendtry "$tmp/no-such-redactor.sh"
+# WHY the reason is asserted (cc11 r58): "the reviewer was not called" also holds when something unrelated broke, so each negative case must show the block's own redaction-failure message and a working snapshot step.
+expect pass "the missing-redactor case is refused by the redaction guard, not by a broken snapshot step" bash -c 'sendtry_out="$1"; grep -q "no review input (the diff or its redaction failed" "$sendtry_out" && ! grep -qi "review-snapshot.sh.*\(not found\|No such file\)" "$sendtry_out"' _ "$tmp/sendtry.out"
 printf '#!/bin/sh\ncat; exit 3\n' > "$tmp/bad-redactor.sh"; chmod +x "$tmp/bad-redactor.sh"
 expect fail "the fallback sequence never reaches the reviewer when the redaction script exits non-zero" sendtry "$tmp/bad-redactor.sh"
+expect pass "the failing-redactor case is refused by the redaction guard, not by a broken snapshot step" bash -c 'grep -q "no review input (the diff or its redaction failed" "$1" && ! grep -qi "review-snapshot.sh.*\(not found\|No such file\)" "$1"' _ "$tmp/sendtry.out"
+# mutation: with the redaction guards removed both negative cases reach the reviewer, so they do exercise redactor-failure handling
+expect pass "mutation: with the redactor-failure guards removed a failing redactor reaches the reviewer (the negative cases are not passing for another reason)" bash -c "$(declare -f tmo bad sendtry); here='$here'; tmp='$tmp'; red='$red'; fail=0; SENDMUT=1 sendtry '$tmp/bad-redactor.sh'" 
+expect pass "mutation: with the redactor-failure guards removed a missing redactor reaches the reviewer" bash -c "$(declare -f tmo bad sendtry); here='$here'; tmp='$tmp'; red='$red'; fail=0; SENDMUT=1 sendtry '$tmp/no-such-redactor.sh'"
 # r36: the same fake with the suite's stdin attached to a pipe that never closes must finish, and a block that DID read stdin must fail with the named timeout
 # WHY sleep 30 held open and an outer 15s bound: a reader of the inherited stdin would block until the pipe closes, so a still-open pipe past the bound is the hang.
-sendtry_open_stdin() { sleep 30 | tmo 15 bash -c "$(declare -f tmo bad sendtry); here='$here'; tmp='$tmp'; fail=0; SENDTRY_TMO=100; sendtry '$tmp/bad-redactor.sh'; echo \"fail=\$fail\"" 2>&1 | tail -1; }
+sendtry_open_stdin() { sleep 30 | tmo 15 bash -c "$(declare -f tmo bad sendtry); here='$here'; tmp='$tmp'; red='$red'; fail=0; SENDTRY_TMO=100; sendtry '$tmp/bad-redactor.sh'; echo \"fail=\$fail\"" 2>&1 | tail -1; }
 expect pass "sendtry finishes with a never-closing stdin attached (no case inherits the suite's stdin)" test "$(sendtry_open_stdin)" = "fail=0"
 printf '#!/bin/sh\nsleep 30; exit 3\n' > "$tmp/slow-redactor.sh"; chmod +x "$tmp/slow-redactor.sh"
 expect pass "a block that never returns fails with the named sendtry timeout instead of hanging (2s bound)" test "$( ( SENDTRY_TMO=2; sendtry "$tmp/slow-redactor.sh" ) 2>&1 | grep -c '^FAIL: sendtry timed out after 2s' )" = 1
