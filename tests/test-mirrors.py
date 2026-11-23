@@ -203,7 +203,7 @@ for f in CTXFILES:
             continue
         # WHY the quoted ${START_SHA:?} (round 15 finding 3): an unset START_SHA made `git diff $START_SHA` read the index, not the run's changes; the :? form fails the pipeline and sends nothing.
         base = "\"${START_SHA:?}\"" if "tdd-" in rel else "HEAD"
-        need = ["OPEN FINDINGS:"] + (['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "AUDIT INSTRUCTIONS:", 'NOTES=.claude/plan/audit-notes.raw.txt', 'cat "$NOTES" > "$CTX" && printf \'\\nPLAN:\\n\' >> "$CTX"', "the audit notes file or the plan file is missing, empty or unreadable: no context is sent", "file-writing tool (Write, never a heredoc, echo or printf carrying the pasted text)"] if plan else
+        need = ["OPEN FINDINGS:"] + (['reviewer.sh S "$CTX" <out-file>', 'CTX="$(mktemp)"', "AUDIT INSTRUCTIONS:", 'NOTES=.claude/review/audit-notes.raw.txt', 'cat "$NOTES" > "$CTX" && printf \'\\nPLAN:\\n\' >> "$CTX"', "the audit notes file or the plan file is missing, empty or unreadable: no context is sent", "file-writing tool (Write, never a heredoc, echo or printf carrying the pasted text)"] if plan else
                 ["TASK REQUIREMENTS:", "REVIEW INSTRUCTIONS:", "DIFF:"] + REVNEED + PARANEED + ["best-effort mask", "no context is sent"])
         for k in need:
             if k not in b:
@@ -367,18 +367,18 @@ for n in ("execute-codex", "tdd-execute-codex"):
         got.append(b)
         if cnt != 1 or not b:
             bad.append("%s: expected exactly one Review record paragraph with its command sequence (found %d)" % (rel, cnt)); continue
-        for k in ["mkdir -p .claude/review", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n'", "if H=\"$(set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh %s | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && (set -o pipefail; ~/.claude/config/scripts/redact-diff.sh < .claude/review/reviewed.diff > .claude/review/review-input.diff) && [ -s .claude/review/review-input.diff ]; then" % base, "if N=\"$(set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh %s | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && [ \"$N\" = \"$H\" ] && [ -s .claude/review/reply.raw.txt ]; then" % base, "rm -f .claude/review/final-review.txt .claude/review/reviewed.diff .claude/review/review-input.diff", "else rm -f .claude/review/reviewed.diff .claude/review/review-input.diff; echo \"no review input", "Dispatch only after it prints \"review input ready\". Send every reviewer `.claude/review/review-input.diff`", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n' \"$H\"", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"", "else rm -f .claude/review/final-review.txt", "> .claude/review/final-review.txt", "cat .claude/review/reply.raw.txt; } > .claude/review/final-review.txt && rm -f .claude/review/reply.raw.txt", "file-writing tool (Write, never a heredoc, echo or printf carrying the pasted reply)", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
+        for k in ["umask 077; mkdir -p .claude/review && chmod 700 .claude/review", "trap 'rm -f .claude/review/reviewed.diff' EXIT; trap 'exit 1' HUP INT TERM", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n'", "if H=\"$(set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh %s | tee .claude/review/reviewed.diff | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.diff ] && (set -o pipefail; ~/.claude/config/scripts/redact-diff.sh < .claude/review/reviewed.diff > .claude/review/review-input.diff) && [ -s .claude/review/review-input.diff ] && printf '%%s\\n' \"$H\" > .claude/review/reviewed.sha; then" % base, "if N=\"$(set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh %s | shasum -a 256 | cut -d' ' -f1)\" && [ -s .claude/review/reviewed.sha ] && [ \"$N\" = \"$H\" ] && [ -s .claude/review/reply.raw.txt ]; then" % base, "rm -f .claude/review/final-review.txt .claude/review/reviewed.diff .claude/review/reviewed.sha .claude/review/review-input.diff", "else rm -f .claude/review/reviewed.diff .claude/review/reviewed.sha .claude/review/review-input.diff; echo \"no review input", "Dispatch only after it prints \"review input ready\". Send every reviewer `.claude/review/review-input.diff`", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS: redacted-snapshot\\n' \"$H\"", "H=\"$(cat .claude/review/reviewed.sha 2>/dev/null)\"", "(cd \"$R\" || exit 1; umask 077", "else rm -f .claude/review/final-review.txt", "> .claude/review/final-review.txt", "cat .claude/review/reply.raw.txt; } > .claude/review/final-review.txt && rm -f .claude/review/reply.raw.txt", "file-writing tool (Write, never a heredoc, echo or printf carrying the pasted reply)", "makes the record stale", "AUDIT-STATUS: UNREVIEWED"]:
             if k not in b:
                 bad.append("%s: the Review record sequence lacks %r" % (rel, k[:60]))
         # r13 finding 2: ORDER is the rule. Snapshot and hash BEFORE dispatch (step 1), then after the reply compare the current tree with that hash (step 2) and only then write the record, whose hash is
         # the pre-dispatch one. A second `H=$(git diff` anywhere would let the hash move to after the call, so exactly one tree-derived assignment is allowed.
-        pos = [b.find(x) for x in ["| tee .claude/review/reviewed.diff", "Send every reviewer `.claude/review/review-input.diff`", "H=\"$(shasum -a 256 < .claude/review/reviewed.diff", "[ \"$N\" = \"$H\" ]", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS:"]]
+        pos = [b.find(x) for x in ["| tee .claude/review/reviewed.diff", "Send every reviewer `.claude/review/review-input.diff`", "H=\"$(cat .claude/review/reviewed.sha", "[ \"$N\" = \"$H\" ]", "printf 'REVIEWED-DIFF: %s\\nREVIEWED-AS:"]]
         if min(pos) < 0 or pos != sorted(pos):
             bad.append("%s: the Review record steps are not in the order snapshot and hash, dispatch, compare after the reply, write the record" % rel)
         if b.count('H="$(set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh') != 1 or b.count('H="$(git diff') != 0:
             bad.append("%s: the Review record takes H from the tree more than once (the hash must be taken before dispatch only)" % rel)
         # r14 finding 1: every tree-derived hash is a checked pipeline (pipefail) and an empty snapshot never counts, at step 1 and at step 2; a failed or empty diff voids the round (old record removed).
-        if b.count("[ -s .claude/review/reviewed.diff ]") != 2 or b.count("set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh") != 2:
+        if b.count("[ -s .claude/review/reviewed.diff ]") != 1 or b.count("[ -s .claude/review/reviewed.sha ]") != 1 or b.count("set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh") != 2:
             bad.append("%s: the Review record steps do not both check the diff pipeline status and an empty snapshot" % rel)
     for f in files(n):
         # r19 finding 1: the primary reviewer is handed .claude/review/review-input.diff (the snapshot after redact-diff.sh), never the output of a fresh git diff and never the raw snapshot.
@@ -389,8 +389,8 @@ for n in ("execute-codex", "tdd-execute-codex"):
         # r15 finding 2: both steps resolve the repository root BEFORE touching .claude/review and run there (a subshell, so the caller's folder is unchanged); a failed lookup prints and records nothing.
         # WHY: the record paths are relative, so from a subfolder the record landed in the wrong place while only the root directory was excluded from the diff.
         RL = 'if R="$(git rev-parse --show-toplevel)" && [ -n "$R" ]; then (cd "$R" || exit 1'
-        if b and (b.count(RL) != 2 or b.count("no repo root (git rev-parse --show-toplevel failed)") != 2 or b.find(RL) > b.find("mkdir -p .claude/review")
-                  or b.rfind(RL) < b.find("Send every reviewer `.claude/review/review-input.diff`") or b.rfind(RL) > b.find("H=\"$(shasum -a 256 < .claude/review/reviewed.diff")):
+        if b and (b.count(RL) != 2 or b.count("no repo root (git rev-parse --show-toplevel failed)") != 2 or b.find(RL) > b.find("umask 077; mkdir -p .claude/review")
+                  or b.rfind(RL) < b.find("Send every reviewer `.claude/review/review-input.diff`") or b.rfind(RL) > b.find("H=\"$(cat .claude/review/reviewed.sha")):
             bad.append("%s: both Review record steps must resolve the repo root (git rev-parse --show-toplevel) before using .claude/review" % os.path.relpath(f, root))
     if got[0] != got[1]:
         bad.append("%s: the Review record paragraph differs between skill and command" % n)
@@ -425,7 +425,7 @@ for n in PROMPTSITES:
                 bad.append("%s: expected exactly one Review input paragraph with its command sequence" % rel)
             else:
                 code, base2 = m.group(1), ("\"${START_SHA:?}\"" if n.startswith("tdd-") else "HEAD")
-                for k in ['if R="$(git rev-parse --show-toplevel)" && [ -n "$R" ]; then (cd "$R" || exit 1', "mkdir -p .claude/review; rm -f .claude/review/review-input.diff",
+                for k in ['if R="$(git rev-parse --show-toplevel)" && [ -n "$R" ]; then (cd "$R" || exit 1', "umask 077; mkdir -p .claude/review && chmod 700 .claude/review; rm -f .claude/review/review-input.diff",
                           "(set -o pipefail; ~/.claude/config/scripts/review-snapshot.sh %s | ~/.claude/config/scripts/redact-diff.sh > .claude/review/review-input.diff) && [ -s .claude/review/review-input.diff ]" % base2,
                           'echo "review input ready', "rm -f .claude/review/review-input.diff; echo \"no review input", "do NOT dispatch any reviewer", "no repo root (git rev-parse --show-toplevel failed)"]:
                     if k not in code:
@@ -530,5 +530,24 @@ for sp in sorted(glob.glob(os.path.join(sdir, "*.sh"))):
         continue
     if rd and not [l for l in rd if "scripts/%s.sh" % nm in l and "second line" in l and ("%s v%s" % (nm, sm.group(1))) in l]:
         bad.append("README.md: no line says that scripts/%s.sh carries '%s v%s' on its second line" % (nm, nm, sm.group(1)))
+# r54: every skill, command and shared reference that touches .claude/review (unredacted task text, prompts, replies and diffs) tells the model to create the folder private (mode 700, umask 077) before the first
+# file is written, every command that creates it does the same, every context builder writes under umask 077, and the Review record step 1 deletes the raw snapshot on every exit path.
+# WHY: the folder used to be created with the default umask, so under umask 022 a copy of inline credentials was world-readable and the raw snapshot outlived the review.
+PRIV = 'R="$(git rev-parse --show-toplevel)" && (umask 077; mkdir -p "$R/.claude/review" && chmod 700 "$R/.claude/review")'
+for f in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")) + glob.glob(os.path.join(root, "skills", "*", "reference.md")) + glob.glob(os.path.join(root, "commands", "*.md"))):
+    rel = os.path.relpath(f, root); t = open(f, encoding="utf-8").read()
+    if ".claude/review" not in t:
+        continue
+    if t.count("**Private review folder (before any file is written under `.claude/review`)**") != 1 or PRIV not in t:
+        bad.append("%s: lacks the one Private review folder paragraph with its mode 700 command" % rel)
+    elif t.find(".claude/review") != t.find("**Private review folder (before any file is written under `") + len("**Private review folder (before any file is written under `"):
+        bad.append("%s: the Private review folder paragraph comes after the first use of .claude/review" % rel)
+    for m in re.finditer(r"mkdir -p \.claude/review", t):
+        if not t[:m.start()].endswith("umask 077; ") or not t[m.end():].startswith(" && chmod 700 .claude/review"):
+            bad.append("%s: a command creates .claude/review without 'umask 077; ' before and ' && chmod 700 .claude/review' after" % rel)
+    if t.count('R="$(git rev-parse --show-toplevel)" || R=""\nCTX=') != t.count('umask 077\nR="$(git rev-parse --show-toplevel)" || R=""\nCTX='):
+        bad.append("%s: a Review context builder does not run under umask 077" % rel)
+    if "reviewed.diff" in t and "trap 'rm -f .claude/review/reviewed.diff' EXIT; trap 'exit 1' HUP INT TERM" not in t:
+        bad.append("%s: the raw snapshot is written without an exit trap that deletes it" % rel)
 print("\n".join(bad))
 sys.exit(1 if bad else 0)

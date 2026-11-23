@@ -850,8 +850,8 @@ PYFB
   mkdir -p "$tmp/fbrepo/.claude/review"
   case "$2" in
     noraw) ;;
-    emptyraw) : > "$tmp/fbrepo/.claude/review/requirements.raw.txt"; : > "$tmp/fbrepo/.claude/plan/audit-notes.raw.txt" ;;
-    *) printf 'TASK REQUIREMENTS:\nr\n\nREVIEW INSTRUCTIONS:\ni\n\nOPEN FINDINGS:\nnone\n' > "$tmp/fbrepo/.claude/review/requirements.raw.txt"; printf 'AUDIT INSTRUCTIONS:\ni\n\nOPEN FINDINGS:\nnone\n' > "$tmp/fbrepo/.claude/plan/audit-notes.raw.txt" ;;
+    emptyraw) : > "$tmp/fbrepo/.claude/review/requirements.raw.txt"; : > "$tmp/fbrepo/.claude/review/audit-notes.raw.txt" ;;
+    *) printf 'TASK REQUIREMENTS:\nr\n\nREVIEW INSTRUCTIONS:\ni\n\nOPEN FINDINGS:\nnone\n' > "$tmp/fbrepo/.claude/review/requirements.raw.txt"; printf 'AUDIT INSTRUCTIONS:\ni\n\nOPEN FINDINGS:\nnone\n' > "$tmp/fbrepo/.claude/review/audit-notes.raw.txt" ;;
   esac
   rm -f "$tmp/fb-called"; ( cd "$tmp/fbrepo" && TMPDIR="$tmp/fbtmp" START_SHA="$(git rev-parse HEAD)" bash "$tmp/fb.sh" >/dev/null 2>&1 )
   FBLEFT="$(ls -A "$tmp/fbtmp" | wc -l | tr -d ' ')"; [ -f "$tmp/fb-called" ]
@@ -978,10 +978,10 @@ mirneg "a claude-codex Review context that pastes the requirements into a heredo
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
-    t = open(p).read(); t2 = t.replace("""H="$(shasum -a 256 < .claude/review/reviewed.diff | cut -d' ' -f1)\"""", """H="$(git diff HEAD | shasum -a 256 | cut -d' ' -f1)\""""); assert t2 != t
+    t = open(p).read(); t2 = t.replace("""H="$(cat .claude/review/reviewed.sha 2>/dev/null)\"""", """H="$(git diff HEAD | shasum -a 256 | cut -d' ' -f1)\""""); assert t2 != t
     open(p, "w").write(t2)
 PYX
-mirneg "a Review record whose hash is moved back to after the reviewer call is caught" 'Review record sequence lacks .H=\"\$\(shasum' "$tmp/mir8"; mirc execute-codex
+mirneg "a Review record whose hash is moved back to after the reviewer call is caught" 'Review record sequence lacks .H=\"\$\(cat' "$tmp/mir8"; mirc execute-codex
 python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
@@ -1014,15 +1014,15 @@ mirneg "a Review record step 1 that no longer checks the diff pipeline status is
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
-    t = open(p).read(); t2 = t.replace(""" && [ -s .claude/review/reviewed.diff ] && [ "$N\"""", """ && [ "$N\""""); assert t2 != t
+    t = open(p).read(); t2 = t.replace(""" && [ -s .claude/review/reviewed.sha ] && [ "$N\"""", """ && [ "$N\""""); assert t2 != t
     open(p, "w").write(t2)
 PYX
 mirneg "a Review record step 2 that accepts an empty snapshot is caught" 'Review record sequence lacks .if N=' "$tmp/mir8"; mirc execute-codex
 python3 - "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
 import sys; p=sys.argv[1]; s=open(p).read()
-a = 'if R="$(git rev-parse --show-toplevel)" && [ -n "$R" ]; then (cd "$R" || exit 1\n'
-assert s.count(a) == 2
-k = s.rindex(a); open(p, "w").write(s[:k] + s[k+len(a):])
+a = 'if R="$(git rev-parse --show-toplevel)" && [ -n "$R" ]; then (cd "$R" || exit 1; umask 077\n'
+assert s.count(a) == 1
+k = s.index(a); open(p, "w").write(s[:k] + s[k+len(a):])
 PYX
 mirneg "a Review record step 2 that no longer resolves the repo root is caught" 'must resolve the repo root' "$tmp/mir8"; mirc tdd-execute-codex
 # r20 finding 2: secrets in the task requirements text are masked by the same redaction step that masks the diff (plain text, not only diff lines).
@@ -1073,7 +1073,7 @@ done
 python3 - "$tmp/mir8/skills/execute-codex/SKILL.md" "$tmp/mir8/commands/execute-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
-    t = open(p).read(); t2 = t.replace("Send every reviewer `.claude/review/review-input.diff` (the primary reviewer and the tier S fallback alike), never a fresh `git diff` and never `.claude/review/reviewed.diff`", "Send the reviewer `.claude/review/reviewed.diff`, never a fresh `git diff`"); assert t2 != t, p
+    t = open(p).read(); t2 = t.replace("Send every reviewer `.claude/review/review-input.diff` (the primary reviewer and the tier S fallback alike), never a fresh `git diff` and never the raw snapshot", "Send the reviewer `.claude/review/reviewed.diff`, never a fresh `git diff`"); assert t2 != t, p
     open(p, "w").write(t2)
 PYX
 mirneg "an execute-codex code-reviewer sent the raw snapshot is caught" 'the raw snapshot is sent to a reviewer|Review record sequence lacks' "$tmp/mir8"; mirc execute-codex
@@ -2207,6 +2207,29 @@ rrreply() { [ -z "${RRNOREPLY:-}" ] || return 0; mkdir -p "$tmp/rr/.claude/revie
 rrstep() { rrreply; (cd "$tmp/rr" && git add -N app.py && base="$(git rev-list --max-parents=0 HEAD)" && sed "s/review-snapshot.sh HEAD/review-snapshot.sh $base/g; s/XXNOPLACEHOLDER//" "$tmp/$1" | bash -e) >> "$tmp/rrout.txt" 2>&1; }
 rrmk; rrstep step1.sh; rrstep step2.sh
 expect pass "the prescribed sequence on an unchanged tree writes a record the checker accepts" rr
+# r54 finding 1: the review folder holds unredacted snapshots, prompts and replies, so the prescribed commands must leave it mode 700 and every file they write mode 600 even under umask 022, and the raw
+# snapshot must be gone once its hash is recorded (and on a failed step). The probe stands in for the redactor, records the modes at the moment the raw snapshot exists, then runs the real redactor.
+modeof() { python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$1"; }
+cat > "$tmp/probe-redact.sh" <<PROBE
+#!/usr/bin/env bash
+d="\$PWD/.claude/review"
+python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:], oct(os.stat(sys.argv[2]).st_mode & 0o777)[2:])' "\$d" "\$d/reviewed.diff" > "$tmp/probe.modes" 2>&1
+exec "$red" "\$@"
+PROBE
+chmod +x "$tmp/probe-redact.sh"
+sed "s#$red#$tmp/probe-redact.sh#g" "$tmp/step1.sh" > "$tmp/step1-probe.sh"
+rrmk; rm -f "$tmp/probe.modes"; (umask 022; RRNOREPLY=1 rrstep step1-probe.sh)
+expect pass "r54: during step 1 the review folder is mode 700 and the raw snapshot mode 600 under umask 022" test "$(cat "$tmp/probe.modes" 2>/dev/null)" = "700 600"
+expect pass "r54: after step 1 the redacted review input is mode 600" test "$(modeof "$tmp/rr/.claude/review/review-input.diff")" = 600
+expect fail "r54: after step 1 no raw snapshot is left (only its hash is kept)" test -e "$tmp/rr/.claude/review/reviewed.diff"
+expect pass "r54: step 1 records the snapshot hash in reviewed.sha" test -s "$tmp/rr/.claude/review/reviewed.sha"
+(umask 022; rrstep step2.sh)
+expect pass "r54: the record step still writes a record the checker accepts without the raw snapshot" rr
+expect pass "r54: the review record file is mode 600 under umask 022" test "$(modeof "$tmp/rr/.claude/review/final-review.txt")" = 600
+sed "s#$red#/usr/bin/false#g" "$tmp/step1.sh" > "$tmp/step1-fail.sh"
+rrmk; (umask 022; RRNOREPLY=1 rrstep step1-fail.sh)
+expect fail "r54: a step 1 whose redaction fails leaves no raw snapshot behind" test -e "$tmp/rr/.claude/review/reviewed.diff"
+expect pass "control: that failed step 1 said it dispatches no reviewer" grep -q "no review input" "$tmp/rrout.txt"
 rrmk; rrstep step1.sh; printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"; rrstep step2.sh
 expect fail "the prescribed sequence voids the round when a file is edited while the reviewer ran (no record, nothing approved)" test -s "$tmp/rr/.claude/review/final-review.txt"
 expect pass "control: the edited-while-reviewing round is void (the block itself said so)" grep -Eq "this round is void" "$tmp/rrout.txt"
@@ -2272,7 +2295,7 @@ expect pass "the block run from a subfolder writes a record at the repo root tha
 expectm fail "review record: a failing toplevel lookup fails the check and says so" 'cannot locate the review record' env FAILSUB=--show-toplevel PATH="$tmp/stubgit:$PATH" python3 "$here/check-review-record.py" "$tmp/rr" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
 expect pass "the checker run with a subfolder path reads the record at the repo root" python3 "$here/check-review-record.py" "$tmp/rr/sub/deeper" "$(git -C "$tmp/rr" rev-list --max-parents=0 HEAD)"
 expect fail "the block run from a subfolder leaves no .claude directory in the subfolder" test -e "$tmp/rr/sub/deeper/.claude" -o -e "$tmp/rr/sub/.claude"
-expect pass "the block run from a subfolder kept the snapshot at the repo root" test -s "$tmp/rr/.claude/review/reviewed.diff"
+expect pass "the block run from a subfolder kept the snapshot hash at the repo root" test -s "$tmp/rr/.claude/review/reviewed.sha"
 rrmk; mkdir -p "$tmp/rr/sub"; RRNOREPLY=1 RRCWD="$tmp/rr/sub" rrstepx step1.sh rev-parse; RRNOREPLY=1 RRCWD="$tmp/rr/sub" rrstepx step2.sh rev-parse
 expect fail "a failing toplevel lookup records nothing, at the root or in the subfolder" test -e "$tmp/rr/.claude" -o -e "$tmp/rr/sub/.claude"
 expect pass "control: a failing toplevel lookup is reported by the block" grep -q "no repo root" "$tmp/rrout.txt"
