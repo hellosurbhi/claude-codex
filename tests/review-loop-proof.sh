@@ -161,7 +161,7 @@ if [[ $scenario == real ]]; then
     python3 - "$@" <<'PY'
 import json, os, sys
 s = {"sandbox": {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False, "autoAllowBashIfSandboxed": True,
-     "excludedCommands": [sys.argv[4] + " *", os.path.expanduser(sys.argv[4]) + " *"],
+     "excludedCommands": [sys.argv[4] + " *", os.path.expanduser(sys.argv[4]) + " *", "codex --version"],
      "filesystem": {"allowWrite": [sys.argv[3]], "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"]}, "network": {"allowedDomains": []}}}
 if sys.argv[2]:
     s["hooks"] = {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "python3 " + sys.argv[2]}]}]}
