@@ -49,6 +49,9 @@
 # environment would change the bytes. Command-line -c and flags outrank repo, user and system config, so nothing a user configures can reach
 # the output. Renames are OFF on purpose: rename detection depends on similarity heuristics and diff.renames, so the reviewer sees a plain
 # delete plus add, which is always complete. core.quotePath=true (the default) makes non-ASCII names print as ASCII octal escapes.
+# WHY index.maxPathLen is pinned (git 2.56 key, cc11 r42): a repo config can shrink it, and then update-index skips every longer path with only an
+# "Ignoring path" line on stderr and exit 0, so the reviewed diff silently omits those files. 1073740799 is git's own default; older git ignores the key.
+# Removing the pin reopens that hole on git >= 2.56 (tests/check-snapshot-config-keys.py flags it there; git 2.43 cannot).
 # WHY the three --output-indicator flags (r33): they change the +, - and space that start every hunk line, and the redactor (redact-diff.sh) reads that first byte as the side of the line. A removed private-key END
 # line printed with another prefix looked like context there and exposed the replacement key body. Git 2.43 has no config key for them (flags only, see tests/check-snapshot-config-keys.py, which would flag one
 # on a newer git); they are pinned anyway so no caller path, alias-free or not, can change them, and the redactor now also fails closed on any hunk line it cannot place.
@@ -59,7 +62,7 @@ set -o pipefail
 export LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1
 unset GIT_EXTERNAL_DIFF GIT_DIFF_OPTS GIT_PAGER GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 CFG=(-c core.quotePath=true -c core.fileMode=true -c core.symlinks=true -c core.ignoreCase=false -c core.fsmonitor=false
-     -c core.untrackedCache=false -c core.splitIndex=false -c core.sparseCheckout=false -c core.excludesFile=/dev/null -c index.sparse=false -c core.autocrlf=false -c core.safecrlf=false -c core.attributesFile=/dev/null -c core.abbrev=auto -c core.bigFileThreshold=512m -c core.ignoreStat=false
+     -c core.untrackedCache=false -c core.splitIndex=false -c core.sparseCheckout=false -c core.excludesFile=/dev/null -c index.sparse=false -c index.maxPathLen=1073740799 -c core.autocrlf=false -c core.safecrlf=false -c core.attributesFile=/dev/null -c core.abbrev=auto -c core.bigFileThreshold=512m -c core.ignoreStat=false
      -c diff.external= -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.renames=false -c diff.algorithm=myers
      -c diff.indentHeuristic=true -c diff.context=3 -c diff.interHunkContext=0 -c diff.relative=false -c diff.submodule=short
      -c diff.ignoreSubmodules=none -c diff.wsErrorHighlight=none -c diff.colorMoved=false -c diff.suppressBlankEmpty=false
