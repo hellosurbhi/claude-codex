@@ -74,7 +74,7 @@ spy_only() { if [[ -n "${CHECKERS_NO_SPY:-}" ]]; then return 0; fi; local r; "$@
 # FileNotFoundError and every `expect fail` passes vacuously. mirfresh builds a complete fixture and proves the pristine copy passes first; mirneg
 # demands the expected message and refuses a crash.
 mirn=0
-mirfresh() { rm -rf "$1"; mkdir -p "$1"; cp -R "$here/../skills" "$here/../commands" "$here/../README.md" "$1/"; mirn=$((mirn+1)); expect pass "the pristine fixture $mirn passes before its mutation" python3 "$here/test-mirrors.py" "$1"; }
+mirfresh() { rm -rf "$1"; mkdir -p "$1"; cp -R "$here/../skills" "$here/../commands" "$here/../scripts" "$here/../README.md" "$1/"; mirn=$((mirn+1)); expect pass "the pristine fixture $mirn passes before its mutation" python3 "$here/test-mirrors.py" "$1"; }
 mirneg() { local name="$1" re="$2" dir="$3" out rc; in_case=1; out="$(python3 "$here/test-mirrors.py" "$dir" 2>&1)"; rc=$?; in_case=; plain_ran=$((plain_ran+1))
   if [[ $rc -ne 0 ]] && grep -Eq -- "$re" <<<"$out" && ! grep -Eq 'Traceback|FileNotFoundError' <<<"$out"; then ran_names+="$name"$'\n'; ok "$name"; else bad "$name (rc=$rc, wanted /$re/ and no crash; got: $(head -c 300 <<<"$out" | tr '\n' ' '))"; fi; }
 # cc11-main-r2 finding 6: the python3 timeout stand-in must kill the whole process group, not only its child, or a timed-out launcher leaves reviewer and tee processes running.
