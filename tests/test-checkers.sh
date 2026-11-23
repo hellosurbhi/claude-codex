@@ -2559,6 +2559,8 @@ done
 # cc11 r56: reader options are deny-by-default (generated table: every file-taking option x attached/separate/=/bundled x inside/outside/../symlink, unknown options, legit commands)
 expect pass "hook r56: every reader option form is checked (generated table, 0 failures)" python3 "$here/check-hook-options.py" "$hk"
 python3 -c 'import sys; s=open(sys.argv[1]).read(); a="def check_reader(prog, args):"; assert a in s; open(sys.argv[2],"w").write(s.replace(a, a+"\n    return  # mutant: options unchecked", 1))' "$hk" "$tmp/hook-noopts.py"
+python3 -c 'import sys; s=open(sys.argv[1]).read(); a="    if prog == \"printf\":"; assert a in s; open(sys.argv[2],"w").write(s.replace(a, "    if prog == \"printf\":\n        return  # mutant: printf unchecked\n    if False:", 1))' "$hk" "$tmp/hook-noprintf.py"
+expect pass "hook r57: the generated table fails when printf options are not refused (mutation)" sh -c '! python3 "$1" "$2" > /dev/null 2>&1' _ "$here/check-hook-options.py" "$tmp/hook-noprintf.py"
 expect pass "hook r56: the generated table fails when reader arguments are not checked (mutation)" sh -c '! python3 "$1" "$2" > /dev/null 2>&1' _ "$here/check-hook-options.py" "$tmp/hook-noopts.py"
 for c in 'git -c core.pager=id log' 'git log -c' 'git diff --output=/tmp/x' 'git diff -o x' 'git branch newbranch' 'git branch -D main' 'git config --list' 'git commit -m x' 'git push' 'git -C / status' 'git log --exec-path=/tmp' 'git alias.x'; do
   expect pass "hook: git form denied: $c" hdeny "$c"

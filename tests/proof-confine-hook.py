@@ -336,22 +336,33 @@ GRAMMAR = {
                 unified="opt", context="opt", color="opt", exclude="str", label="str", ignore_matching_lines="str", show_function_line="str",
                 exclude_from="file", from_file="file", to_file="file", starting_file="file")),
 }
-TEST_OPS = {"-a", "-o", "-b", "-c", "-d", "-e", "-f", "-g", "-G", "-h", "-k", "-L", "-n", "-N", "-O", "-p", "-r", "-s", "-S", "-t", "-u", "-w", "-x", "-z",
-            "-nt", "-ot", "-ef", "-eq", "-ne", "-gt", "-ge", "-lt", "-le"}
 
-def check_reader(prog, args):
-    """Parse a reader's arguments with its explicit option grammar, validate every operand and every file-taking option value with readable(), refuse the unknown."""
+# git: the same deny-by-default grammar per read subcommand (cc11 r57). The old code refused a list of known-bad options, so every option not on that list passed. Only options that
+# take no file operand are listed; --output, -O, --no-index, --ext-diff, --textconv, --exclude-from, -X, --stdin, --filters, --git-dir and every config option stay absent.
+_GD = ("pusRzwbaM", {"U": "num", "S": "str", "G": "str", "n": "num"},
+       _g("cached staged stat shortstat numstat name-only name-status raw patch no-patch no-color no-ext-diff no-textconv minimal patience histogram summary check full-index binary "
+          "ignore-space-change ignore-all-space ignore-blank-lines text exit-code quiet oneline graph all decorate no-decorate abbrev-commit no-abbrev-commit first-parent merges "
+          "no-merges reverse follow all-match no-renames", unified="num", abbrev="opt", color="opt", word_diff="opt", find_renames="opt", max_count="num", skip="num", since="str",
+          until="str", after="str", before="str", author="str", committer="str", grep="str", format="str", pretty="opt", date="str", diff_filter="str"))
+GIT_GRAMMAR = {
+    "status": ("sbvz", {}, _g("short branch porcelain long verbose no-renames ahead-behind no-ahead-behind", untracked_files="opt", ignored="opt")),
+    "diff": _GD, "log": _GD, "show": _GD,
+    "rev-parse": ("q", {}, _g("show-toplevel is-inside-work-tree is-bare-repository show-prefix show-cdup verify quiet symbolic-full-name", abbrev_ref="opt", short="opt")),
+    "ls-files": ("cdmoskzt", {"x": "str"}, _g("cached deleted modified others stage unmerged killed ignored exclude-standard error-unmatch full-name no-empty-directory", exclude="str")),
+    "branch": ("arv", {}, _g("list show-current all remotes verbose")),
+    "cat-file": ("tspe", {}, _g("batch-all-objects", batch="opt", batch_check="opt")),
+    "rev-list": ("n", {"n": "num"}, _g("all count reverse first-parent merges no-merges oneline left-right", max_count="num", skip="num", since="str", until="str", after="str", before="str", author="str",
+                                      committer="str", grep="str")),
+}
+TEST_OPS = {"-a", "-o", "-b", "-c", "-d", "-e", "-f", "-g", "-G", "-h", "-k", "-L", "-n", "-N", "-O", "-p", "-r", "-s", "-S", "-t", "-u", "-w", "-x", "-z",
+            "-nt", "-ot", "-ef"}
+# WHY no -v, -R, -eq, -ne, -gt, -ge, -lt, -le (cc11 r57): bash evaluates the operand of `test -v NAME` as a variable name WITH an array subscript, so `-v 'a[$(cmd)]'` runs cmd although
+# the word is single-quoted; the integer comparisons are the same family (and [[ ]] and (( )) evaluate arithmetic outright). Nothing the skills need compares numbers.
+
+def parse_args(prog, args, grammar):
+    """Split args into operands with an explicit option grammar (see GRAMMAR). Returns (operands, pattern_given, recursive); raises Deny on any option the grammar does not list."""
     ops, pattern_given, recursive, done = [], False, False, False
-    if prog in ("test", "["):
-        for a in args:
-            if a.startswith("-") and len(a) > 1 and a not in TEST_OPS:
-                raise Deny("test operator not allowed: " + a)
-            if a in ("]", "!", "=") or a.startswith("-") or not a.startswith(("/", "~", ".")):
-                continue
-            if not readable(a):
-                raise Deny("reads outside the scratch repo: " + a)
-        return
-    short_none, short_arg, long_opts = GRAMMAR[prog]
+    short_none, short_arg, long_opts = grammar
     def value(kind, v, opt):
         nonlocal pattern_given
         if kind == "num":
@@ -388,7 +399,7 @@ def check_reader(prog, args):
             if name == "recursive":
                 recursive = True
             continue
-        if prog in ("head", "tail", "grep") and re.fullmatch(r"-\d+", a):
+        if prog in ("head", "tail", "grep", "git log", "git rev-list") and re.fullmatch(r"-\d+", a):
             continue
         j = 1
         while j < len(a):
@@ -407,6 +418,20 @@ def check_reader(prog, args):
                 v, i = args[i], i + 1
             value(kind, v, "-" + ch)
             break
+    return ops, pattern_given, recursive
+
+def check_reader(prog, args):
+    """Parse a reader's arguments with its explicit option grammar, validate every operand and every file-taking option value with readable(), refuse the unknown."""
+    if prog in ("test", "["):
+        for a in args:
+            if a.startswith("-") and len(a) > 1 and a not in TEST_OPS:
+                raise Deny("test operator not allowed: " + a)
+            if a in ("]", "!", "=") or a.startswith("-") or not a.startswith(("/", "~", ".")):
+                continue
+            if not readable(a):
+                raise Deny("reads outside the scratch repo: " + a)
+        return
+    ops, pattern_given, recursive = parse_args(prog, args, GRAMMAR[prog])
     if prog == "grep" and not pattern_given and ops:
         ops = ops[1:]  # the pattern is never opened
     for a in ops:
@@ -447,7 +472,27 @@ def check_simple(argv, reds):
         # WHY denied outright (cc11 r38): every path argument is checked against the tool cwd the call STARTED in; a `cd` earlier on the line would silently change what later relative
         # paths mean. No recorded plan-codex run uses cd (hook.log and stream.jsonl of the passing runs), so the surface is removed instead of tracked.
         raise Deny("cd is not allowed (paths are resolved against the tool cwd, which must not move mid-command)")
-    if prog in ("echo", "printf", "true", "pwd", ":"):
+    if prog == "echo":
+        # WHY: echo only knows -n -e -E; any other dash word would be printed, but an unlisted option is refused like everywhere else (cc11 r57, one grammar for every command)
+        for a in args:
+            if not a.startswith("-"):
+                break
+            if not re.fullmatch(r"-[neE]+", a):
+                raise Deny("echo option not allowed: " + a)
+        return
+    if prog == "printf":
+        # WHY (cc11 r57 HIGH): `printf -v 'a[$(cmd)0]' '%s' x` assigns to a variable NAME and bash evaluates the array subscript in it, running cmd although the word is single-quoted. Only a
+        # literal format with literal arguments is allowed and no option at all (the lexer already refuses every expansion), so -v, -- and any other leading dash word are refused.
+        if not args or args[0].startswith("-"):
+            raise Deny("printf needs a literal format and takes no options")
+        return
+    if prog in ("true", ":"):
+        if args:
+            raise Deny(prog + " takes no arguments here")
+        return
+    if prog == "pwd":
+        if any(a not in ("-L", "-P") for a in args):
+            raise Deny("pwd takes only -L or -P")
         return
     if prog == "sleep":
         if len(args) != 1 or not re.fullmatch(r"\d{1,3}", args[0]):
@@ -469,12 +514,11 @@ def check_simple(argv, reds):
         git_guard()
         if not args or args[0] not in GIT_READ:
             raise Deny("git subcommand not allowed: " + (args[0] if args else ""))
-        if args[0] == "branch" and any(not a.startswith("-") or a not in ("-a", "-r", "-v", "-vv", "--list", "--show-current") for a in args[1:]):
-            raise Deny("git branch may only list")
-        for a in args[1:]:
-            if a in ("-c", "-o", "-C") or a.startswith(("--output", "--git-dir", "--work-tree", "-C", "-c", "-o", "--exec-path", "--ext-diff", "--no-index", "--upload-pack", "--config", "--textconv", "--open-files-in-pager", "--paginate", "-O")):
-                raise Deny("git option not allowed: " + a)
-            if not a.startswith("-") and (a.startswith(("/", "~")) or ".." in a.split("/")) and not in_root(a):
+        ops, _, _ = parse_args("git " + args[0], args[1:], GIT_GRAMMAR[args[0]])
+        if args[0] == "branch" and ops and "--list" not in args[1:]:
+            raise Deny("git branch with an operand creates a branch unless --list is given")
+        for a in ops:
+            if (a.startswith(("/", "~")) or ".." in a.split("/")) and not in_root(a):
                 raise Deny("git path outside the scratch repo: " + a)
         return
     if prog == "codex":

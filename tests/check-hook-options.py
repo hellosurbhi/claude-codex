@@ -84,7 +84,46 @@ if not only:
     for c in ("sed -f in.txt app.py", "sed -f/etc/hosts app.py", "sed -n p app.py", "sed --file=in.txt app.py", "awk -f in.txt app.py", "awk -f/etc/hosts app.py", "awk 1 app.py",
               "find . -name x", "find / -name x", "xargs -a /etc/hosts ls", "python3 -I in.txt", "sort -o in.txt app.py", "sort app.py", "tee in.txt", "cut -f1 app.py"):
         want(c, "deny", "not a reader")
+# ---- cc11 r57: every OTHER allowed command has a grammar too, and nothing that evaluates a string as a name, subscript, arithmetic or code gets through ----
+# WHY: `printf -v 'a[$(cat /outside >&2)0]' '%s' x` runs the embedded command although it is single-quoted (bash evaluates the array subscript of a variable NAME). The hook's lexer
+# only sees one quoted word, so the construct has to be refused by name: every command the hook allows is listed below with its refused forms, and every bash form that evaluates
+# a string is listed with the payload inside single quotes. The payload is never run by this test: it only asks the hook for a decision.
+P = "'a[$(cat /outside >&2)0]'"
+if not only or "cmds" in only:
+    ev = []
+    ev += ["printf -v %s '%%s' x" % P, "printf -v x '%s' y", "printf -- '%s' x", "printf -x '%s' x", "printf -v"]
+    ev += ["read %s" % P, "read -r x", "read -a %s" % P, "read -p x y", "mapfile -t %s" % P, "readarray %s" % P, "getopts ab %s" % P, "wait -n -p %s" % P, "wait -n"]
+    ev += ["declare %s=1" % P, "declare -n x=%s" % P, "typeset -n x=%s" % P, "local %s" % P, "export %s" % P, "unset %s" % P, "readonly %s" % P, "let %s" % P, "let x=1",
+           "eval %s" % P, "eval 'id'", "source in.txt", ". in.txt", "source /etc/hosts", "alias x=id", "trap id EXIT", "exec id", "command id", "builtin id", "type %s" % P, "hash -p /x y"]
+    ev += ["test -v %s" % P, "[ -v %s ]" % P, "test -R %s" % P, "[ -R %s ]" % P, "test %s -eq 1" % P, "[ %s -eq 1 ]" % P, "[ 1 -lt %s ]" % P, "test -z %s -a -v %s" % (P, P)]
+    ev += ["[[ -v %s ]]" % P, "[[ %s -eq 1 ]]" % P, "(( %s ))" % P, "(( x=1 ))", "echo $(( %s ))" % P, "echo $((1+1))", "echo ${!x}", "echo ${x[%s]}" % P, "echo ${x}", "echo $x", 'echo "$x"', 'echo "${!x}"',
+           'echo "$(( 1 ))"', "echo `id`", "echo <(id)", "a=1", "a=1 true", "a[%s]=1" % P, "a[$(cat /outside >&2)0]=1", "x+=1", "for x in 1; do true; done", "if true; then true; fi", "{ true; }", "( true )",
+           "function f { true; }", "f() { true; }", "echo x &", "coproc id", "! true", "true || id", "true && id", "echo x | id"]
+    for c in ev:
+        want(c, "deny", "evaluates a string or is not a prescribed command")
+    # allowed commands: refused forms
+    refused = ["echo -z x", "echo -ne -z x", "echo -- x", "printf", "printf -", "true x", ": x", "pwd -x", "pwd x", "sleep", "sleep 1 2", "sleep -1", "sleep 1000", "sleep abc", "sleep 1s",
+               "mkdir -m 777 x", "mkdir -v x", "mkdir /etc/x", "mkdir ../x", "mkdir link/x", "mkdir -p .git/x", "codex", "codex exec x", "codex --version x", "codex -V", "cd .", "cd /",
+               "git", "git status --bogus", "git -c core.pager=id log", "git -C / status", "git --git-dir=/x status", "git commit", "git config -l", "git remote -v", "git stash", "git checkout x",
+               "git grep x", "git blame app.py", "git branch -D x", "git branch x", "git tag x", "git fetch", "git push", "git apply x", "git show-ref", "git log --output=out.txt", "git log -O in.txt",
+               "git diff -O/etc/hosts", "git diff --no-index /etc/hosts in.txt", "git diff --ext-diff", "git diff --textconv", "git show --textconv HEAD", "git log --follow-x", "git ls-files --exclude-from=/etc/hosts",  # canon-exempt: command text under test, not a diff taken here
+               "git ls-files -X /etc/hosts", "git ls-files --exclude-per-directory=x", "git rev-parse --git-dir", "git rev-parse --resolve-git-dir /x", "git rev-list --stdin", "git cat-file --filters HEAD:app.py",
+               "git cat-file --path=x -p HEAD", "git cat-file --textconv HEAD:app.py", "git log --exec-path=/tmp", "git log -c", "git log --paginate", "git log --open-files-in-pager", "git log --format=%x --bogus",
+               "git status -z --bogus", "git log -- /etc/hosts", "git log -- ../x", "git ls-files /etc"]
+    for c in refused:
+        want(c, "deny", "command form refused")
+    # every git read subcommand with an option no grammar lists, in each glued form
+    for sub in ("status", "diff", "log", "show", "rev-parse", "ls-files", "branch", "cat-file", "rev-list"):  # canon-exempt: command text under test, not a diff taken here
+        for o in ("--no-such", "--no-such=/etc/hosts", "-Q", "-Q/etc/hosts", "--out=/etc/hosts", "-X/etc/hosts"):
+            want("git %s %s" % (sub, o), "deny", "git %s unknown option" % sub)
+    legit = ["echo x", "echo -n x", "echo -e 'a\\nb'", "echo -ne x", "printf '%s\\n' x", "printf 'plain'", "printf '%d %s' 1 two", "true", ":", "pwd", "pwd -P", "sleep 5", "mkdir -p .claude/plan", "mkdir out",
+             "codex --version", "git status", "git status -s", "git status --short --branch", "git diff", "git diff --stat", "git diff --cached --name-only", "git diff HEAD~1 -- app.py", "git log --oneline -n 5",  # canon-exempt: command text under test, not a diff taken here
+             "git log -5 --oneline", "git log --format=%H -n1", "git log --pretty=format:%h --since=1.day", "git show HEAD", "git show --stat HEAD", "git rev-parse HEAD", "git rev-parse --show-toplevel",
+             "git ls-files", "git ls-files -o --exclude-standard", "git branch", "git branch -a", "git branch --show-current", "git branch -vv", "git cat-file -p HEAD", "git cat-file -t HEAD", "git rev-list --count HEAD",
+             "git rev-list -n 3 HEAD", "test -f app.py", "test -d .claude", "[ -f app.py ]", "[ -n x ]", "cat -n app.py", "cat > .claude/plan/x.md <<'EOF'\n$(not run)\nEOF"]
+    for c in legit:
+        want(c, "allow", "legit command")  # the hook judges the command line only, so a revision that does not exist yet is still allowed
 print("hook option cases: %d, failures: %d" % (n, len(bad)))
-for b in bad[:40]:
+for b in bad[:200]:
     print("FAIL " + b)
 sys.exit(1 if bad else 0)
