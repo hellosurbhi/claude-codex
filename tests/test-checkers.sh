@@ -2345,7 +2345,7 @@ sed 's/"allowUnsandboxedCommands": False/"allowUnsandboxedCommands": True/' "$ps
 expectm fail "a sandbox the model can retry outside of is rejected" 'REJECT: the OS sandbox allows the unsandboxed retry' python3 "$pp" "$tmp/proof-sbx-retry.sh"
 sed 's/"allowWrite": \[sys.argv\[3\]\]/"allowWrite": [sys.argv[3], "\/"]/' "$ps" > "$tmp/proof-sbx-wide.sh"
 expectm fail "a sandbox write allowlist wider than the scratch repo is rejected" 'REJECT: the OS sandbox write allowlist is not exactly the scratch repo' python3 "$pp" "$tmp/proof-sbx-wide.sh"
-sed 's/"excludedCommands": \[sys.argv\[4\] + " \*"\]/"excludedCommands": ["*"]/' "$ps" > "$tmp/proof-sbx-excl.sh"
+sed 's/"excludedCommands": \[sys.argv\[4\] + " \*", os.path.expanduser(sys.argv\[4\]) + " \*"\]/"excludedCommands": ["*"]/' "$ps" > "$tmp/proof-sbx-excl.sh"
 expectm fail "a sandbox that excludes more than the one wrapper is rejected" 'REJECT: the OS sandbox excludes more than the one wrapper' python3 "$pp" "$tmp/proof-sbx-excl.sh"
 sed 's/-e "\$canary"/-e "\$canaryx"/' "$ps" > "$tmp/proof-sbx-noprobe.sh"
 expectm fail "no start-up probe where the sandbox itself refuses a write outside the scratch repo is rejected" 'REJECT: no start-up probe that requires the sandbox itself to refuse' python3 "$pp" "$tmp/proof-sbx-noprobe.sh"

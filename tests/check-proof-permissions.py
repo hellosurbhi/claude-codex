@@ -32,7 +32,7 @@ if '"allowUnsandboxedCommands": False' not in real_b:
     reject("the OS sandbox allows the unsandboxed retry (dangerouslyDisableSandbox)")
 if '"allowWrite": [sys.argv[3]]' not in real_b or not re.search(r'sbx_settings "\$out/proof-settings.json" "\$hook" "\$repo"', real_b):
     reject("the OS sandbox write allowlist is not exactly the scratch repo")
-if '"excludedCommands": [sys.argv[4] + " *"]' not in real_b or "wrapper='~/.claude/config/scripts/codex-call.sh'" not in real_b:
+if '"excludedCommands": [sys.argv[4] + " *", os.path.expanduser(sys.argv[4]) + " *"]' not in real_b or "wrapper='~/.claude/config/scripts/codex-call.sh'" not in real_b:
     reject("the OS sandbox excludes more than the one wrapper (codex-call.sh)")
 if not re.search(r'-e "\$canary" \]\].*not permitted.*exit 2', real_b, re.S) or 'sbx_settings "$out/sbx-probe-settings.json" ""' not in real_b:
     reject("no start-up probe that requires the sandbox itself to refuse a write outside the scratch repo (hook-free probe run)")
