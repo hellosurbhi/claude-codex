@@ -305,6 +305,117 @@ def check_wrapper(name, args):
         return
     raise Deny("unknown wrapper: " + name)
 
+def _g(none="", **kinds):
+    # none: space-separated long options without a value; the keyword arguments name the others (a hyphen is written as an underscore)
+    d = {k: "none" for k in none.split()}
+    d.update({k.replace("_", "-"): v for k, v in kinds.items()})
+    return d
+
+# WHY an option grammar per reader (cc11 r56 HIGH): the old loop `continue`d on every dash-prefixed token, so `grep -f/outside/file app.py`, `grep --exclude-from=/outside`,
+# `diff -X/outside a b` or `wc --files0-from=/outside` read a file the path check never saw (the OS sandbox read exclusions cover only three credential directories, not the disk).
+# Fixing the known options would leave every other reader option a bypass, so the rule is inverted: an option is allowed only when it is listed here with the way it takes its
+# value. Entry = (short flags without a value that may be bundled, {short option: kind}, {exact long name: kind}). Kinds: none, num (digits only), str (a pattern or label that
+# is never opened), file (an operand that IS opened: checked with readable()), opt (long only, optional =value that is never opened). Anything unlisted is refused; long names
+# must match exactly (no getopt abbreviations). Options that read a LIST of further paths (wc --files0-from, file -f) are absent on purpose: checking the list file would not
+# check the paths inside it. -R, -S and tail -f are absent too (follow symlinks, hang). What breaks if an entry is added carelessly: that option becomes an unchecked read.
+GRAMMAR = {
+    "cat": ("AbeEnstTuv", {}, _g("show-all number-nonblank show-ends number squeeze-blank show-tabs show-nonprinting")),
+    "head": ("qvz", {"n": "num", "c": "num"}, _g("quiet silent verbose zero-terminated", lines="num", bytes="num")),
+    "tail": ("qvz", {"n": "num", "c": "num"}, _g("quiet silent verbose zero-terminated", lines="num", bytes="num")),
+    "ls": ("1aAdFhiklnprRsStG", {}, _g("all almost-all human-readable recursive directory classify")),
+    "wc": ("lwcmL", {}, _g("lines words bytes chars max-line-length")),
+    "file": ("bhiIkLnNpvz", {}, _g("brief mime mime-type mime-encoding")),
+    "stat": ("xsl", {}, {}),
+    "grep": ("EFGPiIvwxcLlnoqsHhbTUaZzr0123456789", {"e": "str", "f": "file", "m": "num", "A": "num", "B": "num", "C": "num"},
+             _g("extended-regexp fixed-strings basic-regexp perl-regexp ignore-case no-ignore-case invert-match word-regexp line-regexp count files-without-match files-with-matches "
+                "line-number only-matching quiet silent no-messages with-filename no-filename byte-offset initial-tab null-data null text recursive",
+                regexp="str", file="file", exclude_from="file", include="str", exclude="str", exclude_dir="str", label="str", binary_files="str",
+                max_count="num", after_context="num", before_context="num", context="num", color="opt", colour="opt")),
+    "diff": ("qsuyacrNiwbBEZtp", {"U": "num", "C": "num", "x": "str", "F": "str", "L": "str", "I": "str", "X": "file", "S": "file"},
+             _g("brief recursive new-file ignore-case ignore-all-space ignore-space-change ignore-blank-lines text report-identical-files side-by-side show-c-function strip-trailing-cr",
+                unified="opt", context="opt", color="opt", exclude="str", label="str", ignore_matching_lines="str", show_function_line="str",
+                exclude_from="file", from_file="file", to_file="file", starting_file="file")),
+}
+TEST_OPS = {"-a", "-o", "-b", "-c", "-d", "-e", "-f", "-g", "-G", "-h", "-k", "-L", "-n", "-N", "-O", "-p", "-r", "-s", "-S", "-t", "-u", "-w", "-x", "-z",
+            "-nt", "-ot", "-ef", "-eq", "-ne", "-gt", "-ge", "-lt", "-le"}
+
+def check_reader(prog, args):
+    """Parse a reader's arguments with its explicit option grammar, validate every operand and every file-taking option value with readable(), refuse the unknown."""
+    ops, pattern_given, recursive, done = [], False, False, False
+    if prog in ("test", "["):
+        for a in args:
+            if a.startswith("-") and len(a) > 1 and a not in TEST_OPS:
+                raise Deny("test operator not allowed: " + a)
+            if a in ("]", "!", "=") or a.startswith("-") or not a.startswith(("/", "~", ".")):
+                continue
+            if not readable(a):
+                raise Deny("reads outside the scratch repo: " + a)
+        return
+    short_none, short_arg, long_opts = GRAMMAR[prog]
+    def value(kind, v, opt):
+        nonlocal pattern_given
+        if kind == "num":
+            if not re.fullmatch(r"[+-]?\d+[A-Za-z]{0,2}", v):
+                raise Deny("option %s needs a number: %s" % (opt, v))
+        elif kind == "file":
+            if not readable(v):
+                raise Deny("option %s reads outside the scratch repo: %s" % (opt, v))
+        if prog == "grep" and opt in ("-f", "--file", "-e", "--regexp"):
+            pattern_given = True
+    i = 0
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if done or a == "-" or not a.startswith("-"):
+            ops.append(a)
+            continue
+        if a == "--":
+            done = True
+            continue
+        if a.startswith("--"):
+            name, eq, v = a[2:].partition("=")
+            kind = long_opts.get(name)
+            if kind is None:
+                raise Deny("%s option not allowed: %s" % (prog, a))
+            if kind == "none" and eq:
+                raise Deny("option takes no value: " + a)
+            if kind in ("num", "str", "file"):
+                if not eq:
+                    if i >= len(args):
+                        raise Deny("option needs a value: " + a)
+                    v, i = args[i], i + 1
+                value(kind, v, "--" + name)
+            if name == "recursive":
+                recursive = True
+            continue
+        if prog in ("head", "tail", "grep") and re.fullmatch(r"-\d+", a):
+            continue
+        j = 1
+        while j < len(a):
+            ch = a[j]
+            j += 1
+            if ch in short_none:
+                recursive = recursive or ch == "r"
+                continue
+            kind = short_arg.get(ch)
+            if kind is None:
+                raise Deny("%s option not allowed: -%s" % (prog, ch))
+            v = a[j:]
+            if not v:
+                if i >= len(args):
+                    raise Deny("option needs a value: -" + ch)
+                v, i = args[i], i + 1
+            value(kind, v, "-" + ch)
+            break
+    if prog == "grep" and not pattern_given and ops:
+        ops = ops[1:]  # the pattern is never opened
+    for a in ops:
+        if not readable(a):
+            raise Deny("reads outside the scratch repo: " + a)
+    if prog == "grep" and recursive and not ops and not readable("."):
+        raise Deny("recursive grep with no operand reads the working directory, which is outside the scratch repo")
+
+
 def check_simple(argv, reds):
     for op, target in reds:
         if op in (">", ">>"):
@@ -350,19 +461,7 @@ def check_simple(argv, reds):
             raise Deny("mkdir option not allowed")
         return
     if prog in READERS:
-        for a in args:
-            if a.startswith("-"):
-                if a.startswith(("--output", "-o")) and prog == "diff":
-                    raise Deny("diff output option")
-                continue
-            if prog in ("head", "tail") and re.fullmatch(r"\d+", a):
-                continue
-            if prog == "grep" and a is args[0] and not any(not x.startswith("-") for x in args[1:]):
-                continue  # the pattern when it is the only operand is read from stdin
-            if prog in ("test", "[") and (a in ("]", "!", "=") or not a.startswith(("/", "~", "."))):
-                continue
-            if not readable(a):
-                raise Deny("reads outside the scratch repo: " + a)
+        check_reader(prog, args)
         return
     if prog in ("export", "unset", "declare", "typeset", "readonly", "set", "setenv"):
         raise Deny("changing the shell environment is not allowed (the git configuration is pinned from outside): " + prog)
