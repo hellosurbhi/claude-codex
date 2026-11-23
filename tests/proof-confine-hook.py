@@ -38,12 +38,18 @@ def in_root(p):
     return bool(ROOT) and inside(real(p), ROOT)
 
 GITNAMES = (".git", ".gitattributes", ".gitmodules")
+PYLOAD = (".py", ".pyw", ".pyc", ".pyo", ".pth", ".so", ".pyd", ".dylib")
 
 def writable(p):
     # WHY no component named .git, .gitattributes or .gitmodules at ANY depth (cc11 r37 CRITICAL): git status/diff read the config of every repo they touch and may run programs it
     # names (core.fsmonitor, diff.<driver>.textconv, core.pager, hooks), so a nested `nested/.git/config` written by the agent turned the allowed `git status` into code execution
     # (the old rule only protected the root .git). .gitattributes names diff and filter drivers and .gitmodules names submodule commands, so they are closed the same way.
     r = real(p)
+    if os.path.basename(r).lower().endswith(PYLOAD) or os.path.basename(r) == "pyvenv.cfg":
+        # WHY (cc11 r40 CRITICAL, defense in depth): the sandbox-excluded wrapper runs python with the scratch repo as its working directory. The shipped wrapper now uses `python3 -I`,
+        # but the installed copy the proof runs is a separate file this repo does not control, so a planted json.py, os.py, sitecustomize.py, a .pth or an extension module must be unwritable
+        # as well. plan-codex needs only .claude/plan/*.md. What breaks if this goes: a planted module executes outside the OS sandbox on the next wrapper call.
+        return False
     return inside(r, ROOT) and not any(c in GITNAMES for c in os.path.relpath(r, ROOT).split(os.sep))
 
 def git_state(root):

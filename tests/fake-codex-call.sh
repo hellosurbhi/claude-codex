@@ -46,7 +46,7 @@ EVLOG="${EVLOG:-$(cd "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || e
 # WHY the call log is pinned next to the event log, ignoring any FAKE_LOG the caller sets: the checks read it, and a
 # model that exports its own FAKE_LOG (seen in a rep that read this script) would otherwise make real calls vanish from it.
 FAKE_LOG="$(dirname "$EVLOG")/calls.log"; export FAKE_LOG
-EVSTART="$(python3 -c 'import time; print(time.time())')"; export EVSTART
+EVSTART="$(python3 -I -c 'import time; print(time.time())')"; export EVSTART
 tid="" ; [[ -n "$resume" ]] && tid="$resume"
 exec 3>&1 4>&2
 o="$(mktemp)"; e="$(mktemp)"; pf="$(mktemp)"; prompt=""
@@ -54,7 +54,7 @@ exec >"$o" 2>"$e"
 finish() {
   local rc=$?
   exec 1>&3 2>&4
-  EV_META="${EV_META:-}" python3 "$here/evlog.py" "$EVLOG" fake "$rc" "$resume" "$tid" "$pf" "$o" "$e" -- "${argv[@]+"${argv[@]}"}"
+  EV_META="${EV_META:-}" python3 -I "$here/evlog.py" "$EVLOG" fake "$rc" "$resume" "$tid" "$pf" "$o" "$e" -- "${argv[@]+"${argv[@]}"}"
   cat "$o"; cat "$e" >&2; rm -f "$o" "$e" "$pf"
   exit "$rc"
 }
@@ -75,13 +75,13 @@ else prompt="$1"; fi
 printf '%s' "$prompt" > "$pf"
 # WHY a resume of an unknown thread dies: the real wrapper fails on a thread Codex never issued,
 # so a model that invents or mistypes a thread id must not get a quiet success.
-if [[ -n "$resume" ]] && ! python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; e = wlog.load(sys.argv[2]); sys.exit(0 if sys.argv[3] in wlog.issued_before(e, len(e)) else 1)' "$here" "$EVLOG" "$resume"; then
+if [[ -n "$resume" ]] && ! python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; e = wlog.load(sys.argv[2]); sys.exit(0 if sys.argv[3] in wlog.issued_before(e, len(e)) else 1)' "$here" "$EVLOG" "$resume"; then
   echo "codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED." >&2
   echo "ERROR: no rollout found for thread id $resume" >&2
   exit 1
 fi
 # WHY a random suffix, not the sequence number: concurrent calls must never share a thread id (r12).
-[[ -z "$resume" ]] && tid="fake-thread-$(python3 -c 'import uuid; print(uuid.uuid4().hex[:12])')"
+[[ -z "$resume" ]] && tid="fake-thread-$(python3 -I -c 'import uuid; print(uuid.uuid4().hex[:12])')"
 # FAKE_LIMIT=1: every call fails the way Codex does when the account is over quota,
 # naming its reset time (the wrapper passes this text through on a dead call).
 if [[ -n "${FAKE_LIMIT:-}" ]]; then
@@ -133,8 +133,8 @@ done
 # WHY a state hash and an impl flag on every call: a CLEAN verdict only means something if it
 # was given for the state the run ended in, and (for the tdd skills) after add() existed.
 # WHY the brace group with || true: an unmatched glob makes cat exit nonzero, which pipefail would turn into a dead fake.
-state="$(python3 "$(dirname "$0")/state-hash.py" "$dir")"
-impl=no; python3 "$(dirname "$0")/check-impl.py" "$dir/app.py" && impl=yes
+state="$(python3 -I "$(dirname "$0")/state-hash.py" "$dir")"
+impl=no; python3 -I "$(dirname "$0")/check-impl.py" "$dir/app.py" && impl=yes
 echo "THREAD_ID: $tid"
 if [[ $next == 0 ]]; then
   # WHY the same line goes into the event (EV_META): the checks read the wrapper log, so a call that died before

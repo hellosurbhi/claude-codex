@@ -164,7 +164,7 @@ s = {"sandbox": {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCo
      "excludedCommands": [sys.argv[4] + " *", os.path.expanduser(sys.argv[4]) + " *", "codex --version"],
      "filesystem": {"allowWrite": [sys.argv[3]], "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"]}, "network": {"allowedDomains": []}}}
 if sys.argv[2]:
-    s["hooks"] = {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "python3 " + sys.argv[2]}]}]}
+    s["hooks"] = {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "python3 -I " + sys.argv[2]}]}]}
 json.dump(s, open(sys.argv[1], "w"), indent=1)
 PY
   }
@@ -175,10 +175,23 @@ PY
   # outside the repo, and the hook refuses git when they differ. The variables are exported only around the claude calls and unset right after, because this script's own git calls
   # (checkers, tree hashes) need the normal configuration.
   export PROOF_GIT_BASELINE="$out/git-baseline"
-  python3 "$hook" --record-baseline "$repo" "$PROOF_GIT_BASELINE" < /dev/null || { echo "REJECT: could not record the git baseline" >&2; exit 2; }
+  python3 -I "$hook" --record-baseline "$repo" "$PROOF_GIT_BASELINE" < /dev/null || { echo "REJECT: could not record the git baseline" >&2; exit 2; }
   export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=4
   export GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false GIT_CONFIG_KEY_1=core.hooksPath GIT_CONFIG_VALUE_1=/dev/null
   export GIT_CONFIG_KEY_2=core.pager GIT_CONFIG_VALUE_2=cat GIT_CONFIG_KEY_3=diff.external GIT_CONFIG_VALUE_3=
+  # WHY the interpreter and loader variables are scrubbed and PATH is checked (cc11 r40 CRITICAL): the sandbox-excluded chain (wrapper, shim, hook) starts python, bash, git and codex from the
+  # agent's own environment and working directory, which is the scratch repo. A PYTHONPATH/PYTHONSTARTUP/BASH_ENV/NODE_OPTIONS inherited from the owner's shell, or a PATH entry that is `.`,
+  # empty, relative or inside the scratch repo, would load agent-written code outside the OS sandbox. The git pins above are kept; every other GIT_* variable is dropped (GIT_DIR,
+  # GIT_EXEC_PATH, GIT_SSH_COMMAND ... redirect git). What breaks if this goes: an owner shell with PYTHONSTARTUP set runs it in every exempt call.
+  for v in $(compgen -e); do case $v in
+    GIT_CONFIG_NOSYSTEM|GIT_CONFIG_GLOBAL|GIT_CONFIG_COUNT|GIT_CONFIG_KEY_[0-3]|GIT_CONFIG_VALUE_[0-3]) ;;
+    PYTHON*|BASH_ENV|ENV|CDPATH|NODE_OPTIONS|NODE_PATH|LD_*|DYLD_*|GIT_*|PERL5*|RUBY*) unset "$v" ;;
+  esac; done
+  [[ $PATH == :* || $PATH == *: || $PATH == *::* ]] && { echo "REJECT: PATH has an empty entry (it means the working directory)" >&2; exit 2; }
+  IFS=: read -r -a pathparts <<< "$PATH"
+  for pc in "${pathparts[@]}"; do
+    if [[ $pc != /* || $pc == "$repo" || $pc == "$repo"/* || $pc == /private/tmp/claude-501* || $pc == /tmp/claude-501* ]]; then echo "REJECT: PATH entry '$pc' is relative or agent-writable; the exempt chain resolves binaries through PATH" >&2; exit 2; fi
+  done
   # WHY a probe where only the sandbox can say no: a separate throwaway claude call WITHOUT the hook runs one fixed command that writes inside its own probe dir (control) and then
   # outside it. The control file must exist (the command really ran), the outside file must not, and the refusal text must come from the OS. The canary sits next to the repo and not
   # under the default temp dir (which Claude Code always allows), so a refusal here is the allowlist at work. The same command records what git sees in the agent's own shell, so a

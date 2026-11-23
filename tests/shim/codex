@@ -17,7 +17,7 @@ trap 'rm -f "$o" "$e" "$pf" "$so" "$so.err" "$so.meta" "$sin"' EXIT
 # WHY only when the last argument is `-`: a caller that passes the prompt as an argument leaves stdin open and never closes it, so an unconditional cat hangs forever.
 [[ "${*: -1}" == "-" ]] && cat > "$sin"
 EVLOG="${EVLOG:-$(cd "$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")/.." && pwd)/wrapper.jsonl}"
-EVSTART="$(python3 -c 'import time; print(time.time())')"; export EVSTART
+EVSTART="$(python3 -I -c 'import time; print(time.time())')"; export EVSTART
 # Non-codex-exec calls (login status, --version) are replayed and not logged.
 if [[ "${argv[0]:-}" != exec ]]; then rc=0; "$real" "${argv[@]+"${argv[@]}"}" <"$sin" >"$o" 2>"$e" || rc=$?; cat "$o"; cat "$e" >&2; exit "$rc"; fi
 # WHY one merged stream for exec: codex-call.sh runs codex with `>"$out" 2>&1` and parses that single file, so a quota
@@ -26,9 +26,9 @@ if [[ "${argv[0]:-}" != exec ]]; then rc=0; "$real" "${argv[@]+"${argv[@]}"}" <"
 # while the review ran inherit the earlier approval. `state` is the start state, `endstate` the state at the verdict; check-scripted.py requires both to equal the run's final tree.
 # The repo is PROOF_REPO (set by review-loop-proof.sh), else the git top of the working directory.
 prepo="${PROOF_REPO:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}"
-startstate="$(python3 "$here/state-hash.py" "$prepo" 2>/dev/null)"
+startstate="$(python3 -I "$here/state-hash.py" "$prepo" 2>/dev/null)"
 rc=0; "$real" "${argv[@]+"${argv[@]}"}" <"$sin" >"$o" 2>&1 || rc=$?
-python3 - "$o" "$rc" "$pf" "$so" "$e" "$sin" "${argv[@]}" <<'PY'
+python3 -I - "$o" "$rc" "$pf" "$so" "$e" "$sin" "${argv[@]}" <<'PY'
 import json, sys
 out, rc, pf, so, errf, sinf, *argv = sys.argv[1:]
 # WHY this mirrors codex-call.sh exactly: thread id only from thread.started (never invented from the resume
@@ -87,9 +87,9 @@ open(so + ".err", "w").write(diag)
 open(so + ".meta", "w").write(json.dumps({"resume": resume, "tid": tid if ok else "", "ok": ok}))
 PY
 meta="$(cat "$so.meta")"; rm -f "$so.meta"
-resume="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["resume"])' "$meta")"
-tid="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["tid"])' "$meta")"
-ok="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["ok"])' "$meta")"
+resume="$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["resume"])' "$meta")"
+tid="$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["tid"])' "$meta")"
+ok="$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["ok"])' "$meta")"
 # WHY 1: codex-call.sh exits 1 for every failed call whatever the CLI exit code was (r15).
 logrc=0; [[ $ok == True ]] || logrc=1
 # WHY provenance from the process table and the file, never from command text (r27 to r29): the parent bash of the installed
@@ -149,7 +149,7 @@ sha = hashlib.sha256(open(rp, "rb").read()).hexdigest() if rp else ""
 print(json.dumps({"nonce": os.environ.get("EVNONCE", ""), "wrapper_path": rp, "wrapper_sha256": sha, "wrapper_inode": os.stat(rp).st_ino if rp else None, "argv_ok": argv_ok, "codex": os.path.realpath(codex)}))
 PY3
 )"; export EV_PROV
-python3 -c 'import json,os,sys; p=json.loads(os.environ["EV_PROV"]); sys.exit(0 if p["wrapper_sha256"] and p["argv_ok"] and p["wrapper_sha256"]==os.environ.get("WRAPPER_SHA256") and p["nonce"] and p["nonce"]==os.environ.get("EVNONCE") else 1)' && kind=real
+python3 -I -c 'import json,os,sys; p=json.loads(os.environ["EV_PROV"]); sys.exit(0 if p["wrapper_sha256"] and p["argv_ok"] and p["wrapper_sha256"]==os.environ.get("WRAPPER_SHA256") and p["nonce"] and p["nonce"]==os.environ.get("EVNONCE") else 1)' && kind=real
 # WHY the shim records the add() flag and the end state here (r9 finding 1): check-scripted.py `final --real` binds the last clean verdict to the state the run ended in and, for the tdd skills,
 # to the implementation phase, exactly as the fake does. The start state was captured above, before codex ran.
 # WHY impl=no and no check-impl.py (cc11 r39 CRITICAL): this shim runs OUTSIDE the OS sandbox (codex-call.sh is sandbox-excluded), and check-impl.py imports the agent-written
@@ -160,7 +160,7 @@ impl=no
 # WHY audit= is recorded here, from the sandbox the call asked for (r11 finding 2): a Codex test audit runs read-only and an implementation call needs workspace-write, so check-scripted.py
 # --audit can pick the latest audit ATTEMPT, including one that failed or returned no verdict, without reading its reply.
 audit=yes; for a in "${argv[@]+"${argv[@]}"}"; do [[ $a == workspace-write ]] && audit=no; done
-EV_META="state=$startstate endstate=$(python3 "$here/state-hash.py" "$prepo" 2>/dev/null) impl=$impl audit=$audit"; export EV_META
-python3 "$here/evlog.py" "$EVLOG" "$kind" "$logrc" "$resume" "$tid" "$pf" "$so" "$so.err" -- "${argv[@]}"
+EV_META="state=$startstate endstate=$(python3 -I "$here/state-hash.py" "$prepo" 2>/dev/null) impl=$impl audit=$audit"; export EV_META
+python3 -I "$here/evlog.py" "$EVLOG" "$kind" "$logrc" "$resume" "$tid" "$pf" "$so" "$so.err" -- "${argv[@]}"
 cat "$o"; cat "$e" >&2
 exit "$rc"

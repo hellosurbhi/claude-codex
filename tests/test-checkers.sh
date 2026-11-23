@@ -2413,6 +2413,32 @@ done
 for c in 'export GIT_CONFIG_COUNT=0' 'unset GIT_CONFIG_COUNT' 'GIT_CONFIG_COUNT=0 git status' 'export PATH=/tmp' 'declare -x A=b'; do
   expect pass "hook: environment change denied: $c" hdeny "$c"
 done
+# cc11 r40 CRITICAL: the interpreter's own search path. A module the agent plants in the scratch root must neither load in the exempt chain nor be writable, and the environment must not be settable.
+for c in 'PYTHONPATH=/x ~/.claude/config/scripts/codex-call.sh --sandbox read-only "audit"' 'env PYTHONPATH=/x ~/.claude/config/scripts/codex-call.sh --sandbox read-only "audit"' 'export PYTHONSTARTUP=/x' 'BASH_ENV=/x ~/.claude/config/scripts/codex-call.sh --sandbox read-only "audit"' 'NODE_OPTIONS=--require=/x codex --version' 'unset PYTHONPATH'; do
+  expect pass "hook r40: environment prefix or change denied: $c" hdeny "$c"
+done
+for f in json.py os.py sitecustomize.py usercustomize.py a.pth pyvenv.cfg sub/pkg/__init__.py ext.so x.pyc; do
+  expect pass "hook r40: Write to $f is denied (interpreter-loadable name)" test "$(hook Write "{\"file_path\":\"$hr/$f\"}" | cut -d' ' -f1)" = deny
+  expect pass "hook r40: Edit of $f is denied (interpreter-loadable name)" test "$(hook Edit "{\"file_path\":\"$hr/$f\"}" | cut -d' ' -f1)" = deny
+done
+expect pass "hook r40: a plan markdown write is still allowed" test "$(hook Write "{\"file_path\":\"$hr/.claude/plan/b.md\"}")" = "allow "
+expect pass "hook r40: a shell redirect writing json.py is denied" hdeny 'cat > json.py <<EOF
+x
+EOF'
+# the real-mode exempt chain (shipped wrapper + shim + a stand-in codex binary) with planted modules in the scratch root and hostile inherited variables
+r40chain() {
+  ( cd "$tmp" || exit 1; rm -rf "$tmp/r40"; mkdir -p "$tmp/r40/repo" "$tmp/r40/bin"; rm -f "$tmp"/r40-marker-*
+    printf '#!/usr/bin/env bash\nexec bash "%s/shim/codex" "$@"\n' "$here" > "$tmp/r40/bin/codex"; chmod +x "$tmp/r40/bin/codex"
+    cd "$tmp/r40/repo" && git init -q && git remote add origin https://example.invalid/t/r.git
+    for m in json sitecustomize usercustomize os time hashlib; do printf 'open("%s/r40-marker-%s", "w").write("ran")\n' "$tmp" "$m" > "$m.py"; done
+    out="$(PATH="$tmp/r40/bin:$PATH" REAL_CODEX="$tmp/realbin/codex" PROOF_REPO="$tmp/r40/repo" EVLOG="$tmp/r40/wrapper.jsonl" PYTHONPATH="$tmp/r40/repo" PYTHONSTARTUP="$tmp/r40/repo/json.py" \
+      bash "$here/../scripts/codex-call.sh" --sandbox read-only "audit the plan" < /dev/null 2>&1)" || exit 1
+    grep -q 'VERDICT: APPROVED' <<<"$out" || exit 1
+    ls "$tmp"/r40-marker-* >/dev/null 2>&1 && exit 1
+    exit 0 )
+}
+expect pass "r40: planted json.py, sitecustomize.py, usercustomize.py, os.py, time.py, hashlib.py and a hostile PYTHONPATH/PYTHONSTARTUP run nothing in the exempt chain, and the call still succeeds" r40chain
+expect pass "r40: every python in the exempt chain files is isolated (python3 -I), and no skill or command text runs bare python3" sh -c 'cd "$1/.." && ! grep -nE "python3 " scripts/codex-call.sh tests/shim/codex tests/fake-codex-call.sh | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#" | grep -v "command -v python3" | grep -v "python3 is required" | grep -vE "python3 -I " | grep . ; ! grep -rnE "python3? " skills commands 2>/dev/null | grep -vE "python3? -I " | grep .' _ "$here"
 expect pass "hook: git status in the repo root with the recorded baseline is allowed" test "$(hbash 'git status')" = "allow "
 expect pass "hook: cd then git on one command line is denied" hdeny 'cd .claude && git status'
 HCWD="$hr/.claude"; expect pass "hook: git with the tool cwd below the root is denied" hdeny 'git status'; HCWD="$hr"

@@ -25,7 +25,7 @@ set -euo pipefail
 # WHY one trap with the cleanup inside it: `trap` replaces any earlier handler, so a second `trap ... EXIT` further down would silently drop one of the two jobs.
 # WHY python3 for the clock with a `date` fallback: the python3 check below can itself be the failing step, and the log must still get an event ordered after any earlier call (the fallback sorts late in its second).
 out=""; pin=""; codex_started=0; ev_log="${CODEX_CALL_EVENT_LOG:-}"; ev_start=""
-now() { python3 -c 'import time; print(repr(time.time()))' 2>/dev/null || echo "$(date +%s).999"; }
+now() { python3 -I -c 'import time; print(repr(time.time()))' 2>/dev/null || echo "$(date +%s).999"; }
 [[ -z "$ev_log" ]] || ev_start="$(now)"
 # WHY cleanup names only non-empty paths (r22 finding 2): the trap is installed before the temp files exist, and an unset $pin made "$pin.role" expand to ".role", deleting a file of that name in the working directory
 # when a mktemp failed. Do not collapse this back into one `rm -f "$out" "$pin" "$pin.role"`.
@@ -111,7 +111,7 @@ else
   # --skip-git-repo-check: plan audits can run from a scratch folder that is not a repo
   codex exec --json -p review --sandbox "$sandbox" --skip-git-repo-check --cd "$dir" - <"$pin" >"$out" 2>&1 && rc=0 || rc=$?
 fi
-python3 - "$out" "$rc" <<'PY'
+python3 -I - "$out" "$rc" <<'PY'
 import json, sys
 tid, msg, done, errs = "", "", False, []
 for line in open(sys.argv[1]):

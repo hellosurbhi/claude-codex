@@ -75,3 +75,11 @@ for f in ("check-impl.py", "check-tests.py", "check-modules.py"):
         reject("missing behavioral checker: " + f)
     if "import sbx" not in t or "sbx.run(" not in t or "subprocess.run(" in t.replace("except (subprocess", ""):
         reject(f + " does not run generated code through the sandboxed runner sbx.run")
+# WHY (cc11 r40 CRITICAL): the interpreter's own search path. The sandbox-excluded chain starts python, bash and git in the scratch repo, so the proof must scrub loader variables and check PATH,
+# run the hook isolated, and the hook must refuse writes of interpreter-loadable names.
+if "PYTHON*|BASH_ENV|ENV|CDPATH|NODE_OPTIONS|NODE_PATH" not in real_b or "is relative or agent-writable" not in real_b:
+    reject("the real branch does not scrub the interpreter and loader environment and check PATH before the agent starts")
+if '"python3 -I " + sys.argv[2]' not in src:
+    reject("the confinement hook is not started with isolated python (python3 -I)")
+if "PYLOAD" not in h or "interpreter-loadable" not in h and "planted json.py" not in h:
+    reject("the confinement hook does not refuse writes of interpreter-loadable names (json.py, sitecustomize.py, .pth, .so)")

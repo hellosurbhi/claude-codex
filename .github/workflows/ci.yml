@@ -17,7 +17,9 @@ concurrency:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    # WHY macOS (cc11 r40): this toolchain targets macOS bash 3.2 and the macOS sandbox-exec (tests/sbx.py runs generated code inside it and the suite
+    # exercises it unconditionally). Ubuntu has neither, so the positive sandbox cases could only fail there. Public repo, so hosted macOS minutes are free.
+    runs-on: macos-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
