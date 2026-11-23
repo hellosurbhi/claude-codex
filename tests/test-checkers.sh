@@ -1908,19 +1908,21 @@ expectm fail "four modules that exit 0 on import do not pass check-modules" 'REJ
 bw="$tmp/bw"; mkdir -p "$bw/empty" "$bw/mods" "$bw/impl" "$bw/stub" "$bw/plan/.claude/plan" "$bw/noplan/.claude/plan"
 cat > "$bw/mods/mathops.py" <<'PYM'
 def add(a, b):
-    """>>> add(1, 2)
+    """
+    >>> add(1, 2)
     3
     """
     return a + b
 def sub(a, b):
-    """>>> sub(3, 1)
+    """
+    >>> sub(3, 1)
     2
     """
     return a - b
 PYM
-printf 'def shout(s):\n    """>>> shout("hi")\n    \x27HI!\x27\n    """\n    return s.upper() + "!"\n' > "$bw/mods/strops.py"
-printf 'def first(xs):\n    """>>> first([7, 8])\n    7\n    """\n    return xs[0]\n' > "$bw/mods/listops.py"
-printf 'VERSION = "1.0"\ndef describe():\n    """>>> describe()\n    \x27v1.0\x27\n    """\n    return "v" + VERSION\n' > "$bw/mods/pkginfo.py"
+printf 'def shout(s):\n    """\n    >>> shout("hi")\n    \x27HI!\x27\n    """\n    return s.upper() + "!"\n' > "$bw/mods/strops.py"
+printf 'def first(xs):\n    """\n    >>> first([7, 8])\n    7\n    """\n    return xs[0]\n' > "$bw/mods/listops.py"
+printf 'VERSION = "1.0"\ndef describe():\n    """\n    >>> describe()\n    \x27v1.0\x27\n    """\n    return "v" + VERSION\n' > "$bw/mods/pkginfo.py"
 printf 'def add(a, b):\n    return a + b\n' > "$bw/impl/app.py"; printf 'def add(a, b):\n    return 0\n' > "$bw/stub/app.py"
 printf 'Plan: add an add(a, b) function to app.py.\n' > "$bw/plan/.claude/plan/p.md"; : > "$bw/noplan/.claude/plan/p.md"
 expectm fail "real execute-codex run whose work dir lacks the four modules fails the acceptance step" 'REJECT: the four modules failed their checks' bash "$here/check-behavior.sh" execute-codex "$bw/empty" real
