@@ -2465,7 +2465,8 @@ rrmk; H0="$(rrhash)"; rrsnap; rrrec "$H0" "VERDICT: APPROVED\n"; (cd "$tmp/rr" &
 expect pass "the record and the snapshot both tracked leave an unchanged round's record valid" rr
 printf '\ndef sub(a, b):\n    return a - b\n' >> "$tmp/rr/app.py"
 expectm fail "a real code change still makes the record stale with the review directory tracked" 'the record'\''s diff hash is not the hash of the fi' rr
-expectm fail "review record: a missing record fails" 'the record'\''s diff hash is not the hash of the fi' rr
+rm -f "$tmp/rr/.claude/review/final-review.txt"  # WHY removed (cc11 r59): the label says missing, but the record from the case above was still present and only the hash mismatch was being matched
+expectm fail "review record: a missing record fails" 'no review record at \.claude/review/final-review\.' rr
 rrmk; rrrec "$(rrhash)" "VERDICT: BLOCKED\nHIGH: real problem\n"
 expectm fail "review record: findings in the record fail" 'the recorded reply is not a clean verdict \(APPRO' rr
 rrmk; rrrec "$(rrhash)" "VERDICT: BLOCKED\n"
