@@ -11,6 +11,12 @@ cases = [
     ("a path with spaces", "diff --git a/my mod.py b/my mod.py", (), ("my mod.py", "my mod.py")),
     ("a new file", "diff --git a/n.py b/n.py", ("new file mode 100644", "--- /dev/null", "+++ b/n.py"), ("n.py", "n.py")),
     ("a quoted non-ASCII name", 'diff --git "a/caf\\303\\251.py" "b/caf\\303\\251.py"', (), ("café.py", "café.py")),
+    ("plain source, quoted destination (rename)", 'diff --git a/test_app.py "b/caf\\303\\251.py"', ("similarity index 100%", "rename from test_app.py", 'rename to "caf\\303\\251.py"'), ("test_app.py", "caf\u00e9.py")),
+    ("plain source, quoted destination, header only", 'diff --git a/x.py "b/caf\\303\\251.py"', (), ("x.py", "caf\u00e9.py")),
+    ("quoted source, plain destination (rename)", 'diff --git "a/caf\\303\\251.py" b/app.py', ("similarity index 100%", 'rename from "caf\\303\\251.py"', "rename to app.py"), ("caf\u00e9.py", "app.py")),
+    ("quoted source, plain destination, header only", 'diff --git "a/caf\\303\\251.py" b/app.py', (), ("caf\u00e9.py", "app.py")),
+    ("plain source with ' b/', quoted destination", 'diff --git a/x b/y.py "b/caf\\303\\251.py"', (), ("x b/y.py", "caf\u00e9.py")),
+    ("plain both, rename", "diff --git a/old.py b/new.py", ("rename from old.py", "rename to new.py"), ("old.py", "new.py")),
     ("not a diff header", "index 1..2 100644", (), None),
 ]
 for name, line, rest, want in cases:

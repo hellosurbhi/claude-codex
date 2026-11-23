@@ -1952,6 +1952,13 @@ expect pass "a rename from test_app.py to app.py is the implementation phase" te
 # r51: git quotes a non-ASCII name in its headers (core.quotePath=true); a diff of cafe.py beside test_app.py is the implementation, not tests-only.
 printf '%s\n' 'diff --git "a/caf\303\251.py" "b/caf\303\251.py"' 'index 1..2 100644' '--- "a/caf\303\251.py"' '+++ "b/caf\303\251.py"' '@@ -1 +1 @@' '-x' '+y' 'diff --git a/test_app.py b/test_app.py' 'index 1..2 100644' > "$tmp/qdiff.txt"
 expect pass "r51: a diff of a quoted non-ASCII module plus test_app.py is the implementation phase" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import evlog; print(evlog.phase_of(open(sys.argv[2], encoding="utf-8", errors="surrogateescape").read()))' "$here" "$tmp/qdiff.txt")" = implementation
+# r53: mixed quoting in one header (plain source, quoted destination and the reverse): a rename from test_app.py to a quoted non-ASCII module is the implementation, with or without the rename lines.
+printf '%s\n' 'diff --git a/test_app.py "b/caf\303\251.py"' 'similarity index 90%' 'rename from test_app.py' 'rename to "caf\303\251.py"' > "$tmp/mixdiff.txt"
+printf '%s\n' 'diff --git a/test_app.py "b/caf\303\251.py"' 'index 1..2 100644' > "$tmp/mixdiff2.txt"
+printf '%s\n' 'diff --git "a/caf\303\251.py" b/test_app.py' 'similarity index 90%' 'rename from "caf\303\251.py"' 'rename to test_app.py' > "$tmp/mixdiff3.txt"
+for mf in mixdiff mixdiff2 mixdiff3; do
+  expect pass "r53: $mf (mixed quoting in one header) with a quoted non-ASCII module is the implementation phase" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import evlog; print(evlog.phase_of(open(sys.argv[2], encoding="utf-8", errors="surrogateescape").read()))' "$here" "$tmp/$mf.txt")" = implementation
+done
 expect pass "placeholder severity lines are clean for a reviewer.sh spy reply too (one grammar)" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"spy","exit":0,"stdout":"VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n","stderr":""}) else 1)' "$here"
 
 mkdir -p "$tmp/em"; for m in mathops strops listops pkginfo; do printf 'import os\nos._exit(0)\n' > "$tmp/em/$m.py"; done

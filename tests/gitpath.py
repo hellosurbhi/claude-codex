@@ -30,10 +30,10 @@ def hdr_path(rest):
     return unquote(m.group(0) if m else rest.split("\t")[0])[2:]
 
 def _hdr_candidates(body):
-    # every (a_path, b_path) reading of the text after "diff --git "; an unquoted name may itself contain " b/", so a header can have several.
+    # every (a_path, b_path) reading of the text after "diff --git " for all four quoting combinations: the first token is quoted (read by QSTR) or plain (split before each ' b/' or ' "b/'), the second is quoted or plain. An unquoted name may itself contain " b/", so a header can have several readings.
     cands = []
     m = re.match(QSTR, body)
-    lefts = [(m.group(0), body[m.end():])] if m else [(body[:i], body[i:]) for i in range(len(body)) if body.startswith(" b/", i)]
+    lefts = [(m.group(0), body[m.end():])] if m else [(body[:i], body[i:]) for i in range(len(body)) if body.startswith(" b/", i) or body.startswith(' "b/', i)]
     for left, tail in lefts:
         if not tail.startswith(" "):
             continue
@@ -42,8 +42,9 @@ def _hdr_candidates(body):
             continue
         a_, b_ = unquote(left), unquote(right)
         if a_.startswith("a/") and b_.startswith("b/"):
-            cands.append((a_[2:], b_[2:]))
-    return cands
+            cands.append((right.startswith('"'), (a_[2:], b_[2:])))
+    # WHY a quoted second token wins among readings of one header: git writes a quote only to escape a name, so a plain name containing ' "b/' is the far rarer reading ('a/x b/y.py "b/caf\\303\\251.py"').
+    return [pair for _, pair in sorted(cands, key=lambda c: not c[0])]
 
 def _section_paths(rest):
     # (a, b) read from the section's own header lines (rename/copy from and to, then --- and +++), None for a side they do not name. WHY these first: a "diff --git a/x b/y.py b/x b/y.py" line cannot be split
