@@ -1511,10 +1511,15 @@ expect pass "r28: redact-diff: control, the same input with no failure still exi
 bytecase() { # label path base-printf final-printf ("-" = file absent); builds the repo, the legit redacted diff and an altered one
   local path="$2" base="$3" final="$4"  # $1 is the label, used by bccase for the test names
   mkrun; cd "$tmp/run/repo" || exit 1; printf 'k = 1\n' > keep.py
-  [ "$base" = - ] || printf "$base" > "$path"
+  # WHY the target is removed when the baseline is absent (r52): mkrun() already created app.py, so commitbase committed it and the "new file" cases were really modifications. The file is also marked
+  # intent-to-add below, because git diff HEAD does not list a purely untracked file.
+  if [ "$base" = - ]; then rm -f "$path"; else printf "$base" > "$path"; fi
   commitbase
-  if [ "$final" = - ]; then rm -f "$path"; else printf "$final" > "$path"; fi
-  git diff --no-color HEAD -- "$path" > "$tmp/bc.raw.diff"; bash "$here/../scripts/redact-diff.sh" < "$tmp/bc.raw.diff" > "$tmp/bc.legit.diff"
+  if [ "$final" = - ]; then rm -f "$path"; else printf "$final" > "$path"; git add -N -- "$path"; fi
+  git diff --no-color HEAD -- "$path" > "$tmp/bc.raw.diff";
+  if [ "$base" = - ]; then expect pass "r52: $1: an absent baseline gives a diff whose old side is /dev/null" grep -Eq '^(--- /dev/null|Binary files /dev/null and )' "$tmp/bc.raw.diff"; fi
+  if [ "$final" = - ]; then expect pass "r52: $1: an absent final file gives a diff whose new side is /dev/null" grep -Eq '^(\+\+\+ /dev/null|Binary files .* and /dev/null differ)' "$tmp/bc.raw.diff"; fi
+  bash "$here/../scripts/redact-diff.sh" < "$tmp/bc.raw.diff" > "$tmp/bc.legit.diff"
   python3 - "$tmp/bc.legit.diff" "$tmp/bc.alt.diff" "$tmp/bc.nomark.diff" <<'PY'
 import sys
 t = open(sys.argv[1], "rb").read(); L = t.split(b"\n")
