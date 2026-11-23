@@ -538,9 +538,17 @@ expect pass "a password after the END line text of a multi-line key is masked" s
 expect pass "the key body lines of a multi-line key are masked" sh -c 'o="$(printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY-----" | "$1")"; printf "%s\n" "$o" | grep -qF "[REDACTED" && ! printf "%s\n" "$o" | grep -qF -- KEYBODYLINE' _ "$red"
 expect pass "text after a multi-line key block is processed normally again" sh -c 'printf "%s\n" "+-----BEGIN PRIVATE KEY-----" "+KEYBODYLINE" "+-----END PRIVATE KEY-----" "+x = 1" | "$1" | grep -qxF -- "+x = 1"' _ "$red"
 expect pass "a file header line carrying a credential is masked too" sh -c 'o="$(printf "%s\n" "diff --git a/x b/y password=LEAKhdr" | "$1")"; printf "%s\n" "$o" | grep -qF "[REDACTED" && ! printf "%s\n" "$o" | grep -qF -- LEAKhdr' _ "$red"
+printf '#!/bin/sh\nexit 3\n' > "$tmp/failing-redactor.sh"; chmod +x "$tmp/failing-redactor.sh"
+printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$tmp/short-redactor.sh"; chmod +x "$tmp/short-redactor.sh"
+# r50/r51: every script that reads the redactor's output runs once against a stub that fails (exit 3, no output) and once against one that exits 0 with fewer lines; each must FAIL, so a dead redactor never reads as "no leaks".
+stubfail() { # $1 = label, $2 = checker script, rest = its extra arguments
+  expect fail "$1 fails when the redactor exits non-zero with empty output" env PYTHONPATH="$here" python3 "$2" "$tmp/failing-redactor.sh" "${@:3}"
+  expect fail "$1 fails when the redactor exits 0 but returns fewer lines than it was given" env PYTHONPATH="$here" python3 "$2" "$tmp/short-redactor.sh" "${@:3}"
+}
 # r18 finding 1: the private-key state is kept per side of the diff (old = "-" lines, new = "+" lines, a context line is both), so a key whose BEGIN is context and whose END is rewritten on one side does not unmask the other side
-expect pass "redact-diff masks private keys with separate old-side and new-side state, resets at hunk and file headers, and masks a combined diff to the hunk end" python3 - "$red" <<'PYK'
-import itertools, subprocess, sys
+cat > "$tmp/keys-check.py" <<'PYK'
+import itertools, sys
+import redactrun
 red = sys.argv[1]
 def fixh(lines):
     # WHY the counts are computed here (r33): the redactor now refuses a hunk whose body disagrees with its @@ header, and these synthetic hunks vary their bodies. Each plain @@ header gets the true counts; a @@@ header is left alone.
@@ -562,7 +570,7 @@ def fixh(lines):
     return out
 def run(lines):
     lines = fixh(lines)
-    return subprocess.run([red], input="\n".join(lines) + "\n", capture_output=True, text=True).stdout.split("\n")[:len(lines)]
+    return redactrun.run(red, lines)[:len(lines)]
 fails = []
 # the reviewer's exact shape: BEGIN kept as context, the body replaced, the END line reformatted
 L = [" -----BEGIN PRIVATE KEY-----", "-OLDBODYLEAK", "------END PRIVATE KEY-----", "+NEWBODYLEAK", "+-----END PRIVATE KEY-----", "+x = 1"]
@@ -610,7 +618,7 @@ for shape in shapes:
                 elif kd == "E":
                     for s in side[p]: sides_in[s] = 0
 cases = fixh(cases)
-out = subprocess.run([red], input="\n".join(cases) + "\n", capture_output=True, text=True).stdout.split("\n")
+out = redactrun.run(red, cases)
 bad = 0
 for ln, o, w in zip(cases, out, want):
     if w is None or w[0] is None: continue
@@ -624,29 +632,25 @@ for f in fails: print("FAIL:", f, file=sys.stderr)
 print(len(cases), "lines,", bad, "bad,", len(fails), "named failures", file=sys.stderr)
 sys.exit(1 if bad or fails else 0)
 PYK
+expect pass "redact-diff masks private keys with separate old-side and new-side state, resets at hunk and file headers, and masks a combined diff to the hunk end" env PYTHONPATH="$here" python3 "$tmp/keys-check.py" "$red"
+stubfail "the private-key state check" "$tmp/keys-check.py"
 # every pair of attack shapes on one line, both orders: neither secret may survive (no rule may skip the others)
 # WHY the checker is a file (r50): the same script must run against a failing redactor stub and have to FAIL, so a redactor that dies with empty stdout cannot read as "zero leaks".
 cat > "$tmp/pairs-check.py" <<'PYX'
-import subprocess, sys
+import sys
+import redactrun
 red, f = sys.argv[1], sys.argv[2]
 shapes = [l.rstrip("\n").split("|||") for l in open(f) if l.strip()]
 pairs = [(a, b) for i, a in enumerate(shapes) for j, b in enumerate(shapes) if i != j]
 lines = ["+" + a[0] + " " + b[0] for a, b in pairs]
-r = subprocess.run([red], input="\n".join(lines) + "\n", capture_output=True, text=True)
-# WHY exit status and line count first (r50): a redactor that failed with empty stdout made zip stop at one empty line and report zero leaks.
-if r.returncode != 0 or len(r.stdout.split("\n")) - 1 != len(lines):
-    print("REDACTOR FAILED: exit %d, %d output lines for %d input lines" % (r.returncode, len(r.stdout.split("\n")) - 1, len(lines)), file=sys.stderr); sys.exit(1)
-out = r.stdout.split("\n")
+out = redactrun.run(red, lines)
 bad = [(a[0], b[0]) for (a, b), o in zip(pairs, out) if a[1] in o or b[1] in o]
 for a, b in bad[:20]: print("LEAK:", a, "||", b, file=sys.stderr)
 print(len(pairs), "pairs,", len(bad), "leaks", file=sys.stderr)
 sys.exit(1 if bad else 0)
 PYX
-expect pass "redact-diff masks every pair of attack shapes combined on one line, in both orders" python3 "$tmp/pairs-check.py" "$red" "$tmp/attacks.txt"
-printf '#!/bin/sh\nexit 3\n' > "$tmp/failing-redactor.sh"; chmod +x "$tmp/failing-redactor.sh"
-expect fail "the pair check fails when the redactor exits non-zero with empty output" python3 "$tmp/pairs-check.py" "$tmp/failing-redactor.sh" "$tmp/attacks.txt"
-printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$tmp/short-redactor.sh"; chmod +x "$tmp/short-redactor.sh"
-expect fail "the pair check fails when the redactor exits 0 but returns fewer lines than it was given" python3 "$tmp/pairs-check.py" "$tmp/short-redactor.sh" "$tmp/attacks.txt"
+expect pass "redact-diff masks every pair of attack shapes combined on one line, in both orders" env PYTHONPATH="$here" python3 "$tmp/pairs-check.py" "$red" "$tmp/attacks.txt"
+stubfail "the pair check" "$tmp/pairs-check.py" "$tmp/attacks.txt"
 # placeholders and ordinary code stay byte-identical
 while IFS= read -r case_; do
   [ -n "$case_" ] || continue
@@ -668,28 +672,34 @@ expect pass "redact-diff keeps the line count of the diff" test "$(wc -l < "$fx"
 expect pass "redact-diff does not touch a word that merely contains sk-" sh -c 'printf "+x = task-description-for-the-user-that-is-long\n" | "$1" | grep -q "task-description-for-the-user-that-is-long"' _ "$red"
 # r21 finding 1: --text mode (requirements and instructions) has no prefix parser and one key state; diff mode treats the preamble before the first header as plain text.
 tmasked() { local o; o="$(printf '%s\n' "$1" | "$red" --text)"; grep -qF '[REDACTED' <<<"$o" && ! grep -qF -- "$2" <<<"$o"; }
-expect pass "redact-diff --text masks a plain-text PEM block of every key shape, and text after it is untouched" python3 - "$red" <<'PYT'
-import subprocess, sys
+cat > "$tmp/text-check.py" <<'PYT'
+import sys
+import redactrun
 red = sys.argv[1]; fails = []
 for shape in ("PRIVATE KEY", "RSA PRIVATE KEY", "OPENSSH PRIVATE KEY", "PGP PRIVATE KEY BLOCK", "EC PRIVATE KEY"):
     for n in (1, 2, 4):
         body = ["KEYBODYLEAK%d" % i for i in range(n)]
         lines = ["Notes first", "-----BEGIN %s-----" % shape] + body + ["-----END %s-----" % shape, "after = 1"]
         for mode, args, pre in (("text", ["--text"], ""), ("diff-preamble", [], "")):
-            o = subprocess.run([red] + args, input="\n".join(lines) + "\n", capture_output=True, text=True).stdout.split("\n")
+            o = redactrun.run(red, lines, args)
             if any("KEYBODYLEAK" in x for x in o): fails.append("%s %s n=%d leaks the body" % (mode, shape, n))
             if o[0] != "Notes first" or o[len(lines) - 1] != "after = 1": fails.append("%s %s n=%d changed the surrounding text: %r" % (mode, shape, n, (o[0], o[len(lines) - 1])))
             if len(o) - 1 != len(lines): fails.append("%s %s n=%d changed the line count" % (mode, shape, n))
 for f in fails: print("FAIL:", f, file=sys.stderr)
 sys.exit(1 if fails else 0)
 PYT
-expect pass "redact-diff in diff mode still strips the prefix after the first header (a removed -----BEGIN line is handled per side)" python3 - "$red" <<'PYT'
-import subprocess, sys
+expect pass "redact-diff --text masks a plain-text PEM block of every key shape, and text after it is untouched" env PYTHONPATH="$here" python3 "$tmp/text-check.py" "$red"
+stubfail "the --text PEM check" "$tmp/text-check.py"
+cat > "$tmp/strip-check.py" <<'PYT'
+import sys
+import redactrun
 red = sys.argv[1]
 L = ["preamble line", "diff --git a/x b/x", "@@ -1,3 +1,1 @@", "------BEGIN PRIVATE KEY-----", "-OLDBODYLEAK", "------END PRIVATE KEY-----", "+x = 1"]
-o = subprocess.run([red], input="\n".join(L) + "\n", capture_output=True, text=True).stdout.split("\n")
+o = redactrun.run(red, L)
 sys.exit(1 if any("OLDBODYLEAK" in x for x in o) or o[-2] != "+x = 1" else 0)
 PYT
+expect pass "redact-diff in diff mode still strips the prefix after the first header (a removed -----BEGIN line is handled per side)" env PYTHONPATH="$here" python3 "$tmp/strip-check.py" "$red"
+stubfail "the prefix-strip check" "$tmp/strip-check.py"
 while IFS= read -r case_; do
   [ -n "$case_" ] || continue
   expect pass "redact-diff --text masks: ${case_%%|||*}" tmasked "${case_%%|||*}" "${case_##*|||}"
