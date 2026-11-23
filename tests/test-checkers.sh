@@ -2438,7 +2438,7 @@ r40chain() {
     exit 0 )
 }
 expect pass "r40: planted json.py, sitecustomize.py, usercustomize.py, os.py, time.py, hashlib.py and a hostile PYTHONPATH/PYTHONSTARTUP run nothing in the exempt chain, and the call still succeeds" r40chain
-expect pass "r40: every python in the exempt chain files is isolated (python3 -I), and no skill or command text runs bare python3" sh -c 'cd "$1/.." && ! grep -nE "python3 " scripts/codex-call.sh tests/shim/codex tests/fake-codex-call.sh | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#" | grep -v "command -v python3" | grep -v "python3 is required" | grep -vE "python3 -I " | grep . ; ! grep -rnE "python3? " skills commands 2>/dev/null | grep -vE "python3? -I " | grep .' _ "$here"
+expect pass "r40: every python in the exempt chain files is isolated (python3 -I), and no skill or command text runs bare python3" sh -c 'cd "$1/.." && bad="$(grep -nE "python3 " scripts/codex-call.sh tests/shim/codex tests/fake-codex-call.sh | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#" | grep -v "command -v python3" | grep -v "python3 is required" | grep -vE "python3 -I "; grep -rnE "python3? " skills commands 2>/dev/null | grep -vE "python3? -I ")"; test -z "$bad"' _ "$here"
 expect pass "hook: git status in the repo root with the recorded baseline is allowed" test "$(hbash 'git status')" = "allow "
 expect pass "hook: cd then git on one command line is denied" hdeny 'cd .claude && git status'
 HCWD="$hr/.claude"; expect pass "hook: git with the tool cwd below the root is denied" hdeny 'git status'; HCWD="$hr"
