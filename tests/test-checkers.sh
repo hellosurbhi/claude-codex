@@ -47,6 +47,8 @@ trap 'setupfail $? $LINENO "$BASH_COMMAND"' ERR
 # a spy call in the same run, which hid unrelated secret-guard, CI-config and wrapper checks in public CI. The self-test at the end fails when a
 # named non-spy case did not run, so a case wrongly written as expect_spy cannot hide.
 skipped=0; plain_ran=0; ran_names=""
+# WHY the timeout status is its own value and every negative assertion rejects it (cc11 r64): sendtry reports a timeout with `bad`, but `bad` inside the $(...) of expect_run cannot set the parent's `fail`, and the
+# missing-marker status 1 that followed was exactly what `expect fail` accepts, so a hang passed a negative case. The helper now returns 124 and expect_run refuses 124 for `fail`.
 # round 15 finding 1: a negative case passes only for the INTENDED reason. expect_run keeps the combined output; a `fail` case is refused when the output
 # shows a crash (traceback, missing file, unset variable, command not found) instead of a verdict, and expectm also demands its message regex.
 # WHY the crash list: a checker that dies on a missing fixture exits nonzero exactly like one that rejects the input, so a bare exit-code check
@@ -54,7 +56,7 @@ skipped=0; plain_ran=0; ran_names=""
 crashre='Traceback \(most recent|FileNotFoundError|No such file or directory|command not found|unbound variable|syntax error|IndexError|KeyError'
 expect_run() { local want="$1" name="$2" out rc; shift 2; in_case=1; out="$("$@" 2>&1)"; rc=$?; in_case=; plain_ran=$((plain_ran+1))
   [[ -n "${EXPECT_DUMP:-}" && $want == fail ]] && printf '%s\t%s\n' "$name" "$(head -n1 <<<"$out" | cut -c1-200)" >> "$EXPECT_DUMP"
-  if [[ $want == pass && $rc -eq 0 ]] || { [[ $want == fail && $rc -ne 0 && $rc -ne 126 && $rc -ne 127 ]] && ! grep -Eq -- "$crashre" <<<"$out" && { [[ -z "${want_re:-}" ]] || grep -Eq -- "$want_re" <<<"$out"; }; }; then ran_names+="$name"$'\n'; ok "$name"
+  if [[ $want == pass && $rc -eq 0 ]] || { [[ $want == fail && $rc -ne 0 && $rc -ne 124 && $rc -ne 126 && $rc -ne 127 ]] && ! grep -Eq -- "$crashre" <<<"$out" && { [[ -z "${want_re:-}" ]] || grep -Eq -- "$want_re" <<<"$out"; }; }; then ran_names+="$name"$'\n'; ok "$name"
   else bad "$name (rc=$rc, wanted $want${want_re:+ matching /$want_re/}; got: $(head -c 240 <<<"$out" | tr '\n' ' '))"; fi; }
 spy_on() { [[ -z "${CHECKERS_NO_SPY:-}" ]]; }
 spy_skip() { skipped=$((skipped+1)); echo "SKIP: $1"; }
@@ -798,7 +800,7 @@ OPEN FINDINGS:
 none}" > .claude/review/requirements.raw.txt )
   # WHY explicit stdin and a bound (cc11 r36): a redactor fake that runs `cat` read the SUITE's stdin, so with a terminal or an open pipe attached the case hung forever.
   # The block gets /dev/null, and tmo turns any future stdin reader into a named FAIL instead of a hang (a timeout is also not a pass for the `expect fail` callers).
-  rm -f "$tmp/reviewer-called"; ( cd "$tmp/sendrepo" && tmo "${SENDTRY_TMO:-30}" bash "$tmp/sendtry.sh" > "$tmp/sendtry.out" 2>&1 < /dev/null ) || { [ $? -eq 124 ] && bad "sendtry timed out after ${SENDTRY_TMO:-30}s: the fallback block or a fake in it is waiting on stdin"; }; [ -f "$tmp/reviewer-called" ]
+  rm -f "$tmp/reviewer-called"; ( cd "$tmp/sendrepo" && tmo "${SENDTRY_TMO:-30}" bash "$tmp/sendtry.sh" > "$tmp/sendtry.out" 2>&1 < /dev/null ) || { local src=$?; if [ "$src" -eq 124 ]; then bad "sendtry timed out after ${SENDTRY_TMO:-30}s: the fallback block or a fake in it is waiting on stdin"; return 124; fi; }; [ -f "$tmp/reviewer-called" ]
 }
 expect pass "the fallback sequence reaches the reviewer when the redaction script works" sendtry "$red"
 # r22 finding 1: the requirements text is hostile (a line EOF, a command substitution, backticks, a REVIEW_RECORD_END line). It reaches the block only as a file, so nothing runs and every byte arrives.
@@ -1194,6 +1196,11 @@ p = sys.argv[1]; t = open(p).read() + "\nAfter each subagent run `git diff $TASK
 open(p, "w").write(t)
 PYX
 mirneg "r64: a bare git diff prescribed in a command is caught" 'a bare `git diff` is prescribed' "$tmp/mir8"; mirc execute-codex
+# r64 (review 64 finding 3): a timeout can never satisfy a negative assertion. The real expect_run is lifted into a child shell and pointed at a command that times out; the child's own result must be FAIL.
+exp_to() { bash -c "$(declare -f expect_run ok bad tmo); crashre='$crashre'; fail=0; plain_ran=0; ran_names=''; in_case=; expect_run fail 'timeout under expect fail' tmo 1 sleep 5; echo \"fail=\$fail\"" 2>&1; }
+expect pass "r64: a timeout under expect fail is a FAIL, not a pass" bash -c 'out="$1"; grep -q "^FAIL: timeout under expect fail (rc=124" <<<"$out" && grep -q "^fail=1$" <<<"$out"' _ "$(exp_to)"
+exp_sendtry() { bash -c "$(declare -f expect_run ok bad tmo sendtry); here='$here'; tmp='$tmp'; red='$red'; crashre='$crashre'; fail=0; plain_ran=0; ran_names=''; in_case=; SENDTRY_TMO=2; expect_run fail 'slow redactor under expect fail' sendtry '$tmp/slow-redactor.sh'; echo \"fail=\$fail\"" 2>&1; }
+expect pass "r64: the sendtry timeout under expect fail is a FAIL, not a pass" bash -c 'grep -q "^fail=1$" <<<"$1"' _ "$(exp_sendtry)"
 # r64 (review 64 finding 1): an empty snapshot while the tree differs from the base must fail, never print nothing and exit 0. The mutation drops every change through the pathspec, exactly what GIT_LITERAL_PATHSPECS=1 did on 089dc0a.
 r64empty() { local d="$tmp/r64e"; mkdir -p "$d/r" && sed "s#-- ':(top)' #-- ':(top)nonexistent-zzz' #" "$here/../scripts/review-snapshot.sh" > "$d/mut.sh" || return 1
   ( cd "$d/r" && git init -q && echo a > f && git add f && c="$(git commit-tree "$(git write-tree)" -m x)" && git update-ref HEAD "$c" && echo b > f && bash "$d/mut.sh" HEAD > "$d/out" 2> "$d/err"; echo $? > "$d/rc" )
