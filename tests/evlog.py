@@ -9,6 +9,8 @@
 # every round found a new quoting or continuation form that fooled it. `bash -n` and quoted
 # documentation never reach the wrapper, so they never log.
 import fcntl, hashlib, json, os, re, sys, time
+# WHY the explicit path: the wrappers run this file as `python3 -I evlog.py`, and -I drops the script's folder from sys.path, so a bare `from gitpath import` failed and no event was logged.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gitpath import diff_git_paths
 
 def _is_test_path(path):
