@@ -2591,7 +2591,7 @@ for kv in 'Glob:{"pattern":"*.py","cwd":"/etc"}' 'Read:{"file_path":"app.py","al
 done
 sed 's/check_glob(ti\[key\]/(lambda *_: None)(ti[key]/' "$hk" > "$tmp/hook-noglob.py"
 expect pass "hook r60: the mutation really removed the pattern check" sh -c '! cmp -s "$1" "$2"' _ "$hk" "$tmp/hook-noglob.py"
-expect pass "hook r60: mutation, a hook without the pattern check lets an absolute Glob pattern through (so the cases above fail it)" sh -c 'python3 -c "import json,sys; print(json.dumps({\"tool_name\":\"Glob\",\"cwd\":sys.argv[2],\"tool_input\":{\"pattern\":\"/etc/*\"}}))" "" "$3" | PROOF_SCRATCH_ROOT="$3" python3 "$1" | cut -d" " -f1 | grep -qx allow' _ "$tmp/hook-noglob.py" "" "$hr"
+expect pass "hook r60: mutation, a hook without the pattern check lets an absolute Glob pattern through (so the cases above fail it)" sh -c 'python3 -c "import json,sys; print(json.dumps({\"tool_name\":\"Glob\",\"cwd\":sys.argv[2],\"tool_input\":{\"pattern\":\"/etc/*\"}}))" "" "$3" | PROOF_SCRATCH_ROOT="$3" python3 "$1" | grep -q "\"permissionDecision\": \"allow\""' _ "$tmp/hook-noglob.py" "" "$hr"
 expect pass "hook: command substitution and an unquoted heredoc are denied" test "$(hbash 'echo "$(id)"' | cut -d' ' -f1)$(hbash 'cat <<EOF
 x
 EOF' | cut -d' ' -f1)" = denydeny
