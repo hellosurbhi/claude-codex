@@ -101,6 +101,10 @@ if not only or "cmds" in only:
            "function f { true; }", "f() { true; }", "echo x &", "coproc id", "! true", "true || id", "true && id", "echo x | id"]
     for c in ev:
         want(c, "deny", "evaluates a string or is not a prescribed command")
+    # lexer constructs bash and the hook could read differently (cc11 r58): refused, the differential test (check-hook-differential.py) proves the rest agree with real bash
+    for c in ("cat <<-'EOF'\n\tEOF\nid\nEOF", "cat <<'EOF'x\nb\nEOFx\nEOF", "cat <<'EOF'\nb\nEOF \n", "echo a # b", "# b", "echo a ;; echo b", "echo a ; ; echo b", "echo a &&", "&& echo a", "echo a |",
+              "echo a >&2x", "echo a >&10", "echo a 12>out.txt", "cat l[i]nk/secret", "cat [a]pp.py", "echo a\rb", "echo a\\\nb", "3<<'EOF' cat\nb\nEOF", "cat <<<x", "echo a > f[1]"):
+        want(c, "deny", "lexer disagreement refused")
     # allowed commands: refused forms
     refused = ["echo -z x", "echo -ne -z x", "echo -- x", "printf", "printf -", "true x", ": x", "pwd -x", "pwd x", "sleep", "sleep 1 2", "sleep -1", "sleep 1000", "sleep abc", "sleep 1s",
                "mkdir -m 777 x", "mkdir -v x", "mkdir /etc/x", "mkdir ../x", "mkdir link/x", "mkdir -p .git/x", "codex", "codex exec x", "codex --version x", "codex -V", "cd .", "cd /",

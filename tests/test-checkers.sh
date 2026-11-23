@@ -2574,6 +2574,16 @@ expect pass "hook: cd inside the repo is denied too (cd is removed, not tracked)
 expect pass "hook: writing .git/config by Write is denied" test "$(hook Write "{\"file_path\":\"$hr/.git/config\"}" | cut -d' ' -f1)" = deny
 expect pass "hook: writing .git/config by redirect is denied" hdeny 'echo x > .git/config'
 expect pass "hook: a redirect into the read-only skills dir is denied" hdeny 'echo x > ~/.claude/skills/plan-codex/SKILL.md'
+# cc11 r58: differential test, every line the hook allows is run under real bash with logging stubs and bash must execute exactly what the hook validated
+expect pass "hook r58: bash executes exactly the commands the hook validated (differential, hundreds of generated lines)" python3 "$here/check-hook-differential.py" "$hk"
+python3 - "$hk" "$tmp/hook-loosehd.py" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+a = 're.escape(delim) + r"$"'
+assert a in s
+open(sys.argv[2], "w").write(s.replace(a, 're.escape(delim) + r"[ \\t]*$"', 1))
+PY
+expect pass "hook r58: the differential test fails when the heredoc terminator match is loosened (mutation)" sh -c '! python3 "$1" "$2" > /dev/null 2>&1' _ "$here/check-hook-differential.py" "$tmp/hook-loosehd.py"
 # cc11 r37 CRITICAL: nested repos and git state, by construction. A nested repo (written by the agent or by Codex) carries its own config, and `git status` reads it.
 expect pass "hook: the baseline file exists and names the config hash and the hooks listing" sh -c 'grep -q "^config " "$1" && grep -q "^hooks" "$1"' _ "$hgb"
 for c in 'echo x > nested/.git/config' 'mkdir -p nested/.git' 'echo x > a/b/.gitattributes' 'echo x > sub/.gitmodules' 'mkdir -p x/.git/hooks' 'cat > deep/er/.git/config <<'"'"'EOF'"'"'

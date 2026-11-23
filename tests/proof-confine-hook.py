@@ -109,20 +109,38 @@ def lex(cmd):
     """Split a bash command into simple commands. Returns [(argv, redirects)] and raises Deny on anything not understood.
     Understood: single and double quotes, `;` `&&` `||` `|` newline, `>` `>>` `<` with a word target, `2>&1`, quoted-delimiter heredocs.
     Never understood (denied): $( ) ${ } backticks, process substitution, background `&`, unquoted heredoc delimiter, unterminated quotes."""
+    # WHY every construct below is either parsed exactly as bash parses it or refused (cc11 r58 HIGH): this lexer is a second parser of bash, and wherever the two disagree about where a
+    # construct ends, the hook skips text bash runs. Found by tests/check-hook-differential.py, which runs every allowed line under real bash with logging stubs: a `<<-` heredoc whose
+    # tab-indented terminator ends bash's heredoc early, a `#` comment hiding a heredoc operator, `>&2x` (a file name to bash), a glob bracket in a path, an empty command around `;;`,
+    # CR and NUL. What breaks if one is loosened: the differential test fails and a command can run unvalidated.
+    if "\r" in cmd or "\x00" in cmd:
+        raise Deny("carriage return or NUL in the command")
     cmds, argv, reds = [], [], []
     word, have, i, n = "", False, 0, len(cmd)
     pending_heredocs = []
+    need_cmd = False  # set after `&&`, `||` and `|`: a command must follow
+    glob_br = False
     def end_word():
-        nonlocal word, have
+        nonlocal word, have, glob_br
+        if glob_br and word not in ("[", "]"):
+            raise Deny("unquoted [ or ] inside a word is a glob bash expands (the path checked would not be the path opened)")
         if have:
             argv.append(word)
-        word, have = "", False
-    def end_cmd():
-        nonlocal argv, reds
+        word, have, glob_br = "", False, False
+    def end_cmd(sep=""):
+        nonlocal argv, reds, need_cmd
         end_word()
-        if argv or reds:
+        empty = not (argv or reds)
+        if sep not in ("", "\n") and empty:
+            raise Deny("empty command before " + sep + " (bash reports a syntax error where the hook would carry on)")
+        if need_cmd and empty and sep != "\n":
+            raise Deny("operator without a command after it")
+        if sep == "\n" and need_cmd and empty:
+            raise Deny("operator at the end of a line (bash continues onto the next line, the hook does not)")
+        if not empty:
             cmds.append((argv, reds))
         argv, reds = [], []
+        need_cmd = sep in ("&&", "||", "|")
     while i < n:
         c = cmd[i]
         if c == "'":
@@ -159,20 +177,26 @@ def lex(cmd):
             raise Deny("subshell or process substitution")
         elif c == "&":
             if cmd.startswith("&&", i):
-                end_cmd(); i += 2
+                end_cmd("&&"); i += 2
             elif cmd.startswith(">&", i - 1) and i > 0 and cmd[i - 1] == ">":
                 raise Deny("unexpected &")
             else:
                 raise Deny("background or bare &")
         elif c == "|":
-            end_cmd(); i += 2 if cmd.startswith("||", i) else 1
+            if cmd.startswith("||", i):
+                end_cmd("||"); i += 2
+            else:
+                end_cmd("|"); i += 1
         elif c == ";":
-            end_cmd(); i += 1
+            if cmd.startswith(";;", i):
+                raise Deny("case terminator ;;")
+            end_cmd(";"); i += 1
         elif c == "\n":
-            end_cmd(); i += 1
+            end_cmd("\n"); i += 1
             if pending_heredocs:
                 for delim in pending_heredocs:
-                    m = re.compile(r"^" + re.escape(delim) + r"[ \t]*$", re.M).search(cmd, i)
+                    # WHY an exact line (cc11 r58): bash ends a heredoc only at a line that is the delimiter and nothing else, so trailing blanks or a leading tab do not end it
+                    m = re.compile(r"^" + re.escape(delim) + r"$", re.M).search(cmd, i)
                     if not m:
                         raise Deny("heredoc without its terminator")
                     i = m.end() + 1 if m.end() < n else n
@@ -181,19 +205,25 @@ def lex(cmd):
             end_word(); i += 1
         elif c == ">" or c == "<" or (c.isdigit() and not have and i + 1 < n and cmd[i + 1] in "<>" and cmd[i - 1:i] in ("", " ", "\t", "\n", ";", "&", "|")):
             fd = ""
+            if have and word.isdigit():
+                raise Deny("multi-digit file descriptor before a redirect")
             if c.isdigit():
                 fd = c; i += 1; c = cmd[i]
             if cmd.startswith("<<<", i):
                 raise Deny("here-string")
             if cmd.startswith("<<", i):
+                if fd:
+                    raise Deny("heredoc on a numbered descriptor")
                 i += 2
                 if i < n and cmd[i] == "-":
-                    i += 1
+                    raise Deny("<<- strips leading tabs from the terminator, which the hook does not model")
                 while i < n and cmd[i] in " \t":
                     i += 1
                 m = re.match(r"'([A-Za-z_][A-Za-z0-9_]*)'|\"([A-Za-z_][A-Za-z0-9_]*)\"", cmd[i:])
                 if not m:
                     raise Deny("heredoc delimiter must be quoted so its body is plain data")
+                if i + m.end() < n and cmd[i + m.end()] not in " \t\n;&|<>":
+                    raise Deny("text glued to the heredoc delimiter changes the delimiter bash looks for")
                 pending_heredocs.append(m.group(1) or m.group(2)); i += m.end()
                 reds.append(("<<", ""))
                 continue
@@ -203,7 +233,7 @@ def lex(cmd):
                 op = ">>"; i += 1
             if i < n and cmd[i] == "&":
                 m = re.match(r"&(\d|-)", cmd[i:])
-                if op == ">" and m:
+                if op == ">" and m and (i + m.end() >= n or cmd[i + m.end()] in " \t\n;&|"):
                     i += m.end()
                     continue  # 2>&1 and friends duplicate a descriptor, no file involved
                 raise Deny("unsupported redirect")
@@ -228,7 +258,7 @@ def lex(cmd):
                     if "`" in inner or "\\" in inner or re.search(r"\$(?!\?)", inner):
                         raise Deny("expansion in a double-quoted redirect target")
                     tw += inner; th = True; i = j + 1
-                elif cmd[i] in "$`\\*?{}":
+                elif cmd[i] in "$`\\*?{}[]":
                     raise Deny("substitution, escape or glob in a redirect target")
                 else:
                     tw += cmd[i]; th = True; i += 1
@@ -237,11 +267,15 @@ def lex(cmd):
             reds.append((op, tw))
         elif c in "*?{}":
             raise Deny("unquoted glob or brace expansion")
+        elif c == "#" and not have:
+            raise Deny("comment: bash drops the rest of the line, the hook would still read it (a heredoc operator in it would hide the next lines)")
         else:
+            if c in "[]":
+                glob_br = True
             word += c; have = True; i += 1
     if pending_heredocs:
         raise Deny("heredoc without its terminator")
-    end_cmd()
+    end_cmd("\n")
     return cmds
 
 TILDE_OK = ("~/.claude/skills/", "~/.claude/config/scripts/")
