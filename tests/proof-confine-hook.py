@@ -61,8 +61,9 @@ def git_state(root):
     hd, items = os.path.join(root, ".git", "hooks"), []
     for n in sorted(os.listdir(hd)) if os.path.isdir(hd) else []:
         fp = os.path.join(hd, n)
-        items.append("%s:%s" % (n, hashlib.sha256(open(fp, "rb").read()).hexdigest() if os.path.isfile(fp) else "notfile"))
-    return "config %s\nhooks %s\n" % (cfg, ",".join(items))
+        items.append([n, hashlib.sha256(open(fp, "rb").read()).hexdigest() if os.path.isfile(fp) else "notfile"])
+    # WHY json (cc11 r60): "name:hash" items joined by commas let a hook NAMED like "x:<hash>,y" imitate two hooks; JSON quotes every field, so the text is unambiguous.
+    return "config %s\nhooks %s\n" % (cfg, json.dumps(items))
 
 def nested_git(root):
     # any `.git` entry (directory or gitlink file) below the root other than the root's own

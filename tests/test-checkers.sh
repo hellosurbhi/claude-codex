@@ -2755,6 +2755,22 @@ expect pass "r39: the behavioral acceptance step (check-behavior.sh) runs a plan
 r39g="$tmp/r39good"; rm -rf "$r39g"; mkdir -p "$r39g"; printf 'def add(a, b):\n    return a + b\n' > "$r39g/app.py"
 expect pass "r39: a genuine add() still passes the sandboxed check" python3 "$here/check-impl.py" "$r39g/app.py"
 expect pass "r60: the sandbox keeps generated code from signalling processes outside it (own children and subprocesses still work)" python3 "$here/check-sbx.py" "$here"
+# cc11 r60 MEDIUM: file names and contents are framed by length, so no byte string inside one file can pose as another file. Pair: a.py holding "x\0b.py\0y" versus a.py "x" plus b.py "y".
+r60a="$tmp/r60a"; r60b="$tmp/r60b"; mkdir -p "$r60a" "$r60b"; printf 'x\0b.py\0y' > "$r60a/a.py"; printf x > "$r60b/a.py"; printf y > "$r60b/b.py"
+expect pass "r60: treehash.py gives different digests to a.py holding another file's framing and the two real files" test "$(python3 -I "$here/treehash.py" "$r60a")" != "$(python3 -I "$here/treehash.py" "$r60b")"
+expect pass "r60: state-hash.py gives different digests to the same pair" test "$(python3 -I "$here/state-hash.py" "$r60a")" != "$(python3 -I "$here/state-hash.py" "$r60b")"
+expect pass "r60: treehash.py and state-hash.py frame with the one shared helper (canon_digest.py)" sh -c 'grep -q canon_digest "$1/treehash.py" && grep -q canon_digest "$1/state-hash.py"' _ "$here"
+expect pass "r60: the hook's git-state listing cannot be imitated by a hook file named like two entries" sh -c 'python3 -I - "$1" "$2" <<PYEOF
+import hashlib, importlib.util, os, sys
+s = importlib.util.spec_from_file_location("h", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+def mk(root, files):
+    os.makedirs(os.path.join(root, ".git", "hooks"))
+    for n, c in files: open(os.path.join(root, ".git", "hooks", n), "wb").write(c)
+    open(os.path.join(root, ".git", "config"), "wb").write(b"c")
+x = hashlib.sha256(b"one").hexdigest()
+mk(sys.argv[2] + "/p", [("a", b"one"), ("b", b"two")]); mk(sys.argv[2] + "/q", [("a:" + x + ",b", b"two")])
+sys.exit(0 if m.git_state(sys.argv[2] + "/p") != m.git_state(sys.argv[2] + "/q") else 1)
+PYEOF' _ "$here/proof-confine-hook.py" "$tmp/r60g"
 expect pass "r39: check-proof-permissions.py accepts the pure-logger shim" python3 "$pp" "$ps" "$here/proof-confine-hook.py" "$here/shim/codex"
 expect pass "r39: check-proof-permissions.py rejects a shim that runs check-impl.py outside the sandbox" sh -c 'cd "$6" && sed "s/^impl=no\$/impl=no; python3 \"\$here\/check-impl.py\" \"\$prepo\/app.py\"/" "$1" > "$2"; grep -q check-impl "$2" && ! python3 "$3" "$4" "$5" "$2" >/dev/null 2>&1' _ "$here/shim/codex" "$tmp/shim-bad" "$pp" "$ps" "$here/proof-confine-hook.py" "$tmp"
 expect pass "r39: check-proof-permissions.py rejects a checker that runs generated code unsandboxed" sh -c 'mkdir -p "$2/shim"; cp "$1"/check-proof-permissions.py "$1"/proof-confine-hook.py "$1"/review-loop-proof.sh "$2/"; cp "$1/shim/codex" "$2/shim/"; for f in check-impl check-tests check-modules; do cp "$1/$f.py" "$2/"; done; sed "s/sbx.run(/subprocess.run(/" "$1/check-impl.py" > "$2/check-impl.py"; ! python3 "$2/check-proof-permissions.py" "$2/review-loop-proof.sh" >/dev/null 2>&1' _ "$here" "$tmp/r39-copy"
