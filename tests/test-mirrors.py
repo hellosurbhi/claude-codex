@@ -570,5 +570,21 @@ for f in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")) + glob.
         bad.append("%s: the Private review folder paragraph lacks the no-stale-reuse wording" % rel)
     if ".claude/review" in t and "sets an exit trap (`trap 'rm -f <raw files>' EXIT` plus `trap 'exit 1' HUP INT TERM`) inside a subshell before it starts" not in t:
         bad.append("%s: the Private review folder paragraph lacks the exit-trap wording" % rel)
+# r60 (review 63): no raw file may be written outside a trapped block, in ANY skill, command or reference, and a raw file with no cleanup rule at all fails. Every `.claude/review/*raw*` name must be one this table knows,
+# and every mention of prompt.raw.txt that tells the model to WRITE it must sit within reach of a block that deletes it on success, failure and interruption: the EXIT trap plus the HUP/INT/TERM trap, set inside the same
+# subshell as the codex-call.sh call that consumes it (inline `; ` form or the fenced newline form).
+# WHY: the cleanup used to exist only in codex-mcp/reference.md, so the five other places that tell the model to write prompt.raw.txt left it behind after success, failure or interruption (the wrapper deletes none of its inputs).
+KNOWN_RAW = {"requirements.raw.txt", "reply.raw.txt", "audit-notes.raw.txt", "prompt.raw.txt"}
+PTRAP = re.compile(r"\(trap 'rm -f \.claude/review/prompt\.raw\.txt' EXIT; trap 'exit 1' HUP INT TERM(?:\n|; )~/\.claude/config/scripts/codex-call\.sh[^)\n]*(?:\\\n[^)\n]*)*--prompt-file \.claude/review/prompt\.raw\.txt\)")
+for f in sorted(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")) + glob.glob(os.path.join(root, "skills", "*", "reference.md")) + glob.glob(os.path.join(root, "commands", "*.md"))):
+    rel = os.path.relpath(f, root); t = open(f, encoding="utf-8").read()
+    for name in sorted(set(re.findall(r"\.claude/review/([\w.-]*raw[\w.-]*)", t)) - KNOWN_RAW):
+        bad.append("%s: raw file %s has no cleanup rule in tests/test-mirrors.py (add it to KNOWN_RAW with a trapped block)" % (rel, name))
+    spans = [(m.start(), m.end()) for m in PTRAP.finditer(t)]
+    if t.count("--prompt-file .claude/review/prompt.raw.txt") != len(spans):
+        bad.append("%s: %d --prompt-file prompt.raw.txt call(s) but %d inside a trap-and-delete block" % (rel, t.count("--prompt-file .claude/review/prompt.raw.txt"), len(spans)))
+    for m in re.finditer(r"(?:[Ww]rite|written)[^\n]{0,400}?`\.claude/review/prompt\.raw\.txt`", t):
+        if not any(s - 1500 <= m.end() <= e + 1500 for s, e in spans):
+            bad.append("%s: text tells the model to write .claude/review/prompt.raw.txt with no trap-and-delete block next to it" % rel)
 print("\n".join(bad))
 sys.exit(1 if bad else 0)

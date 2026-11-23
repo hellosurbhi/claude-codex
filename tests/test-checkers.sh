@@ -1164,6 +1164,58 @@ p = sys.argv[1]; t = open(p).read(); t2 = t.replace("trap 'rm -f \"$NOTES\" \"$C
 open(p, "w").write(t2)
 PYX
 mirneg "a plan-codex fallback block without its raw-notes exit trap is caught" 'EXIT and HUP/INT/TERM traps' "$tmp/mir8"; mirc plan-codex
+python3 - "$tmp/mir8/skills/tdd-execute-codex/SKILL.md" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read(); t2 = t.replace("(trap 'rm -f .claude/review/prompt.raw.txt' EXIT; trap 'exit 1' HUP INT TERM; ", "(", 1); assert t2 != t
+open(p, "w").write(t2)
+PYX
+mirneg "r60: a prompt.raw.txt call without its trap-and-delete block is caught" '--prompt-file prompt.raw.txt call\(s\) but' "$tmp/mir8"; mirc tdd-execute-codex
+python3 - "$tmp/mir8/commands/execute-codex.md" <<'PYX'
+import sys
+p = sys.argv[1]; t = open(p).read(); t2 = t + "\nWrite the diff to `.claude/review/diff.raw.txt`.\n"
+open(p, "w").write(t2)
+PYX
+mirneg "r60: a new raw file with no cleanup rule is caught" 'raw file diff\.raw\.txt has no cleanup rule' "$tmp/mir8"; mirc execute-codex
+python3 - "$tmp/mir8/commands/tdd-execute-codex.md" <<'PYX'
+import sys, re
+p = sys.argv[1]; t = open(p).read(); t2 = re.sub(r"Run the call only inside this block[^\n]*?Write the file again before every retry; a leftover copy is never reused\.", "", t, count=1); t2 = re.sub(r"`\(trap 'rm -f \.claude/review/prompt\.raw\.txt'[^`]*`", "", t2, count=1); assert t2 != t
+open(p, "w").write(t2)
+PYX
+mirneg "r60: a write instruction for prompt.raw.txt with no trap-and-delete block beside it is caught" 'prompt\.raw\.txt' "$tmp/mir8"; mirc tdd-execute-codex
+# r60 (review 63): the two cited sites, run for real. The prescribed block is cut out of the shipped text, the codex-call.sh path is pointed at a stand-in, and each way a call can end must leave no raw prompt behind.
+r60run() { python3 - "$1" "$2" "$tmp" <<'PYX'
+import os, re, signal, subprocess, sys, tempfile, time
+f, mode, tmp = sys.argv[1:4]
+t = open(f).read()
+blocks = re.findall(r"`(\(trap 'rm -f \.claude/review/prompt\.raw\.txt' EXIT;[^`]*\))`", t)
+if len(blocks) < 2:
+    print("FOUND %d trapped block(s) in %s, wanted at least 2" % (len(blocks), f)); sys.exit(1)
+fake = os.path.join(tmp, "r60-fake-codex"); open(fake, "w").write('#!/bin/bash\ncase "$R60MODE" in ok) exit 0;; fail) exit 3;; hang) echo started > "$R60MARK"; exec sleep 30;; esac\n'); os.chmod(fake, 0o755)
+for b in blocks:
+    b = b.replace("~/.claude/config/scripts/codex-call.sh", fake); b = re.sub(r"\[[^\]]*\]|<[A-Z_]+>", "x", b)
+    d = tempfile.mkdtemp(prefix="r60-"); os.makedirs(d + "/.claude/review"); raw = d + "/.claude/review/prompt.raw.txt"; mark = d + "/mark"
+    open(raw, "w").write("secret prompt")
+    env = dict(os.environ, R60MODE=("hang" if mode == "kill" else mode), R60MARK=mark)
+    p = subprocess.Popen(["bash", "-c", b], cwd=d, env=env, start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if mode == "kill":
+        for _ in range(100):
+            if os.path.exists(mark): break
+            time.sleep(0.1)
+        if not os.path.exists(raw): print("raw prompt vanished before the call started"); sys.exit(1)
+        os.killpg(p.pid, signal.SIGTERM)
+    rc = p.wait(timeout=60)
+    want = {"ok": 0, "fail": 3}.get(mode)
+    if want is not None and rc != want: print("call exit code %s, wanted %s" % (rc, want)); sys.exit(1)
+    for _ in range(50):  # the subshell outlives the outer bash by a moment after the group is signalled; give its traps time to run
+        if not os.path.exists(raw): break
+        time.sleep(0.1)
+    if os.path.exists(raw): print("RAW PROMPT LEFT BEHIND after %s in: %s" % (mode, b[:90])); sys.exit(1)
+print("ok", len(blocks), "blocks")
+PYX
+}
+for r60f in skills/tdd-execute-codex/SKILL.md commands/tdd-execute-codex.md skills/execute-codex/SKILL.md commands/execute-codex.md; do for r60m in ok fail kill; do
+  expect pass "r60: every prompt.raw.txt block in $r60f leaves no raw file after a call that ends: $r60m" r60run "$here/../$r60f" "$r60m"
+done; done
 python3 - "$tmp/mir8/skills/claude-codex/SKILL.md" "$tmp/mir8/commands/claude-codex.md" <<'PYX'
 import sys
 for p in sys.argv[1:]:
