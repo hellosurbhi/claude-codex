@@ -29,12 +29,54 @@ def hdr_path(rest):
     m = re.match(QSTR, rest)
     return unquote(m.group(0) if m else rest.split("\t")[0])[2:]
 
-def diff_git_paths(line):
-    # (a_path, b_path) without the a/ b/ prefixes from a "diff --git" line, quoted or not; None when the line is not one.
-    m = re.fullmatch(r"diff --git (" + QSTR + r"|a/.+) (" + QSTR + r"|b/.+)", line)
-    if not m:
+def _hdr_candidates(body):
+    # every (a_path, b_path) reading of the text after "diff --git "; an unquoted name may itself contain " b/", so a header can have several.
+    cands = []
+    m = re.match(QSTR, body)
+    lefts = [(m.group(0), body[m.end():])] if m else [(body[:i], body[i:]) for i in range(len(body)) if body.startswith(" b/", i)]
+    for left, tail in lefts:
+        if not tail.startswith(" "):
+            continue
+        right = tail[1:]
+        if right.startswith('"') and not re.fullmatch(QSTR, right):
+            continue
+        a_, b_ = unquote(left), unquote(right)
+        if a_.startswith("a/") and b_.startswith("b/"):
+            cands.append((a_[2:], b_[2:]))
+    return cands
+
+def _section_paths(rest):
+    # (a, b) read from the section's own header lines (rename/copy from and to, then --- and +++), None for a side they do not name. WHY these first: a "diff --git a/x b/y.py b/x b/y.py" line cannot be split
+    # reliably when a name contains " b/", but the --- and +++ lines carry one unambiguous name each (git ends an unquoted name that has a space with a tab, which hdr_path strips).
+    a_ = b_ = None
+    for l in rest:
+        if l.startswith("diff --git ") or l.startswith("@@"):
+            break
+        for key, side in (("rename from ", 0), ("copy from ", 0), ("rename to ", 1), ("copy to ", 1)):
+            if l.startswith(key):
+                v = unquote(l[len(key):])
+                if side == 0: a_ = v
+                else: b_ = v
+        if l.startswith("--- ") and a_ is None and not l[4:].startswith("/dev/null"):
+            a_ = hdr_path(l[4:])
+        elif l.startswith("+++ ") and b_ is None and not l[4:].startswith("/dev/null"):
+            b_ = hdr_path(l[4:])
+    return a_, b_
+
+def diff_git_paths(line, rest=()):
+    # (a_path, b_path) without the a/ b/ prefixes from a "diff --git" line, quoted or not; None when the line is not one. Pass the lines that follow it in the same section (rest) to name a path that
+    # contains " b/" exactly; without them, a header whose two halves are equal is resolved first, then the first generic split.
+    if not line.startswith("diff --git "):
         return None
-    a_, b_ = unquote(m.group(1)), unquote(m.group(2))
-    if not (a_.startswith("a/") and b_.startswith("b/")):
+    cands = _hdr_candidates(line[len("diff --git "):])
+    if not cands:
         return None
-    return a_[2:], b_[2:]
+    sa, sb = _section_paths(rest)
+    if sa is not None or sb is not None:
+        # a new or deleted file names only one side in --- and +++; its header has the same path on both.
+        a_, b_ = sa if sa is not None else sb, sb if sb is not None else sa
+        return a_, b_
+    for pair in cands:
+        if pair[0] == pair[1]:
+            return pair
+    return cands[0]

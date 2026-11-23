@@ -1109,6 +1109,8 @@ expect pass "the pristine copies pass every r10 rule" python3 "$here/test-mirror
 for f in skills/claude-codex/SKILL.md commands/claude-codex.md skills/execute-codex/SKILL.md commands/execute-codex.md skills/tdd-claude-codex/SKILL.md commands/tdd-claude-codex.md skills/tdd-execute-codex/SKILL.md commands/tdd-execute-codex.md; do
   expect pass "the reviewer diff command in $f lists changes in sibling folders when run from a subfolder" python3 "$here/check-diff-toplevel.py" "$here/../$f"
 done
+# r52 finding 2: the shared header decoder names exact paths for a name that contains " b/", a rename and a path with spaces (it printed 'x b/y.py b/x' and 'y.py' for the first before the fix).
+expect pass "gitpath.py resolves headers whose names contain ' b/', renames and spaces" python3 -I "$here/check-gitpath.py"
 # WHY a recording fake codex: it proves what --cd the wrapper really passes, instead of grepping the wrapper's source.
 mkdir -p "$tmp/cdbin" "$tmp/cdrepo/sub"; (cd "$tmp/cdrepo" && git init -q)
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/cdargs.txt"\nexit 1\n' "$tmp" > "$tmp/cdbin/codex"; chmod +x "$tmp/cdbin/codex"

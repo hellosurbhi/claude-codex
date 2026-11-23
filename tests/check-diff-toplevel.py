@@ -25,7 +25,8 @@ with tempfile.TemporaryDirectory() as d:
     run("add", "-N", "-f", "front/a.py", "front/.env")
     out = subprocess.run([snap, sha], cwd=os.path.join(d, "front"), capture_output=True, text=True)
     # WHY gitpath (r51 sweep): a header may be quoted, so every "diff --git" line goes through the shared decoder.
-    files = sorted({pr[1] for l in out.stdout.split("\n") for pr in [diff_git_paths(l)] if pr})
+    lines = out.stdout.split("\n")
+    files = sorted({pr[1] for i, l in enumerate(lines) for pr in [diff_git_paths(l, lines[i + 1:])] if pr})
     if out.returncode != 0 or files != ["back/b.py", "back/deep/c.py", "front/a.py"]:
         print("from a subfolder review-snapshot.sh printed %s (exit %d)" % (files, out.returncode)); sys.exit(1)
 sys.exit(0)

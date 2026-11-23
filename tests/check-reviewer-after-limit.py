@@ -82,7 +82,7 @@ def patch_sections(lines, names, binary=()):
             cur.append(l)
     out = []
     for sc in secs:
-        paths = diff_git_paths(sc[0])
+        paths = diff_git_paths(sc[0], sc[1:])
         if paths is None:
             return None
         a_, b_ = paths

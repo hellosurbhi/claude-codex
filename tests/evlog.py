@@ -26,7 +26,8 @@ def phase_of(text):
     # WHY both sides (CodeRabbit r42): a rename test_app.py -> app.py has a test old path but an implementation new path.
     # WHY the same-path form first (r27): a path with spaces ("my mod.py") is not \S+, so its diff was classified "unknown"; a same-path edit names one path twice, which the backreference matches.
     # WHY decoded through gitpath (r51): a quoted header ("a/caf\303\251.py") matched neither form above, so a diff of that file beside test_app.py was classified tests-only.
-    paths = [p for l in text.split("\n") for pair in [diff_git_paths(l)] if pair for p in pair if p.endswith(".py")]
+    lines = text.split("\n")
+    paths = [p for i, l in enumerate(lines) for pair in [diff_git_paths(l, lines[i + 1:])] if pair for p in pair if p.endswith(".py")]
     if paths:
         return "implementation" if any(not _is_test_path(x) for x in paths) else "tests"
     # WHY the plan marker is checked BEFORE the signature (CodeRabbit thread 7): a plan that quotes `def add(a, b):` was classified as the
