@@ -7,6 +7,7 @@
 # WHY only the log: transcripts quote docs and agent text; the wrapper log is what actually ran.
 import hashlib, os, re, subprocess, sys, tempfile
 import wlog
+from gitpath import QSTR, unquote, hdr_path, diff_git_paths
 # WHY the reviewer input is judged against the REDACTED snapshot (r26 finding 3): every reviewer is handed the diff after scripts/redact-diff.sh (the skills build it that way), so a run where redaction
 # really masked a value must still pass, and raw text reaching the reviewer must not. The raw tree binding (treehash.py) is separate and unchanged. These helpers apply the same script to the raw
 # expectation; what was tried first: comparing the sanitized input to the raw per-file changes and to the raw files, which rejected every legitimate review that masked anything.
@@ -40,30 +41,6 @@ def changes(lines):
         elif inh and l.startswith("-"):
             rem.append(l[1:])
     return add, rem
-
-# WHY git quoting is decoded (r50): the snapshot pins core.quotePath=true, so a name with non-ASCII bytes, a tab, a quote or a backslash is written as a double-quoted C string with octal escapes
-# ("caf\303\251.py"). Comparing that text with the filesystem name rejected every valid review that covered such a file; what was tried first was only the unquoted `a/(.+) b/(.+)` form.
-QSTR = r'"(?:[^"\\]|\\.)*"'
-SIMPLE = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
-def unquote(tok):
-    if not (len(tok) >= 2 and tok[0] == '"' and tok[-1] == '"'):
-        return tok
-    raw, out, i = tok[1:-1], bytearray(), 0
-    while i < len(raw):
-        c = raw[i]
-        if c != "\\":
-            out += c.encode("utf-8", "surrogateescape"); i += 1
-        elif raw[i + 1:i + 2] in SIMPLE:
-            out.append(SIMPLE[raw[i + 1]]); i += 2
-        elif re.fullmatch(r"[0-3][0-7]{2}", raw[i + 1:i + 4]):
-            out.append(int(raw[i + 1:i + 4], 8)); i += 4
-        else:
-            out += c.encode(); i += 1
-    return out.decode("utf-8", "surrogateescape")
-def hdr_path(rest):
-    # path of a "--- " or "+++ " header (text after the marker): decode quoting, drop a trailing tab and git's a/ or b/ prefix.
-    rest = rest.split("\t")[0] if not rest.startswith('"') else re.match(QSTR, rest).group(0) if re.match(QSTR, rest) else rest
-    return unquote(rest)[2:]
 
 def reviewed_changes(lines):
     # {path: (added, removed)} for every .py file section of a git diff; sections start at a "diff --git" or "--- " header.
@@ -105,13 +82,10 @@ def patch_sections(lines, names, binary=()):
             cur.append(l)
     out = []
     for sc in secs:
-        m = re.fullmatch(r"diff --git (" + QSTR + r"|a/.+) (" + QSTR + r"|b/.+)", sc[0])
-        if not m:
+        paths = diff_git_paths(sc[0])
+        if paths is None:
             return None
-        a_, b_ = unquote(m.group(1)), unquote(m.group(2))
-        if not (a_.startswith("a/") and b_.startswith("b/")):
-            return None
-        a_, b_ = a_[2:], b_[2:]
+        a_, b_ = paths
         if not (a_.endswith(".py") or b_.endswith(".py")):
             continue
         if a_ != b_ or b_ not in names or os.path.isabs(b_) or ".." in b_.split("/"):

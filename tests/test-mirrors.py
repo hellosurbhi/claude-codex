@@ -149,8 +149,9 @@ def leaked(spec):
         for n in names:
             os.makedirs(os.path.dirname(os.path.join(d, n)) or d, exist_ok=True); open(os.path.join(d, n), "w").write("1")
         g("add", "-N", "-f", *names)
-        out = g("diff", "HEAD", "--name-only", *shlex.split(spec))
-        return sorted(set(out.split()) - {"ok.py", "app/okay.py"})
+        # WHY -z (r51 sweep): newline-separated --name-only output quotes odd names; NUL-separated output never does.
+        out = g("diff", "HEAD", "--name-only", "-z", *shlex.split(spec))
+        return sorted(set(out.split("\0")) - {"ok.py", "app/okay.py", ""})
 if leaked(EXCL):
     bad.append("EXCL pathspec still lets secret-named files through: %s" % leaked(EXCL))
 if not leaked("-- . ':(exclude).env*' ':(exclude)*.pem' ':(exclude)*.key'"):

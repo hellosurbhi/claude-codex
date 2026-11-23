@@ -4,6 +4,8 @@
 # check has two halves: the file must call that script for every snapshot (never an inline `git diff <base> -- ':(top)' ...` of its own), and the
 # script, run from one sibling folder of a throwaway repo with changes in two folders, must list both folders and leave a secret-named file out.
 import os, re, subprocess, sys, tempfile
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gitpath import diff_git_paths
 text = open(sys.argv[1], encoding="utf-8").read()
 here = os.path.dirname(os.path.abspath(__file__))
 snap = os.path.join(here, "..", "scripts", "review-snapshot.sh")
@@ -22,7 +24,8 @@ with tempfile.TemporaryDirectory() as d:
         os.makedirs(os.path.dirname(os.path.join(d, n)), exist_ok=True); open(os.path.join(d, n), "w").write("1")
     run("add", "-N", "-f", "front/a.py", "front/.env")
     out = subprocess.run([snap, sha], cwd=os.path.join(d, "front"), capture_output=True, text=True)
-    files = sorted(set(re.findall(r"(?m)^diff --git a/(\S+) b/", out.stdout)))
+    # WHY gitpath (r51 sweep): a header may be quoted, so every "diff --git" line goes through the shared decoder.
+    files = sorted({pr[1] for l in out.stdout.split("\n") for pr in [diff_git_paths(l)] if pr})
     if out.returncode != 0 or files != ["back/b.py", "back/deep/c.py", "front/a.py"]:
         print("from a subfolder review-snapshot.sh printed %s (exit %d)" % (files, out.returncode)); sys.exit(1)
 sys.exit(0)

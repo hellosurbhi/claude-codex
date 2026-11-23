@@ -1283,8 +1283,9 @@ gdiff app.py other.py > "$tmp/diff.txt"
 spy_only bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect_spy pass "an exact git diff of every changed module is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 # r50: a non-ASCII module name appears in git headers as a quoted octal-escaped path (core.quotePath=true), and a clean review of it must still be accepted.
-rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > "caf\303\251.py"
-gdiff app.py "caf\303\251.py" > "$tmp/diff.txt"
+rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > $'caf\303\251.py'
+gdiff app.py $'caf\303\251.py' > "$tmp/diff.txt"
+expect pass "r51: the non-ASCII fixture diff carries git's quoted octal header (the fixture really exercises the decoder)" grep -qF 'caf\303\251.py' "$tmp/diff.txt"
 spy_only bash "$here/spy-reviewer.sh" S "$tmp/diff.txt" "$tmp/out.txt" >/dev/null 2>&1
 expect_spy pass "an exact git diff that includes a non-ASCII module name (quoted header) is accepted" python3 "$here/check-reviewer-after-limit.py" "$EVLOG" --phase implementation --repo "$tmp/run/repo"
 rv; printf 'def add(a, b):\n    return a + b\n' > app.py; printf 'def sub(a, b):\n    return a + b\n' > other.py
@@ -1924,6 +1925,9 @@ printf 'import os\nos._exit(0)\n' > "$tmp/exit0.py"; printf 'def add(a, b):\n   
 expectm fail "a module that exits 0 on import is not a passing implementation" 'REJECT: add\(\) failed its checks' python3 "$here/check-impl.py" "$tmp/exit0.py"
 expect pass "a real add passes check-impl" python3 "$here/check-impl.py" "$tmp/good.py"
 expect pass "a rename from test_app.py to app.py is the implementation phase" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import evlog; print(evlog.phase_of("diff --git a/test_app.py b/app.py\nsimilarity index 90%\nrename from test_app.py\nrename to app.py\n"))' "$here")" = implementation
+# r51: git quotes a non-ASCII name in its headers (core.quotePath=true); a diff of cafe.py beside test_app.py is the implementation, not tests-only.
+printf '%s\n' 'diff --git "a/caf\303\251.py" "b/caf\303\251.py"' 'index 1..2 100644' '--- "a/caf\303\251.py"' '+++ "b/caf\303\251.py"' '@@ -1 +1 @@' '-x' '+y' 'diff --git a/test_app.py b/test_app.py' 'index 1..2 100644' > "$tmp/qdiff.txt"
+expect pass "r51: a diff of a quoted non-ASCII module plus test_app.py is the implementation phase" test "$(python3 -c 'import sys; sys.path.insert(0,sys.argv[1]); import evlog; print(evlog.phase_of(open(sys.argv[2], encoding="utf-8", errors="surrogateescape").read()))' "$here" "$tmp/qdiff.txt")" = implementation
 expect pass "placeholder severity lines are clean for a reviewer.sh spy reply too (one grammar)" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import wlog; sys.exit(0 if wlog.is_clean({"wrapper":"spy","exit":0,"stdout":"VERDICT: APPROVED\nCRITICAL: none\nHIGH: none\nMEDIUM: none\nLOW: none\n","stderr":""}) else 1)' "$here"
 
 mkdir -p "$tmp/em"; for m in mathops strops listops pkginfo; do printf 'import os\nos._exit(0)\n' > "$tmp/em/$m.py"; done
