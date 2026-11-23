@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# contract: codex-call v3 (source of truth: hellosurbhi/claude-codex scripts/codex-call.sh)
+# codex-call.sh: one Codex turn via `codex exec` (the supported replacement for the removed
+# `codex mcp-server` tools mcp__codex__codex / mcp__codex__codex-reply).
+#
+# WHY: Codex CLI 0.154.0 removed `codex mcp-server`; OpenAI's stable non-interactive
+# interface is `codex exec` (resumable by thread id). Model and effort come from the
+# `review` profile (~/.codex/review.config.toml), set in exactly one place.
+#
+# Shipped here so the skills work from a plain clone of this repo; README step 3
+# installs it at ~/.claude/config/scripts/codex-call.sh, the path every skill calls.
+#
+# Usage:
+#   codex-call.sh [--sandbox read-only|workspace-write] [--role FILE] [--resume THREAD_ID] [--cd DIR] (--prompt-file FILE | [--] PROMPT)
+# Strict: each option needs its value; an unknown option or an extra argument exits 2 with the usage line; put a prompt that starts with a dash after `--`.
+# The prompt always reaches Codex on stdin (`-`), never as a process argument. Use --prompt-file for anything that can be large (a diff):
+# a positional PROMPT is still accepted for short text, but it is limited by the OS argument size, a prompt file is not.
+# Output (stdout): first line `THREAD_ID: <id>`, then Codex's final message.
+# Exit non-zero if Codex fails or returns no message: a dead call is NOT an approval.
+set -euo pipefail
+# WHY the exit handler is installed before ANY check (r23): the parser and the prompt, role and resume checks used to exit 2 with no trace anywhere, so a caller that kept an earlier clean verdict
+# could not tell that a later review attempt had failed. With CODEX_CALL_EVENT_LOG set (a test and proof seam; unset in normal use, which writes nothing and changes nothing) every nonzero exit that never
+# reached codex appends one wrapper-failed event: kind, exit code, the run nonce, no prompt text. An exit after codex ran is logged by the codex shim itself, so it is not logged twice.
+# WHY it never changes the exit status: a log that cannot be written (missing folder, a directory) must not turn exit 2 into success or into another code; the append is best effort and the original status is re-raised.
+# WHY one trap with the cleanup inside it: `trap` replaces any earlier handler, so a second `trap ... EXIT` further down would silently drop one of the two jobs.
+# WHY python3 for the clock with a `date` fallback: the python3 check below can itself be the failing step, and the log must still get an event ordered after any earlier call (the fallback sorts late in its second).
+out=""; pin=""; pdir=""; codex_started=0; ev_log="${CODEX_CALL_EVENT_LOG:-}"; ev_start=""
+now() { python3 -I -c 'import time; print(repr(time.time()))' 2>/dev/null || echo "$(date +%s).999"; }
+[[ -z "$ev_log" ]] || ev_start="$(now)"
+# WHY cleanup names only non-empty paths (r22 finding 2): the trap is installed before the temp paths exist, and an unset variable used to expand into a path in the working directory
+# (an unset $pin made "$pin.role" the file ".role") when a mktemp failed. Do not collapse this into one unguarded `rm -f "$out" "$pin" "$pdir"`.
+# WHY the role-plus-prompt file lives in a private directory (r52 finding 1): it used to be written with a plain redirect and then moved over $pin, so under umask 022 the whole prompt (often a full diff) was
+# world-readable for the length of the call. mktemp -d is mode 700 and mktemp files are 0600; nothing here is ever created by redirection into a fresh name. Do not go back to `> "$pin.role"` plus mv.
+cleanup() { [[ -z "$out" ]] || rm -f -- "$out"; [[ -z "$pin" ]] || rm -f -- "$pin"; [[ -z "$pdir" ]] || rm -rf -- "$pdir"; }
+on_exit() {
+  local rc=$?
+  cleanup
+  if [[ $rc -ne 0 && $codex_started -eq 0 && -n "$ev_log" ]]; then
+    { local nonce="${EVNONCE:-}"; [[ "$nonce" =~ ^[A-Za-z0-9]*$ ]] || nonce=""
+      printf '{"seq": %s, "wrapper": "wrapper-failed", "prov": null, "argv": [], "exit": %s, "resume": null, "thread_id": null, "phase": "unknown", "stdout": "", "stderr": "", "meta": {"nonce": "%s"}, "ts_start": %s, "ts": %s}\n' \
+        "$(( $(wc -l < "$ev_log") + 1 ))" "$rc" "$nonce" "${ev_start:-0}" "$(now)" >> "$ev_log"; } 2>/dev/null || true
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
+command -v python3 >/dev/null || { echo "codex-call: python3 is required (it parses the Codex event stream). Treat as UNREVIEWED." >&2; exit 2; }
+# BEGIN git-env-clean (the same text sits in every script that calls git: review-snapshot.sh, codex-call.sh, review-private.sh; tests/test-mirrors.py fails when they differ)
+# WHY (cc11 r64): an inherited GIT_* variable can change what a path, a repository, an index, an object store or a config key MEANS (GIT_LITERAL_PATHSPECS=1
+# made the snapshot's `:(top)` and exclude pathspecs plain file names, so a changed tree printed an empty snapshot with exit 0). Clearing one variable at a
+# time was tried first and each review found another, so the whole class is cleared here. Config files are pinned to /dev/null instead of unset, so the
+# user's own ~/.gitconfig cannot change the bytes either. Removing a name reopens that hole; tests/check-snapshot-hermetic.py sets each one in turn.
+clean_git_env() {
+  local v
+  unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_PREFIX GIT_INDEX_FILE \
+        GIT_EXTERNAL_DIFF GIT_DIFF_OPTS GIT_PAGER GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_NAMESPACE GIT_OBJECT_DIRECTORY \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_ATTR_SOURCE GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS
+  for v in $(compgen -e); do case "$v" in GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) unset "$v" ;; esac; done
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1
+}
+# END git-env-clean
+# WHY the call runs in a subshell: the codex child must keep the caller's own GIT_* variables, only this one lookup is cleaned.
+# WHY the repository top and not $PWD (cc11-main-r2 finding 3): Codex reviews relative to --cd, so a review started from a subfolder saw only that folder.
+sandbox=read-only role="" resume="" resume_set=0 pfile="" pfile_set=0 dir="$(clean_git_env; git rev-parse --show-toplevel 2>/dev/null || printf "%s" "$PWD")"
+# WHY the parser is strict (r22 finding 3): the old loop only ran while two arguments remained, so a lone `--resume` skipped parsing and became the PROMPT, an unknown option was sent to Codex as prompt text
+# and extra positional arguments were silently dropped. Every option needs a value that is not itself option-like, an unknown option or an extra argument exits 2 with the usage line, and `--` ends the options so
+# a prompt that starts with a dash is still possible. Do not relax this back to "anything unrecognised is the prompt".
+usage="usage: codex-call.sh [--sandbox read-only|workspace-write] [--role FILE] [--resume THREAD_ID] [--cd DIR] (--prompt-file FILE | [--] PROMPT)"
+die_usage() { echo "codex-call: $1. $usage. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --sandbox|--role|--resume|--cd|--prompt-file)
+      [[ $# -ge 2 ]] || die_usage "option $1 needs a value"
+      [[ "$2" != -* ]] || die_usage "option $1 needs a value, not the option-like $2"
+      case "$1" in
+        --sandbox) sandbox="$2" ;;
+        --role) role="$2" ;;
+        --resume) resume="$2"; resume_set=1 ;;
+        --cd) dir="$2" ;;
+        --prompt-file) pfile="$2"; pfile_set=1 ;;
+      esac
+      shift 2 ;;
+    --) shift; break ;;
+    -*) die_usage "unknown option $1 (put a prompt that starts with a dash after --)" ;;
+    *) break ;;
+  esac
+done
+# WHY an explicitly empty --resume is an error and not "start a new session" (r19 finding 2): a caller that lost its thread id would silently open a fresh session and the continued review
+# would run without the context it relied on. "Not passed" (resume_set=0) is still a new session; "passed but empty" never reaches codex.
+if [[ $resume_set -eq 1 && -z "$resume" ]]; then echo "codex-call: empty --resume value (a thread id was expected). Treat as UNREVIEWED." >&2; exit 2; fi
+# WHY the prompt goes on stdin from a file (r20 finding 1): a whole diff as one argument exceeds the OS argument limit (E2BIG) and Codex never started. Verified on the installed CLI:
+# `codex exec [PROMPT]` and `codex exec resume [ID] [PROMPT]` both read the instructions from stdin when the prompt is `-`. A positional PROMPT is written to the same file, so there is one path.
+# WHY a missing or empty prompt file is an error and never an empty review: Codex would answer an empty prompt with something that looks like a verdict.
+if [[ $pfile_set -eq 1 ]]; then
+  if [[ $# -gt 0 ]]; then echo "codex-call: give either --prompt-file or a positional prompt, not both. Treat as UNREVIEWED." >&2; exit 2; fi
+  if [[ -z "$pfile" || ! -s "$pfile" ]]; then echo "codex-call: prompt file is missing or empty: ${pfile:-<empty name>}. No call was made; treat as UNREVIEWED." >&2; exit 2; fi
+elif [[ $# -lt 1 ]]; then die_usage "no prompt (pass --prompt-file FILE or a prompt)"
+elif [[ $# -gt 1 ]]; then die_usage "unexpected extra arguments after the prompt ($# given, one expected)"; fi
+# WHY every step below checks its own status (r21 finding 2): `A && B` and a command substitution inside printf do not trip `set -e` when A (or the inner cat) fails, so a missing role file used to
+# send the prompt WITHOUT its role text, and a failed temp-file write used to go on. Each step now stops with a message and exit 2, before anything is sent.
+if [[ -n "$role" ]]; then
+  if [[ ! -f "$role" || ! -r "$role" || ! -s "$role" ]]; then echo "codex-call: role file is missing, unreadable or empty: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; fi
+  role_text="$(cat "$role")" || { echo "codex-call: could not read the role file: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  [[ -n "$role_text" ]] || { echo "codex-call: role file has no text: $role. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+fi
+out="$(mktemp)" || { echo "codex-call: could not create a temp file (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
+pin="$(mktemp)" || { echo "codex-call: could not create a temp file (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
+if [[ $pfile_set -eq 1 ]]; then
+  cp "$pfile" "$pin" || { echo "codex-call: could not read the prompt file: $pfile. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+else
+  printf '%s' "$1" > "$pin" || { echo "codex-call: could not write the prompt to a temp file. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+fi
+[[ -s "$pin" ]] || { echo "codex-call: the prompt is empty after reading it. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+if [[ -n "$role" ]]; then
+  pdir="$(mktemp -d)" || { echo "codex-call: could not create a temp directory (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  rolepin="$(mktemp "$pdir/prompt.XXXXXX")" || { echo "codex-call: could not create a temp file (is TMPDIR writable?). No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  { printf '%s\n\n' "$role_text" && cat "$pin"; } > "$rolepin" || { echo "codex-call: could not build the prompt with the role text. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+  mv "$rolepin" "$pin" || { echo "codex-call: could not build the prompt with the role text. No call was made; treat as UNREVIEWED." >&2; exit 2; }
+fi
+# WHY marked only when codex can actually be started: from here on the codex shim logs the attempt itself, so the exit handler must not add a second event; a codex that is not on PATH never reaches any shim,
+# so that exit is still logged as wrapper-failed.
+if command -v codex >/dev/null 2>&1; then codex_started=1; fi
+if [[ $resume_set -eq 1 ]]; then
+  # WHY the profile, sandbox and cwd go BEFORE `resume`: the resume subcommand has no
+  # -p/-s/-C flags of its own, and relying on the stored thread settings left a
+  # continued audit without an explicit review profile or read-only policy
+  # (codex306-r1). Verified 2026-11-12 on CLI 0.167.1: the resumed turn's
+  # turn_context reads gpt-6.1-sol, xhigh, read-only.
+  codex exec -p review --sandbox "$sandbox" --cd "$dir" resume --json --skip-git-repo-check "$resume" - <"$pin" >"$out" 2>&1 && rc=0 || rc=$?
+else
+  # --skip-git-repo-check: plan audits can run from a scratch folder that is not a repo
+  codex exec --json -p review --sandbox "$sandbox" --skip-git-repo-check --cd "$dir" - <"$pin" >"$out" 2>&1 && rc=0 || rc=$?
+fi
+python3 -I - "$out" "$rc" <<'PY'
+import json, sys
+tid, msg, done, errs = "", "", False, []
+for line in open(sys.argv[1]):
+    try: e = json.loads(line)
+    except ValueError: continue
+    if e.get("type") == "thread.started": tid = str(e.get("thread_id") or "")
+    if e.get("type") == "turn.completed": done = True
+    if e.get("type") == "turn.failed":
+        done = False
+        errs.append(str((e.get("error") or {}).get("message", e)))
+    if e.get("type") == "error": errs.append(str(e.get("message", e)))
+    it = e.get("item", {})
+    if e.get("type") == "item.completed" and it.get("type") == "agent_message": msg = it["text"]
+# WHY require turn.completed AND exit 0: a nonzero exit after turn.completed is still a failed call.
+# WHY require turn.completed: a dropped connection mid-run leaves an earlier progress
+# message ("I'll read the plan...") as the last agent_message; returning that would
+# look like a verdict-less answer instead of a dead call.
+# WHY a completed turn with no thread id is a failed call (r19 finding 2): the caller would print an empty THREAD_ID, and a later resume with it would start a new session and lose the review context.
+if msg and done and sys.argv[2] == "0" and not tid and not errs:
+    sys.exit("codex-call: Codex completed the turn but reported no thread id, so the review cannot be resumed. Treat as UNREVIEWED (no verdict).")
+# WHY ANY error or turn.failed event anywhere in the stream fails the call (r26): a completed turn with an APPROVED message and a LATER error event used to exit 0 whenever the CLI did.
+# An error event means the run did not finish cleanly, and an unclean review is not an approval, so the message and verdict are withheld (nothing on stdout, diagnostics on stderr).
+# An error BEFORE a later successful turn.completed is fatal too: fail closed is the default and no captured real Codex stream (searched the proof dirs and scratch logs) shows a recoverable error event in a normal successful run.
+# If a real run ever proves one (a retried connection, say), narrow this to "an error after the last agent message, or no turn.completed after it" and add that real stream to the differential table; never a blanket allowance.
+if not msg or not done or sys.argv[2] != "0" or errs:
+    # WHY print the CLI's own non-JSON lines: auth, profile and quota errors arrive
+    # there, and the scratch file is deleted on exit, so this is the only copy.
+    # Quota errors (with their reset time) arrive as JSON error events, not plain text. An event with no message is printed whole (str(e)),
+    # never as an empty line, so a bare usage_limit code still reaches the caller (error-handling expressions taken from Global Config PR 306).
+    diag = [m for m in errs if m] + [l.rstrip() for l in open(sys.argv[1]) if not l.lstrip().startswith("{")][-20:]
+    if diag: print("codex-call: Codex CLI said:\n" + "\n".join(diag), file=sys.stderr)
+    sys.exit("codex-call: Codex turn did not complete (call died). Treat as UNREVIEWED.")
+print(f"THREAD_ID: {tid}\n{msg}")
+PY

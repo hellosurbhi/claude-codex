@@ -21,3 +21,8 @@ src/
 package.json
 package-lock.json
 node_modules/
+reviews/
+
+# Python bytecode
+__pycache__/
+*.pyc

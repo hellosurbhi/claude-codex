@@ -31,7 +31,7 @@ Add two new commands that mirror the existing `claude-codex` and `execute-codex`
 Before any work begins, capture a snapshot of the current state for scoping:
 - If the worktree is dirty (uncommitted changes), stop and ask the user to commit or stash before running. Do not proceed with a dirty worktree.
 - Record `git rev-parse HEAD` as `$START_SHA`
-- All review diffs use `git diff $START_SHA` instead of `git diff HEAD` — this scopes reviews to exactly the files changed by this command
+- All review diffs are built from `$START_SHA` (redacted into the review context file) instead of `HEAD` — this scopes reviews to exactly the files changed by this command
 - Run `git add -N .` before each review to mark new untracked files as intent-to-add, ensuring they appear in the diff
 
 ## Baseline Test Strategy
@@ -108,7 +108,7 @@ Same loop as `/claude-codex` Phase 3:
 **Step R1 — Run Codex Review via MCP**
 Call `mcp__codex__codex` with:
 - developer-instructions: content of ~/.claude/prompts/codex/analyzer.md + "\nBe concise. Return only the structured verdict format. No prose."
-- prompt: `git diff $START_SHA` review prompt requesting VERDICT format (scoped to changes since command start)
+- prompt: review prompt (masked review context file built from `$START_SHA`) requesting VERDICT format (scoped to changes since command start)
 
 Save threadId. Classify verdict:
 - APPROVED -> Phase 6
@@ -264,7 +264,7 @@ After 3 iterations without approval, stop and report.
 7. **Coverage is conditional** — coverage is checked if tooling is available; if not, delivery reports "not measured" instead of failing
 8. **Context sanitization** — secrets, credentials, and sensitive files are never passed to external agents or Codex MCP
 9. **Adaptive baseline** — baseline strategy adapts to suite speed and health: full run for fast suites, scoped run for slow/failing suites, skip for no-suite repos
-10. **Diff scoping via $START_SHA + git add -N** — all reviews use `git diff $START_SHA` scoped to command changes; `git add -N .` is run before each review to mark untracked new files as intent-to-add; dirty worktrees are rejected (user must commit or stash first)
+10. **Diff scoping via $START_SHA + git add -N** — all reviews use a masked diff since `$START_SHA` scoped to command changes; `git add -N .` is run before each review to mark untracked new files as intent-to-add; dirty worktrees are rejected (user must commit or stash first)
 11. **Claude owns all test changes in Route B** — in tdd-execute-codex large-change route, Claude makes any post-RED test corrections or coverage additions, never Codex
 12. **MEDIUM/LOW triage** — both commands ask the user before fixing lower-severity review findings, consistent with existing `/claude-codex` behavior
 13. **Bundled TDD role** — TDD specialist prompt is bundled as `tdd-specialist-role.md` alongside each TDD skill, used as role context for a general-purpose Task agent

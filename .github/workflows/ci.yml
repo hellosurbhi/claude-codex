@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# WHY an explicit block: the default token can write; this job only reads the repository.
+permissions:
+  contents: read
+
+# WHY a group per ref with cancel only for pull requests: a new push to a PR makes the older run pointless,
+# but a run on main must always finish so main never has an unreported result.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    # WHY macOS (cc11 r40): this toolchain targets macOS bash 3.2 and the macOS sandbox-exec (tests/sbx.py runs generated code inside it and the suite
+    # exercises it unconditionally). Ubuntu has neither, so the positive sandbox cases could only fail there. Public repo, so hosted macOS minutes are free.
+    runs-on: macos-latest
+    # WHY timeout-minutes 30 (cc11 r44): hosted macOS measured 10m24s for the checker suite step alone (run 45106784065); 15 was too tight even for one
+    # suite run. 30 keeps about 3x headroom. Lowering it below the measured time makes the run cancel instead of report.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # WHY: nothing after checkout pushes, so the token must not stay in .git/config.
+          persist-credentials: false
+      - name: Syntax-check every shell script
+        run: |
+          set -e
+          git ls-files '*.sh' | while IFS= read -r f; do bash -n "$f"; done
+      - name: Mirror consistency
+        run: python3 tests/test-mirrors.py .
+      - name: Checker suite (spy-reviewer cases skipped)
+        # WHY CHECKERS_NO_SPY=1: the spy cases drive the private installed reviewer.sh, which a public clone does not have.
+        # The suite skips only those cases and prints how many, so a silent skip is visible in the log.
+        run: CHECKERS_NO_SPY=1 bash tests/test-checkers.sh
+
+  tripwire:
+    # WHY its own job (cc11 r44): the tripwire repeats the whole checker suite, so one job ran the suite twice back to back: 10m24s plus 4m44s and still
+    # running when the old 15 minute cap cancelled the run (45106784065). Two jobs run in parallel, so wall time is the slower job, not the sum. Merging
+    # them again, or lowering the timeout, brings that cancellation back. Same runner, same read-only permissions (workflow level) and checkout rules.
+    runs-on: macos-latest
+    # WHY 30: estimated about 13 minutes hosted (local tripwire 410s x hosted/local checker ratio 624s/332s = 1.9, about 770s); 30 is more than 2x that.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # WHY: nothing after checkout pushes, so the token must not stay in .git/config.
+          persist-credentials: false
+      - name: Checker suite never touches private tooling (tripwire home)
+        # WHY (r32): CHECKERS_NO_SPY=1 must not execute anything from ~/.claude or a real model CLI. An empty home cannot prove that, so this run
+        # puts tripwires there (and first on PATH) and fails if one fires. It repeats the suite, which is what makes the proof cover every case.
+        run: bash tests/check-no-spy-tripwire.sh
