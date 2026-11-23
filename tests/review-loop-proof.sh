@@ -68,16 +68,19 @@ esac
 case "$skill" in plan-codex) export FAKE_TARGET=plan ;; *) export FAKE_TARGET=code ;; esac
 # WHY a relay seam for execute-codex and tdd-execute-codex: their review loop is run by a
 # code-reviewer Task agent, not by codex-call.sh, so the scripted reviewer cannot be reached
-# by swapping the wrapper alone. The agent is told to relay the fake's output verbatim; the
+# by swapping the wrapper alone. The agent is told to relay the fake's review (its THREAD_ID line dropped, see relay_strip); the
 # skill text deciding when to re-review is untouched. (Their Codex test audit and any Codex
 # implementation call still go through the wrapper seam.)
+# WHY the transport line is dropped before the relay (cc11 r59): the wrapper prints `THREAD_ID: <id>` before the review, but the skills require a code-reviewer reply whose FIRST line is the VERDICT line,
+# so a verbatim relay made every compliant scripted run reject a valid review. test-checkers.sh runs this exact filter over the real fake output and asserts the first non-blank line is the VERDICT line.
+relay_strip='sed "1{/^THREAD_ID: /d;}"'
 relay=""
 spy="$here/spy-reviewer.sh"
 [[ $scenario == usage-limit ]] && relay=" Wherever a skill says ~/.claude/config/scripts/reviewer.sh, run $spy with the same arguments instead."
 # WHY not in usage-limit: there the code-reviewer agent must stay a real reviewer, or the
 # scenario would only prove a relay of a scripted error.
 case "$skill:$scenario" in execute-codex:usage-limit|tdd-execute-codex:usage-limit) ;; execute-codex:*|tdd-execute-codex:*)
-  relay="$relay Wherever the skill launches a code-reviewer Task agent, tell that agent its whole job is to run \`$fake --sandbox read-only --cd <repo> \"<review prompt>\"\` and return its stdout verbatim as the review (it adds no findings of its own and removes none); the agent has no other reviewer.";;
+  relay="$relay Wherever the skill launches a code-reviewer Task agent, tell that agent its whole job is to run \`$fake --sandbox read-only --cd <repo> \"<review prompt>\" | $relay_strip\` and return what that prints as the review (the filter drops the wrapper's THREAD_ID transport line so the review starts at its VERDICT line; the agent keeps the verdict and every finding line exactly, adds no findings of its own and removes none); the agent has no other reviewer.";;
 esac
 cd "$repo"
 git init -q

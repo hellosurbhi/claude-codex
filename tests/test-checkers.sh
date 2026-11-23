@@ -1332,6 +1332,21 @@ expect pass "codex-call.sh: after -- a prompt may start with a dash and arrives 
 bigcc --sandbox workspace-write --cd "$tmp" --role "$tmp/bigrole.txt" -- "--looks like an option" || true
 expect pass "codex-call.sh: options, then -- then a dash-leading prompt works together with a role" bigfed "$( (printf 'ROLE\n\n--looks like an option') | shasum -a 256 | cut -d' ' -f1)"
 expect pass "fake wrapper: -- ends the options for a dash-leading prompt" bash -c 'EVLOG="$1/w.jsonl" FAKE_ROUNDS=0 bash "$2" --cd "$1/repo" -- "-dash" >/dev/null 2>&1' _ "$ee" "$here/fake-codex-call.sh"
+# cc11 r59: the scripted code-reviewer relay. The wrapper's stdout starts with a THREAD_ID transport line, the skills need the VERDICT line first, so the harness filter (relay_strip) must remove only that line.
+relaytry() { # $1 = filter, $2 = rounds with a finding (0 = clean): the filter's output must start at the VERDICT line and keep every other line of the wrapper's reply
+  local d raw out first; d="$(mktemp -d "$tmp/relay.XXXXXX")"; mkdir -p "$d/repo"; ( cd "$d/repo" && git init -q && printf 'def f():\n    return 1\n' > app.py )
+  raw="$(cd "$d/repo" && EVLOG="$d/w.jsonl" FAKE_ROUNDS="$2" FAKE_SEVERITIES=HIGH bash "$here/fake-codex-call.sh" --sandbox read-only --cd "$d/repo" "review" 2>/dev/null < /dev/null)" || return 1
+  out="$(printf '%s\n' "$raw" | eval "$1")"
+  first="$(printf '%s\n' "$out" | grep -m1 -v '^[[:space:]]*$')"
+  case "$first" in "VERDICT: "*) ;; *) return 1 ;; esac
+  [ "$(printf '%s\n' "$raw" | sed 1d)" = "$out" ]   # nothing but the transport line was removed, so every finding line survives
+}
+relay_filter="$(sed -n "s/^relay_strip='\(.*\)'$/\1/p" "$here/review-loop-proof.sh")"
+expect pass "r59: the scripted code-reviewer relay filter is defined in review-loop-proof.sh" test -n "$relay_filter"
+expect pass "r59: the relay filter turns a clean fake reply into one that starts at the VERDICT line" relaytry "$relay_filter" 0
+expect pass "r59: the relay filter keeps every finding line of a reply with a finding" relaytry "$relay_filter" 1
+expect fail "r59: a verbatim relay (no filter) leaves THREAD_ID first and is refused (mutation)" relaytry cat 1
+expect pass "r59: the scenario prompt pipes the wrapper call through the relay filter, not a verbatim relay" bash -c 'grep -q "<review prompt>.*| \$relay_strip" "$1" && ! grep -q "return its stdout verbatim" "$1"' _ "$here/review-loop-proof.sh"
 # r22 finding 3: every codex-call.sh invocation DOCUMENTED in a fenced block of the README, a skill or a command still parses under the strict parser (run for real against the codex shim).
 rm -rf "$tmp/doccalls"; mkdir -p "$tmp/doccalls/home"
 python3 - "$here/.." "$tmp/doccalls" <<'PYX'
