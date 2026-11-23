@@ -2574,6 +2574,24 @@ expect pass "hook: a write through a symlink out of the repo is denied" test "$(
 expect pass "hook: a plan write inside the repo is allowed" test "$(hook Write "{\"file_path\":\"$hr/.claude/plan/a.md\"}")" = "allow "
 expect pass "hook: a read outside the repo is denied" test "$(hook Read '{"file_path":"/etc/hosts"}' | cut -d' ' -f1)" = deny
 expect pass "hook: an unknown tool is denied" test "$(hook WebFetch '{}' | cut -d' ' -f1)" = deny
+# cc11 r60 MEDIUM: Glob pattern and Grep glob are locations too, and any argument key not on a tool's list refuses the call (deny by default)
+hv() { hook "$1" "$2" | cut -d' ' -f1; }
+for gp in '/etc/*' '../*' '**/../..' '{/etc,src}/*' '{src,..}/x' '~/x' 'a/{b,{/etc,c}}/*' '??/x' '[.][.]/x' 'sub/../../x' 'src/\\.\\./x'; do
+  expect pass "hook r60: a Glob pattern that can leave the repo is denied: $gp" test "$(hv Glob "$(python3 -c 'import json,sys; print(json.dumps({"pattern":sys.argv[1]}))' "$gp")")" = deny
+  expect pass "hook r60: a Grep glob that can leave the repo is denied: $gp" test "$(hv Grep "$(python3 -c 'import json,sys; print(json.dumps({"pattern":"x","glob":sys.argv[1]}))' "$gp")")" = deny
+done
+for gp in '**/*.py' 'src/*.{py,sh}' 'tests/**/test_*.py' '*.[ch]'; do
+  expect pass "hook r60: an ordinary Glob pattern is still allowed: $gp" test "$(hook Glob "$(python3 -c 'import json,sys; print(json.dumps({"pattern":sys.argv[1]}))' "$gp")")" = "allow "
+done
+expect pass "hook r60: Grep with a content pattern, a repo glob and the usual options is allowed" test "$(hook Grep '{"pattern":"/etc/passwd","glob":"*.py","output_mode":"content","-n":true,"head_limit":5}')" = "allow "
+expect pass "hook r60: a Glob path outside the repo is still denied, with a harmless pattern" test "$(hv Glob '{"pattern":"*.py","path":"/etc"}')" = deny
+expect pass "hook r60: a pattern is also resolved against the search dir, so a symlink prefix out of the repo is denied" test "$(hv Glob '{"pattern":"link/*"}')" = deny
+for kv in 'Glob:{"pattern":"*.py","cwd":"/etc"}' 'Read:{"file_path":"app.py","also":"/etc/hosts"}' 'Grep:{"pattern":"x","include":"/etc/*"}' 'Write:{"file_path":"a.md","content":"x","directory":"/etc"}' 'Edit:{"file_path":"app.py","old_string":"a","new_string":"b","extra":1}' 'NotebookEdit:{"notebook_path":"n.ipynb","path":"/etc"}' 'Task:{"description":"d","prompt":"p","cwd":"/etc"}' 'Skill:{"skill":"s","path":"/etc"}' 'Bash:{"command":"ls","dangerouslyDisableSandbox":true}'; do
+  expect pass "hook r60: an argument key not on the tool's list is denied (${kv%%:*}: ${kv#*:})" test "$(hv "${kv%%:*}" "${kv#*:}")" = deny
+done
+sed 's/check_glob(ti\[key\]/(lambda *_: None)(ti[key]/' "$hk" > "$tmp/hook-noglob.py"
+expect pass "hook r60: the mutation really removed the pattern check" sh -c '! cmp -s "$1" "$2"' _ "$hk" "$tmp/hook-noglob.py"
+expect pass "hook r60: mutation, a hook without the pattern check lets an absolute Glob pattern through (so the cases above fail it)" sh -c 'python3 -c "import json,sys; print(json.dumps({\"tool_name\":\"Glob\",\"cwd\":sys.argv[2],\"tool_input\":{\"pattern\":\"/etc/*\"}}))" "" "$3" | PROOF_SCRATCH_ROOT="$3" python3 "$1" | cut -d" " -f1 | grep -qx allow' _ "$tmp/hook-noglob.py" "" "$hr"
 expect pass "hook: command substitution and an unquoted heredoc are denied" test "$(hbash 'echo "$(id)"' | cut -d' ' -f1)$(hbash 'cat <<EOF
 x
 EOF' | cut -d' ' -f1)" = denydeny

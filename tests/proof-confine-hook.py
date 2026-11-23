@@ -584,22 +584,95 @@ def check_bash(cmd):
     for argv, reds in segs:
         check_simple(argv, reds)
 
+ARGS = {
+    "Read": {"file_path", "offset", "limit", "pages"},
+    "Glob": {"pattern", "path"},
+    "Grep": {"pattern", "path", "glob", "type", "output_mode", "-i", "-n", "-A", "-B", "-C", "context", "head_limit", "offset", "multiline"},
+    "Edit": {"file_path", "old_string", "new_string", "replace_all"},
+    "Write": {"file_path", "content"},
+    "MultiEdit": {"file_path", "edits"},
+    "NotebookEdit": {"notebook_path", "cell_id", "new_source", "cell_type", "edit_mode"},
+    "Bash": {"command", "description", "timeout", "run_in_background"},
+    "Skill": {"skill", "args"}, "TodoWrite": {"todos"}, "TaskOutput": {"task_id", "block", "timeout"},
+    "Task": {"description", "prompt", "subagent_type", "model"}, "Agent": {"description", "prompt", "subagent_type", "model"},
+}
+
+def brace_expand(s, depth=0):
+    # every alternative of {a,b} (nested allowed); too deep or too many is refused, never guessed at
+    if depth > 8:
+        raise Deny("glob pattern with too deeply nested braces")
+    i = s.find("{")
+    if i < 0:
+        return [s]
+    level, j, cuts = 0, i, [i]
+    while j < len(s):
+        if s[j] == "{": level += 1
+        elif s[j] == "}":
+            level -= 1
+            if level == 0: break
+        elif s[j] == "," and level == 1: cuts.append(j)
+        j += 1
+    if level != 0:
+        raise Deny("glob pattern with unbalanced braces")
+    cuts.append(j)
+    out = []
+    for a, b in zip(cuts, cuts[1:]):
+        for rest in brace_expand(s[j + 1:], depth + 1):
+            for alt in brace_expand(s[i + 1:i + 1] + s[a + 1:b], depth + 1):
+                out.append(s[:i] + alt + rest)
+        if len(out) > 256:
+            raise Deny("glob pattern with too many brace alternatives")
+    return out
+
+def check_glob(pat, base):
+    # Resolved against the validated search dir `base`: after brace expansion no alternative may be absolute, use `~`, a backslash escape or a parent segment (spelled out or as a wildcard that could match
+    # `..`, like ?? or [.][.]), and the literal directory prefix before the first wildcard must itself stay readable (so a symlink inside the repo cannot lead out).
+    if not isinstance(pat, str):
+        raise Deny("glob pattern is not text")
+    if "\0" in pat or "\\" in pat or "~" in pat:
+        raise Deny("glob pattern with NUL, backslash or ~: " + pat)
+    if re.search(r"[{,]/", pat):
+        raise Deny("glob pattern with an absolute brace alternative: " + pat)
+    for alt in brace_expand(pat):
+        if alt.startswith("/"):
+            raise Deny("absolute glob pattern: " + pat)
+        for seg in alt.split("/"):
+            if seg == ".." or (len(seg) >= 2 and re.fullmatch(r"[.?\[\]!^-]+", seg)):
+                raise Deny("glob pattern that can leave the search directory: " + pat)
+        lit = []
+        for seg in alt.split("/")[:-1]:
+            if re.search(r"[*?\[\]{}]", seg): break
+            lit.append(seg)
+        if not readable(os.path.join(base, *lit)):
+            raise Deny("glob pattern prefix leaves the scratch repo: " + pat)
+
 def decide(d):
     global CWD, ROOT
     if not ROOT:
         raise Deny("PROOF_SCRATCH_ROOT is not set")
     CWD = d.get("cwd") or ROOT
     tool, ti = d.get("tool_name", ""), d.get("tool_input") or {}
-    if tool in ("Skill", "Task", "Agent", "TaskOutput", "TodoWrite"):
-        return
+    # WHY (cc11 r60 MEDIUM): the old branches validated only `path`/`file_path`, so a Glob `pattern` of /etc/* or ../../x, or a Grep `glob`, named files outside the scratch repo. Now EVERY allowed tool has an
+    # explicit key list (ARGS): a key not on it refuses the call, so a location-bearing argument added by a newer Claude Code is denied until someone reviews it, never silently trusted.
+    # Location-bearing keys and how each is checked: Read file_path (readable); Glob path (readable) and pattern (check_glob); Grep path (readable) and glob (check_glob; Grep's `pattern` is a regex over
+    # file CONTENT, not a location); Edit, Write, MultiEdit file_path and NotebookEdit notebook_path (writable). The other allowed tools take no location keys. No LS tool exists in the allow table.
+    # What breaks if a key is added without a check: that key becomes a way to name files outside the scratch repo (tests/test-checkers.sh r60 hook cases).
+    if tool not in ARGS:
+        raise Deny("tool not allowed: " + tool)
+    extra = sorted(set(ti) - ARGS[tool]) if isinstance(ti, dict) else ["<non-object tool_input>"]
+    if extra:
+        raise Deny(tool + " has an argument not on its allowed list: " + ", ".join(str(k) for k in extra))
     if tool in ("Read", "Glob", "Grep"):
         p = ti.get("file_path") or ti.get("path") or CWD
-        if not readable(p):
+        if not isinstance(p, str) or not readable(p):
             raise Deny(tool + " outside the scratch repo: " + str(p))
+        for key in ("pattern",) if tool == "Glob" else ("glob",) if tool == "Grep" else ():
+            if key in ti:
+                check_glob(ti[key], p if os.path.isabs(p) else os.path.join(CWD, p))
         return
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
         p = ti.get("file_path") or ti.get("notebook_path")
-        if not p or not writable(p):
+        if not isinstance(p, str) or not p or not writable(p):
             raise Deny(tool + " target outside the scratch repo or inside .git: " + str(p))
         return
     if tool == "Bash":
@@ -607,7 +680,7 @@ def decide(d):
             raise Deny("background Bash")
         check_bash(ti.get("command", ""))
         return
-    raise Deny("tool not allowed: " + tool)
+    return  # the remaining ARGS tools (Skill, Task, Agent, TaskOutput, TodoWrite) carry no location keys
 
 def main():
     global ROOT, CWD
